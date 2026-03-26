@@ -1,22 +1,31 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: WooCommerce Import Pipeline API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: stores
+    description: WooCommerce store management
+  - name: products
+    description: Product management
+  - name: jobs
+    description: Import job management
+  - name: sunsky
+    description: Sunsky API integration
+  - name: categories
+    description: Category sync
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +33,329 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /stores:
+    get:
+      operationId: listStores
+      tags: [stores]
+      summary: List all WooCommerce stores
+      responses:
+        "200":
+          description: List of stores
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Store"
+    post:
+      operationId: createStore
+      tags: [stores]
+      summary: Add a WooCommerce store
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStoreInput"
+      responses:
+        "201":
+          description: Store created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Store"
+
+  /stores/{id}:
+    get:
+      operationId: getStore
+      tags: [stores]
+      summary: Get a store by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Store details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Store"
+    put:
+      operationId: updateStore
+      tags: [stores]
+      summary: Update a store
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateStoreInput"
+      responses:
+        "200":
+          description: Store updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Store"
+    delete:
+      operationId: deleteStore
+      tags: [stores]
+      summary: Remove a store
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Store deleted
+
+  /stores/{id}/test:
+    post:
+      operationId: testStoreConnection
+      tags: [stores]
+      summary: Test WooCommerce store connection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Connection test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionTestResult"
+
+  /stores/{id}/categories:
+    get:
+      operationId: listStoreCategories
+      tags: [stores]
+      summary: List synced categories for a store
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/WooCategory"
+    post:
+      operationId: syncStoreCategories
+      tags: [stores]
+      summary: Sync categories from WooCommerce store
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncResult"
+
+  /products:
+    get:
+      operationId: listProducts
+      tags: [products]
+      summary: List all fetched products
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, processing, processed, uploaded, failed]
+        - name: search
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Paginated products
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductListResponse"
+
+  /products/{id}:
+    get:
+      operationId: getProduct
+      tags: [products]
+      summary: Get product details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Product details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Product"
+
+  /jobs:
+    get:
+      operationId: listJobs
+      tags: [jobs]
+      summary: List import jobs
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Import jobs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobListResponse"
+    post:
+      operationId: createJob
+      tags: [jobs]
+      summary: Start a new import job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobInput"
+      responses:
+        "201":
+          description: Job started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+
+  /jobs/{id}:
+    get:
+      operationId: getJob
+      tags: [jobs]
+      summary: Get job details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+
+  /jobs/{id}/cancel:
+    post:
+      operationId: cancelJob
+      tags: [jobs]
+      summary: Cancel a running job
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Job cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+
+  /sunsky/fetch:
+    post:
+      operationId: sunskyFetch
+      tags: [sunsky]
+      summary: Fetch products from Sunsky API
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SunskyFetchInput"
+      responses:
+        "200":
+          description: Fetch initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SunskyFetchResult"
+
+  /sunsky/categories:
+    get:
+      operationId: sunskyCategories
+      tags: [sunsky]
+      summary: Get Sunsky product categories
+      responses:
+        "200":
+          description: Sunsky categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SunskyCategory"
+
+  /dashboard/stats:
+    get:
+      operationId: getDashboardStats
+      tags: [jobs]
+      summary: Get dashboard statistics
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +366,335 @@ components:
       required:
         - status
 
+    Store:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        url:
+          type: string
+        consumerKey:
+          type: string
+        consumerSecret:
+          type: string
+        status:
+          type: string
+          enum: [active, inactive, error]
+        lastTestedAt:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required:
+        - id
+        - name
+        - url
+        - consumerKey
+        - consumerSecret
+        - status
+        - createdAt
+
+    CreateStoreInput:
+      type: object
+      properties:
+        name:
+          type: string
+        url:
+          type: string
+        consumerKey:
+          type: string
+        consumerSecret:
+          type: string
+      required:
+        - name
+        - url
+        - consumerKey
+        - consumerSecret
+
+    ConnectionTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        storeInfo:
+          type: object
+          nullable: true
+      required:
+        - success
+        - message
+
+    WooCategory:
+      type: object
+      properties:
+        id:
+          type: integer
+        wooId:
+          type: integer
+        name:
+          type: string
+        slug:
+          type: string
+        parentId:
+          type: integer
+          nullable: true
+        count:
+          type: integer
+      required:
+        - id
+        - wooId
+        - name
+        - slug
+        - count
+
+    SyncResult:
+      type: object
+      properties:
+        synced:
+          type: integer
+        created:
+          type: integer
+        updated:
+          type: integer
+      required:
+        - synced
+        - created
+        - updated
+
+    Product:
+      type: object
+      properties:
+        id:
+          type: integer
+        sunskyId:
+          type: string
+        sku:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        price:
+          type: string
+          nullable: true
+        stockStatus:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [pending, processing, processed, uploaded, failed]
+        categoryId:
+          type: string
+          nullable: true
+        imageCount:
+          type: integer
+        wooProductId:
+          type: integer
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        rawData:
+          type: object
+          nullable: true
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - sunskyId
+        - sku
+        - name
+        - status
+        - imageCount
+        - createdAt
+        - updatedAt
+
+    ProductListResponse:
+      type: object
+      properties:
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/Product"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - products
+        - total
+        - page
+        - limit
+        - totalPages
+
+    Job:
+      type: object
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [fetch, process, upload, sync]
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        storeId:
+          type: integer
+          nullable: true
+        totalItems:
+          type: integer
+        processedItems:
+          type: integer
+        failedItems:
+          type: integer
+        progressPercent:
+          type: number
+        errorMessage:
+          type: string
+          nullable: true
+        startedAt:
+          type: string
+          nullable: true
+        completedAt:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        config:
+          type: object
+          nullable: true
+      required:
+        - id
+        - type
+        - status
+        - totalItems
+        - processedItems
+        - failedItems
+        - progressPercent
+        - createdAt
+
+    JobListResponse:
+      type: object
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - jobs
+        - total
+        - page
+        - limit
+        - totalPages
+
+    CreateJobInput:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [fetch, process, upload, sync]
+        storeId:
+          type: integer
+          nullable: true
+        config:
+          type: object
+          nullable: true
+      required:
+        - type
+
+    SunskyFetchInput:
+      type: object
+      properties:
+        categoryId:
+          type: string
+          nullable: true
+        page:
+          type: integer
+          default: 1
+        limit:
+          type: integer
+          default: 50
+        keyword:
+          type: string
+          nullable: true
+      required: []
+
+    SunskyFetchResult:
+      type: object
+      properties:
+        fetched:
+          type: integer
+        saved:
+          type: integer
+        skipped:
+          type: integer
+        jobId:
+          type: integer
+      required:
+        - fetched
+        - saved
+        - skipped
+        - jobId
+
+    SunskyCategory:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        parentId:
+          type: string
+          nullable: true
+      required:
+        - id
+        - name
+
+    DashboardStats:
+      type: object
+      properties:
+        totalProducts:
+          type: integer
+        pendingProducts:
+          type: integer
+        processedProducts:
+          type: integer
+        uploadedProducts:
+          type: integer
+        failedProducts:
+          type: integer
+        activeJobs:
+          type: integer
+        totalStores:
+          type: integer
+        recentJobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+      required:
+        - totalProducts
+        - pendingProducts
+        - processedProducts
+        - uploadedProducts
+        - failedProducts
+        - activeJobs
+        - totalStores
+        - recentJobs

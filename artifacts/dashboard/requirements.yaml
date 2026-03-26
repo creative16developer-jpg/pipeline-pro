@@ -1,0 +1,15 @@
+packages:
+  "framer-motion": "For page transitions, modal animations, and smooth interactions"
+  "recharts": "Beautiful data visualization for the dashboard stats"
+  "date-fns": "For elegant date and time formatting"
+  "clsx": "Utility for constructing CSS class names conditionally"
+  "tailwind-merge": "Utility to resolve Tailwind CSS class conflicts"
+
+images:
+  - path: "artifacts/dashboard/public/images/hero-glow.png"
+    description: "Abstract dark professional background with subtle glowing indigo and violet geometric waves, giving a premium enterprise feel"
+    aspect_ratio: "16:9"
+
+notes:
+  - "Using generated TanStack Query hooks from @workspace/api-client-react"
+  - "All mutations are wrapped with proper cache invalidation for instant UI updates"
