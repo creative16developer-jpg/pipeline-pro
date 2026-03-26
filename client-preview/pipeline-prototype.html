@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PipelinePro — WooCommerce Import Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        brand: { 500: '#6366f1', 600: '#4f46e5', 400: '#818cf8' },
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { background: #0f1117; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+  .sidebar { background: #13161f; border-right: 1px solid #1e2230; }
+  .card { background: #161b27; border: 1px solid #1e2230; border-radius: 12px; }
+  .badge-pending   { background:#1e3a5f; color:#60a5fa; }
+  .badge-running   { background:#1a3350; color:#38bdf8; }
+  .badge-completed { background:#14342b; color:#34d399; }
+  .badge-failed    { background:#3b1a1a; color:#f87171; }
+  .badge-uploaded  { background:#1e3a5f; color:#818cf8; }
+  .badge-fetch    { background:#1e2a3a; color:#94a3b8; }
+  .badge-upload   { background:#221e3a; color:#a78bfa; }
+  .badge-process  { background:#1e3520; color:#4ade80; }
+  .badge-sync     { background:#2a2214; color:#fbbf24; }
+  .nav-item { display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:8px; cursor:pointer; color:#94a3b8; font-size:14px; font-weight:500; transition:all .15s; }
+  .nav-item:hover { background:#1e2230; color:#e2e8f0; }
+  .nav-item.active { background:#1e2a4a; color:#818cf8; }
+  .nav-item svg { width:18px; height:18px; flex-shrink:0; }
+  .progress-bar { background:#1e2230; border-radius:999px; height:6px; overflow:hidden; }
+  .progress-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,#6366f1,#818cf8); transition:width .4s; }
+  .stat-icon { width:44px; height:44px; border-radius:10px; display:flex; align-items:center; justify-content:center; }
+  .page { display:none; } .page.active { display:block; }
+  .table-row { border-bottom:1px solid #1e2230; }
+  .table-row:last-child { border-bottom:none; }
+  .table-row:hover { background:#161e2e; }
+  .btn-primary { background:linear-gradient(135deg,#6366f1,#4f46e5); color:white; border-radius:8px; padding:8px 16px; font-size:14px; font-weight:600; cursor:pointer; border:none; display:inline-flex; align-items:center; gap:6px; }
+  .btn-ghost { background:transparent; border:1px solid #2d3548; color:#94a3b8; border-radius:8px; padding:8px 14px; font-size:13px; font-weight:500; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+  .btn-ghost:hover { background:#1e2230; color:#e2e8f0; }
+  .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; z-index:50; }
+  .modal { background:#161b27; border:1px solid #2d3548; border-radius:16px; width:100%; max-width:460px; padding:28px; }
+  input, select { background:#0f1117; border:1px solid #2d3548; border-radius:8px; padding:9px 12px; color:#e2e8f0; font-size:14px; width:100%; outline:none; }
+  input:focus, select:focus { border-color:#6366f1; }
+  label { font-size:13px; color:#94a3b8; margin-bottom:4px; display:block; }
+  .tag { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
+  ::-webkit-scrollbar { width:6px; height:6px; }
+  ::-webkit-scrollbar-track { background:#0f1117; }
+  ::-webkit-scrollbar-thumb { background:#2d3548; border-radius:3px; }
+</style>
+</head>
+<body>
+<div style="display:flex;height:100vh;overflow:hidden;">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" style="width:220px;display:flex;flex-direction:column;padding:16px 12px;flex-shrink:0;">
+    <div style="padding:8px 6px 20px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#6366f1,#4f46e5);display:flex;align-items:center;justify-content:center;">
+          <svg width="18" height="18" fill="none" stroke="white" stroke-width="2" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        </div>
+        <div>
+          <div style="font-weight:700;font-size:15px;color:#e2e8f0;">Pipeline<span style="color:#818cf8;">Pro</span></div>
+        </div>
+      </div>
+    </div>
+    <nav style="flex:1;display:flex;flex-direction:column;gap:4px;">
+      <div class="nav-item active" onclick="showPage('dashboard',this)">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </div>
+      <div class="nav-item" onclick="showPage('products',this)">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        Products
+      </div>
+      <div class="nav-item" onclick="showPage('jobs',this)">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Import Jobs
+      </div>
+      <div class="nav-item" onclick="showPage('stores',this)">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        Stores
+      </div>
+      <div class="nav-item" onclick="showPage('sunsky',this)">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Sunsky Fetch
+      </div>
+    </nav>
+    <div style="padding-top:12px;border-top:1px solid #1e2230;">
+      <div class="nav-item">
+        <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+        Settings
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main style="flex:1;overflow-y:auto;padding:28px 32px;">
+
+    <!-- DASHBOARD PAGE -->
+    <div id="page-dashboard" class="page active">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+        <div>
+          <h1 style="font-size:22px;font-weight:700;color:#e2e8f0;">Overview</h1>
+          <p style="color:#64748b;font-size:14px;margin-top:2px;">Monitor your WooCommerce import pipeline.</p>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button class="btn-ghost" onclick="showPage('sunsky',document.querySelector('[onclick*=sunsky]'))">
+            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Fetch Products
+          </button>
+          <button class="btn-primary" onclick="openNewJobModal()">
+            <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            New Import Job
+          </button>
+        </div>
+      </div>
+
+      <!-- Stat Cards -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;">
+        <div class="card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <span style="font-size:13px;color:#64748b;font-weight:500;">Total Products</span>
+            <div class="stat-icon" style="background:#1e2a4a;"><svg width="20" height="20" fill="none" stroke="#818cf8" stroke-width="2" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg></div>
+          </div>
+          <div style="font-size:32px;font-weight:800;color:#e2e8f0;">148</div>
+          <div style="font-size:12px;color:#34d399;margin-top:4px;">+50 from last fetch</div>
+        </div>
+        <div class="card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <span style="font-size:13px;color:#64748b;font-weight:500;">Pending Process</span>
+            <div class="stat-icon" style="background:#2a2214;"><svg width="20" height="20" fill="none" stroke="#fbbf24" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+          </div>
+          <div style="font-size:32px;font-weight:800;color:#e2e8f0;">62</div>
+          <div style="font-size:12px;color:#64748b;margin-top:4px;">Awaiting Python processing</div>
+        </div>
+        <div class="card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <span style="font-size:13px;color:#64748b;font-weight:500;">Successfully Uploaded</span>
+            <div class="stat-icon" style="background:#14342b;"><svg width="20" height="20" fill="none" stroke="#34d399" stroke-width="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          </div>
+          <div style="font-size:32px;font-weight:800;color:#e2e8f0;">74</div>
+          <div style="font-size:12px;color:#34d399;margin-top:4px;">Live on WooCommerce</div>
+        </div>
+        <div class="card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <span style="font-size:13px;color:#64748b;font-weight:500;">Failed Imports</span>
+            <div class="stat-icon" style="background:#3b1a1a;"><svg width="20" height="20" fill="none" stroke="#f87171" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+          </div>
+          <div style="font-size:32px;font-weight:800;color:#e2e8f0;">12</div>
+          <div style="font-size:12px;color:#f87171;margin-top:4px;">Needs review</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 340px;gap:20px;">
+        <!-- Recent Jobs -->
+        <div class="card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+            <h2 style="font-size:15px;font-weight:600;">Recent Jobs</h2>
+            <button class="btn-ghost" style="font-size:12px;" onclick="showPage('jobs',document.querySelectorAll('.nav-item')[2])">View all →</button>
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr style="color:#64748b;font-size:12px;">
+                <th style="text-align:left;padding:6px 8px;">ID</th>
+                <th style="text-align:left;padding:6px 8px;">Type</th>
+                <th style="text-align:left;padding:6px 8px;">Status</th>
+                <th style="text-align:left;padding:6px 8px;">Progress</th>
+                <th style="text-align:left;padding:6px 8px;">Items</th>
+                <th style="text-align:left;padding:6px 8px;">Started</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="table-row"><td style="padding:10px 8px;font-size:13px;color:#64748b;">#9</td><td style="padding:10px 8px;"><span class="tag badge-upload">Upload</span></td><td style="padding:10px 8px;"><span class="tag badge-running">Running</span></td><td style="padding:10px 8px;min-width:100px;"><div class="progress-bar"><div class="progress-fill" style="width:64%"></div></div><span style="font-size:11px;color:#64748b;">64%</span></td><td style="padding:10px 8px;font-size:13px;">32/50</td><td style="padding:10px 8px;font-size:12px;color:#64748b;">2 min ago</td></tr>
+              <tr class="table-row"><td style="padding:10px 8px;font-size:13px;color:#64748b;">#8</td><td style="padding:10px 8px;"><span class="tag badge-process">Process</span></td><td style="padding:10px 8px;"><span class="tag badge-completed">Completed</span></td><td style="padding:10px 8px;min-width:100px;"><div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div><span style="font-size:11px;color:#64748b;">100%</span></td><td style="padding:10px 8px;font-size:13px;">50/50</td><td style="padding:10px 8px;font-size:12px;color:#64748b;">18 min ago</td></tr>
+              <tr class="table-row"><td style="padding:10px 8px;font-size:13px;color:#64748b;">#7</td><td style="padding:10px 8px;"><span class="tag badge-fetch">Fetch</span></td><td style="padding:10px 8px;"><span class="tag badge-completed">Completed</span></td><td style="padding:10px 8px;min-width:100px;"><div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div><span style="font-size:11px;color:#64748b;">100%</span></td><td style="padding:10px 8px;font-size:13px;">50/50</td><td style="padding:10px 8px;font-size:12px;color:#64748b;">35 min ago</td></tr>
+              <tr class="table-row"><td style="padding:10px 8px;font-size:13px;color:#64748b;">#6</td><td style="padding:10px 8px;"><span class="tag badge-upload">Upload</span></td><td style="padding:10px 8px;"><span class="tag badge-failed">Failed</span></td><td style="padding:10px 8px;min-width:100px;"><div class="progress-bar"><div class="progress-fill" style="width:44%;background:linear-gradient(90deg,#ef4444,#f87171)"></div></div><span style="font-size:11px;color:#64748b;">44%</span></td><td style="padding:10px 8px;font-size:13px;">22/50</td><td style="padding:10px 8px;font-size:12px;color:#64748b;">1 hr ago</td></tr>
+              <tr class="table-row"><td style="padding:10px 8px;font-size:13px;color:#64748b;">#5</td><td style="padding:10px 8px;"><span class="tag badge-sync">Sync</span></td><td style="padding:10px 8px;"><span class="tag badge-completed">Completed</span></td><td style="padding:10px 8px;min-width:100px;"><div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div><span style="font-size:11px;color:#64748b;">100%</span></td><td style="padding:10px 8px;font-size:13px;">148/148</td><td style="padding:10px 8px;font-size:12px;color:#64748b;">3 hrs ago</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- System Status -->
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div class="card" style="padding:20px;">
+            <h2 style="font-size:15px;font-weight:600;margin-bottom:16px;">System Status</h2>
+            <div style="display:flex;flex-direction:column;gap:12px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="width:36px;height:36px;border-radius:8px;background:#1a3350;display:flex;align-items:center;justify-content:center;"><svg width="16" height="16" fill="none" stroke="#38bdf8" stroke-width="2" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></div>
+                  <div><div style="font-size:13px;font-weight:600;">Active Jobs</div><div style="font-size:11px;color:#64748b;">Currently running</div></div>
+                </div>
+                <div style="font-size:22px;font-weight:800;color:#38bdf8;">1</div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="width:36px;height:36px;border-radius:8px;background:#1e2a4a;display:flex;align-items:center;justify-content:center;"><svg width="16" height="16" fill="none" stroke="#818cf8" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+                  <div><div style="font-size:13px;font-weight:600;">Connected Stores</div><div style="font-size:11px;color:#64748b;">WooCommerce links</div></div>
+                </div>
+                <div style="font-size:22px;font-weight:800;color:#818cf8;">2</div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                  <div style="width:36px;height:36px;border-radius:8px;background:#14342b;display:flex;align-items:center;justify-content:center;"><svg width="16" height="16" fill="none" stroke="#34d399" stroke-width="2" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+                  <div><div style="font-size:13px;font-weight:600;">Pipeline</div><div style="font-size:11px;color:#64748b;">Health check</div></div>
+                </div>
+                <span style="font-size:12px;font-weight:600;color:#34d399;background:#14342b;padding:3px 10px;border-radius:99px;">Healthy</span>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="padding:20px;">
+            <h2 style="font-size:15px;font-weight:600;margin-bottom:12px;">Quick Actions</h2>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <button class="btn-ghost" style="width:100%;justify-content:flex-start;" onclick="showPage('sunsky',document.querySelectorAll('.nav-item')[4])">
+                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
+                Fetch from Sunsky API
+              </button>
+              <button class="btn-ghost" style="width:100%;justify-content:flex-start;" onclick="openNewJobModal()">
+                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+                Upload to WooCommerce
+              </button>
+              <button class="btn-ghost" style="width:100%;justify-content:flex-start;" onclick="showPage('stores',document.querySelectorAll('.nav-item')[3])">
+                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Add WooCommerce Store
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- PRODUCTS PAGE -->
+    <div id="page-products" class="page">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+        <div>
+          <h1 style="font-size:22px;font-weight:700;color:#e2e8f0;">Products</h1>
+          <p style="color:#64748b;font-size:14px;margin-top:2px;">148 products fetched from Sunsky</p>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:16px;">
+        <input placeholder="Search by name or SKU…" style="max-width:280px;" />
+        <select style="max-width:160px;">
+          <option>All Statuses</option>
+          <option>Pending</option>
+          <option>Processing</option>
+          <option>Processed</option>
+          <option>Uploaded</option>
+          <option>Failed</option>
+        </select>
+      </div>
+      <div class="card" style="overflow:hidden;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead style="background:#13161f;">
+            <tr style="color:#64748b;font-size:12px;">
+              <th style="text-align:left;padding:12px 16px;">SKU</th>
+              <th style="text-align:left;padding:12px 16px;">Name</th>
+              <th style="text-align:left;padding:12px 16px;">Category</th>
+              <th style="text-align:left;padding:12px 16px;">Price</th>
+              <th style="text-align:left;padding:12px 16px;">Status</th>
+              <th style="text-align:left;padding:12px 16px;">Images</th>
+              <th style="text-align:left;padding:12px 16px;">WOO ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="table-row"><td style="padding:12px 16px;font-size:12px;font-family:monospace;color:#94a3b8;">SK-001001</td><td style="padding:12px 16px;font-size:13px;font-weight:500;">Premium Wireless Watch 1</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">electronics</td><td style="padding:12px 16px;font-size:13px;">$24.50</td><td style="padding:12px 16px;"><span class="tag badge-uploaded">Uploaded</span></td><td style="padding:12px 16px;font-size:13px;">3</td><td style="padding:12px 16px;font-size:12px;color:#818cf8;">#10482</td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;font-size:12px;font-family:monospace;color:#94a3b8;">SK-001002</td><td style="padding:12px 16px;font-size:13px;font-weight:500;">Ultra Speaker 2</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">electronics</td><td style="padding:12px 16px;font-size:13px;">$67.80</td><td style="padding:12px 16px;"><span class="tag badge-uploaded">Uploaded</span></td><td style="padding:12px 16px;font-size:13px;">2</td><td style="padding:12px 16px;font-size:12px;color:#818cf8;">#10483</td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;font-size:12px;font-family:monospace;color:#94a3b8;">SK-001003</td><td style="padding:12px 16px;font-size:13px;font-weight:500;">Smart Earbuds 3</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">audio</td><td style="padding:12px 16px;font-size:13px;">$45.20</td><td style="padding:12px 16px;"><span class="tag" style="background:#14342b;color:#34d399;">Processed</span></td><td style="padding:12px 16px;font-size:13px;">3</td><td style="padding:12px 16px;font-size:13px;color:#64748b;">—</td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;font-size:12px;font-family:monospace;color:#94a3b8;">SK-001004</td><td style="padding:12px 16px;font-size:13px;font-weight:500;">Wireless Charger 4</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">accessories</td><td style="padding:12px 16px;font-size:13px;">$18.90</td><td style="padding:12px 16px;"><span class="tag" style="background:#14342b;color:#34d399;">Processed</span></td><td style="padding:12px 16px;font-size:13px;">2</td><td style="padding:12px 16px;font-size:13px;color:#64748b;">—</td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;font-size:12px;font-family:monospace;color:#94a3b8;">SK-001005</td><td style="padding:12px 16px;font-size:13px;font-weight:500;">Portable Stand 5</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">accessories</td><td style="padding:12px 16px;font-size:13px;">$12.30</td><td style="padding:12px 16px;"><span class="tag badge-pending">Pending</span></td><td style="padding:12px 16px;font-size:13px;">3</td><td style="padding:12px 16px;font-size:13px;color:#64748b;">—</td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;font-size:12px;font-family:monospace;color:#94a3b8;">SK-001006</td><td style="padding:12px 16px;font-size:13px;font-weight:500;">Digital Case 6</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">accessories</td><td style="padding:12px 16px;font-size:13px;">$9.99</td><td style="padding:12px 16px;"><span class="tag badge-pending">Pending</span></td><td style="padding:12px 16px;font-size:13px;">2</td><td style="padding:12px 16px;font-size:13px;color:#64748b;">—</td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;font-size:12px;font-family:monospace;color:#94a3b8;">SK-001007</td><td style="padding:12px 16px;font-size:13px;font-weight:500;">Mini Light 7</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">gadgets</td><td style="padding:12px 16px;font-size:13px;">$7.50</td><td style="padding:12px 16px;"><span class="tag badge-failed">Failed</span></td><td style="padding:12px 16px;font-size:13px;">1</td><td style="padding:12px 16px;font-size:13px;color:#64748b;">—</td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;font-size:12px;font-family:monospace;color:#94a3b8;">SK-001008</td><td style="padding:12px 16px;font-size:13px;font-weight:500;">Pro Camera 8</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">electronics</td><td style="padding:12px 16px;font-size:13px;">$89.00</td><td style="padding:12px 16px;"><span class="tag badge-uploaded">Uploaded</span></td><td style="padding:12px 16px;font-size:13px;">4</td><td style="padding:12px 16px;font-size:12px;color:#818cf8;">#10484</td></tr>
+          </tbody>
+        </table>
+        <div style="padding:14px 16px;border-top:1px solid #1e2230;display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:13px;color:#64748b;">Showing 8 of 148 products</span>
+          <div style="display:flex;gap:6px;">
+            <button class="btn-ghost" style="padding:5px 10px;font-size:12px;">← Prev</button>
+            <button class="btn-ghost" style="padding:5px 10px;font-size:12px;background:#1e2a4a;color:#818cf8;border-color:#3b4a6b;">1</button>
+            <button class="btn-ghost" style="padding:5px 10px;font-size:12px;">2</button>
+            <button class="btn-ghost" style="padding:5px 10px;font-size:12px;">3</button>
+            <button class="btn-ghost" style="padding:5px 10px;font-size:12px;">Next →</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- IMPORT JOBS PAGE -->
+    <div id="page-jobs" class="page">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+        <div>
+          <h1 style="font-size:22px;font-weight:700;">Import Jobs</h1>
+          <p style="color:#64748b;font-size:14px;margin-top:2px;">Track and manage all pipeline jobs</p>
+        </div>
+        <button class="btn-primary" onclick="openNewJobModal()">
+          <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Import Job
+        </button>
+      </div>
+      <div class="card" style="overflow:hidden;">
+        <table style="width:100%;border-collapse:collapse;">
+          <thead style="background:#13161f;">
+            <tr style="color:#64748b;font-size:12px;">
+              <th style="text-align:left;padding:12px 16px;">ID</th>
+              <th style="text-align:left;padding:12px 16px;">Type</th>
+              <th style="text-align:left;padding:12px 16px;">Status</th>
+              <th style="text-align:left;padding:12px 16px;">Progress</th>
+              <th style="text-align:left;padding:12px 16px;">Items</th>
+              <th style="text-align:left;padding:12px 16px;">Store</th>
+              <th style="text-align:left;padding:12px 16px;">Started</th>
+              <th style="text-align:left;padding:12px 16px;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="table-row"><td style="padding:12px 16px;color:#64748b;font-size:13px;">#9</td><td style="padding:12px 16px;"><span class="tag badge-upload">Upload</span></td><td style="padding:12px 16px;"><span class="tag badge-running">Running</span></td><td style="padding:12px 16px;min-width:120px;"><div class="progress-bar"><div class="progress-fill" style="width:64%"></div></div><span style="font-size:11px;color:#64748b;">64%</span></td><td style="padding:12px 16px;font-size:13px;">32 / 50</td><td style="padding:12px 16px;font-size:12px;color:#94a3b8;">Main Store</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">2 min ago</td><td style="padding:12px 16px;"><button class="btn-ghost" style="font-size:12px;padding:4px 10px;color:#f87171;border-color:#3b1a1a;">Cancel</button></td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;color:#64748b;font-size:13px;">#8</td><td style="padding:12px 16px;"><span class="tag badge-process">Process</span></td><td style="padding:12px 16px;"><span class="tag badge-completed">Completed</span></td><td style="padding:12px 16px;min-width:120px;"><div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div><span style="font-size:11px;color:#64748b;">100%</span></td><td style="padding:12px 16px;font-size:13px;">50 / 50</td><td style="padding:12px 16px;font-size:12px;color:#94a3b8;">—</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">18 min ago</td><td style="padding:12px 16px;"><button class="btn-ghost" style="font-size:12px;padding:4px 10px;">Details</button></td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;color:#64748b;font-size:13px;">#7</td><td style="padding:12px 16px;"><span class="tag badge-fetch">Fetch</span></td><td style="padding:12px 16px;"><span class="tag badge-completed">Completed</span></td><td style="padding:12px 16px;min-width:120px;"><div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div><span style="font-size:11px;color:#64748b;">100%</span></td><td style="padding:12px 16px;font-size:13px;">50 / 50</td><td style="padding:12px 16px;font-size:12px;color:#94a3b8;">—</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">35 min ago</td><td style="padding:12px 16px;"><button class="btn-ghost" style="font-size:12px;padding:4px 10px;">Details</button></td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;color:#64748b;font-size:13px;">#6</td><td style="padding:12px 16px;"><span class="tag badge-upload">Upload</span></td><td style="padding:12px 16px;"><span class="tag badge-failed">Failed</span></td><td style="padding:12px 16px;min-width:120px;"><div class="progress-bar"><div class="progress-fill" style="width:44%;background:linear-gradient(90deg,#ef4444,#f87171)"></div></div><span style="font-size:11px;color:#64748b;">44%</span></td><td style="padding:12px 16px;font-size:13px;">22 / 50</td><td style="padding:12px 16px;font-size:12px;color:#94a3b8;">Main Store</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">1 hr ago</td><td style="padding:12px 16px;"><button class="btn-ghost" style="font-size:12px;padding:4px 10px;">Details</button></td></tr>
+            <tr class="table-row"><td style="padding:12px 16px;color:#64748b;font-size:13px;">#5</td><td style="padding:12px 16px;"><span class="tag badge-sync">Sync</span></td><td style="padding:12px 16px;"><span class="tag badge-completed">Completed</span></td><td style="padding:12px 16px;min-width:120px;"><div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div><span style="font-size:11px;color:#64748b;">100%</span></td><td style="padding:12px 16px;font-size:13px;">148 / 148</td><td style="padding:12px 16px;font-size:12px;color:#94a3b8;">Both</td><td style="padding:12px 16px;font-size:12px;color:#64748b;">3 hrs ago</td><td style="padding:12px 16px;"><button class="btn-ghost" style="font-size:12px;padding:4px 10px;">Details</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- STORES PAGE -->
+    <div id="page-stores" class="page">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+        <div>
+          <h1 style="font-size:22px;font-weight:700;">WooCommerce Stores</h1>
+          <p style="color:#64748b;font-size:14px;margin-top:2px;">Manage connected stores</p>
+        </div>
+        <button class="btn-primary" onclick="openAddStoreModal()">
+          <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add Store
+        </button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;">
+        <div class="card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div style="width:40px;height:40px;border-radius:10px;background:#1e2a4a;display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" fill="none" stroke="#818cf8" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+              <div><div style="font-weight:600;">Main Store</div><div style="font-size:12px;color:#64748b;">mystore.com</div></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;"><div style="width:8px;height:8px;border-radius:50%;background:#34d399;"></div><span style="font-size:12px;color:#34d399;">Active</span></div>
+          </div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:16px;">Last tested: 5 minutes ago</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:16px;padding:8px;background:#0f1117;border-radius:6px;">
+            <div style="display:flex;gap:8px;margin-bottom:4px;"><span>Key:</span><code style="color:#818cf8;">ck_a1b2c3d4...</code></div>
+            <div style="display:flex;gap:8px;"><span>Categories:</span><span style="color:#94a3b8;">47 synced</span></div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn-ghost" style="flex:1;justify-content:center;font-size:12px;">Test Connection</button>
+            <button class="btn-ghost" style="flex:1;justify-content:center;font-size:12px;">Sync Categories</button>
+          </div>
+        </div>
+        <div class="card" style="padding:20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+            <div style="display:flex;align-items:center;gap:12px;">
+              <div style="width:40px;height:40px;border-radius:10px;background:#1e2a4a;display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" fill="none" stroke="#818cf8" stroke-width="2" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>
+              <div><div style="font-weight:600;">EU Store</div><div style="font-size:12px;color:#64748b;">mystore-eu.com</div></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;"><div style="width:8px;height:8px;border-radius:50%;background:#34d399;"></div><span style="font-size:12px;color:#34d399;">Active</span></div>
+          </div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:16px;">Last tested: 22 minutes ago</div>
+          <div style="font-size:12px;color:#64748b;margin-bottom:16px;padding:8px;background:#0f1117;border-radius:6px;">
+            <div style="display:flex;gap:8px;margin-bottom:4px;"><span>Key:</span><code style="color:#818cf8;">ck_e5f6g7h8...</code></div>
+            <div style="display:flex;gap:8px;"><span>Categories:</span><span style="color:#94a3b8;">31 synced</span></div>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button class="btn-ghost" style="flex:1;justify-content:center;font-size:12px;">Test Connection</button>
+            <button class="btn-ghost" style="flex:1;justify-content:center;font-size:12px;">Sync Categories</button>
+          </div>
+        </div>
+        <div class="card" style="padding:20px;border-style:dashed;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:200px;cursor:pointer;" onclick="openAddStoreModal()">
+          <div style="width:44px;height:44px;border-radius:12px;background:#1e2230;display:flex;align-items:center;justify-content:center;margin-bottom:10px;"><svg width="20" height="20" fill="none" stroke="#64748b" stroke-width="2" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></div>
+          <div style="font-size:14px;font-weight:500;color:#64748b;">Add New Store</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUNSKY FETCH PAGE -->
+    <div id="page-sunsky" class="page">
+      <div style="margin-bottom:24px;">
+        <h1 style="font-size:22px;font-weight:700;">Sunsky API Fetch</h1>
+        <p style="color:#64748b;font-size:14px;margin-top:2px;">Fetch products from the Sunsky supplier API</p>
+      </div>
+      <div style="display:grid;grid-template-columns:380px 1fr;gap:20px;">
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div class="card" style="padding:20px;">
+            <h2 style="font-size:15px;font-weight:600;margin-bottom:16px;">Fetch Settings</h2>
+            <div style="display:flex;flex-direction:column;gap:14px;">
+              <div><label>Category ID (optional)</label><select><option value="">All Categories</option><option>electronics</option><option>accessories</option><option>gadgets</option><option>audio</option><option>wearables</option></select></div>
+              <div><label>Keyword (optional)</label><input placeholder="e.g. wireless, earbuds…" /></div>
+              <div><label>Page</label><input type="number" value="1" min="1" /></div>
+              <div><label>Limit (products per page)</label><input type="number" value="50" min="1" max="200" /></div>
+              <button class="btn-primary" style="width:100%;justify-content:center;padding:11px 16px;" onclick="simulateFetch()">
+                <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
+                Fetch Products
+              </button>
+            </div>
+          </div>
+          <div class="card" style="padding:20px;" id="fetch-result" style="display:none;">
+            <h2 style="font-size:15px;font-weight:600;margin-bottom:12px;">Last Fetch Result</h2>
+            <div style="display:flex;flex-direction:column;gap:10px;">
+              <div style="display:flex;justify-content:space-between;padding:8px;background:#0f1117;border-radius:8px;"><span style="font-size:13px;color:#64748b;">Fetched</span><span style="font-size:13px;font-weight:600;color:#818cf8;" id="r-fetched">—</span></div>
+              <div style="display:flex;justify-content:space-between;padding:8px;background:#0f1117;border-radius:8px;"><span style="font-size:13px;color:#64748b;">Saved</span><span style="font-size:13px;font-weight:600;color:#34d399;" id="r-saved">—</span></div>
+              <div style="display:flex;justify-content:space-between;padding:8px;background:#0f1117;border-radius:8px;"><span style="font-size:13px;color:#64748b;">Skipped (duplicates)</span><span style="font-size:13px;font-weight:600;color:#fbbf24;" id="r-skipped">—</span></div>
+              <div style="display:flex;justify-content:space-between;padding:8px;background:#0f1117;border-radius:8px;"><span style="font-size:13px;color:#64748b;">Job ID</span><span style="font-size:13px;font-weight:600;color:#64748b;" id="r-job">—</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="padding:20px;">
+          <h2 style="font-size:15px;font-weight:600;margin-bottom:16px;">Available Categories</h2>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0f1117;border-radius:8px;"><div><div style="font-size:13px;font-weight:500;">Electronics</div><div style="font-size:12px;color:#64748b;">ID: electronics</div></div><span class="tag badge-pending">Root</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0f1117;border-radius:8px;"><div><div style="font-size:13px;font-weight:500;">Accessories</div><div style="font-size:12px;color:#64748b;">ID: accessories</div></div><span class="tag badge-pending">Root</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0f1117;border-radius:8px;"><div><div style="font-size:13px;font-weight:500;">Gadgets</div><div style="font-size:12px;color:#64748b;">ID: gadgets · Parent: electronics</div></div><span class="tag" style="background:#1e2230;color:#94a3b8;">Sub</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0f1117;border-radius:8px;"><div><div style="font-size:13px;font-weight:500;">Audio</div><div style="font-size:12px;color:#64748b;">ID: audio · Parent: electronics</div></div><span class="tag" style="background:#1e2230;color:#94a3b8;">Sub</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0f1117;border-radius:8px;"><div><div style="font-size:13px;font-weight:500;">Wearables</div><div style="font-size:12px;color:#64748b;">ID: wearables · Parent: electronics</div></div><span class="tag" style="background:#1e2230;color:#94a3b8;">Sub</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0f1117;border-radius:8px;"><div><div style="font-size:13px;font-weight:500;">Toys &amp; Games</div><div style="font-size:12px;color:#64748b;">ID: toys</div></div><span class="tag badge-pending">Root</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0f1117;border-radius:8px;"><div><div style="font-size:13px;font-weight:500;">Mobile Accessories</div><div style="font-size:12px;color:#64748b;">ID: mobile · Parent: accessories</div></div><span class="tag" style="background:#1e2230;color:#94a3b8;">Sub</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#0f1117;border-radius:8px;"><div><div style="font-size:13px;font-weight:500;">Smart Home</div><div style="font-size:12px;color:#64748b;">ID: smart-home · Parent: electronics</div></div><span class="tag" style="background:#1e2230;color:#94a3b8;">Sub</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- New Job Modal -->
+<div id="modal-job" class="modal-overlay" style="display:none;" onclick="closeModal('modal-job',event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+      <h2 style="font-size:17px;font-weight:700;">New Import Job</h2>
+      <button onclick="closeModal('modal-job')" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:20px;">✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div><label>Job Type</label><select><option>fetch — Pull products from Sunsky</option><option>process — Run Python image pipeline</option><option>upload — Push to WooCommerce (draft)</option><option>sync — Update prices &amp; stock</option></select></div>
+      <div><label>Target Store (for upload/sync)</label><select><option value="">— Not applicable —</option><option>Main Store</option><option>EU Store</option></select></div>
+      <div style="display:flex;gap:10px;margin-top:6px;">
+        <button class="btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal('modal-job')">Cancel</button>
+        <button class="btn-primary" style="flex:1;justify-content:center;" onclick="closeModal('modal-job')">
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Start Job
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Store Modal -->
+<div id="modal-store" class="modal-overlay" style="display:none;" onclick="closeModal('modal-store',event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+      <h2 style="font-size:17px;font-weight:700;">Add WooCommerce Store</h2>
+      <button onclick="closeModal('modal-store')" style="background:none;border:none;color:#64748b;cursor:pointer;font-size:20px;">✕</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div><label>Store Name</label><input placeholder="e.g. Main Store" /></div>
+      <div><label>Store URL</label><input placeholder="https://yourstore.com" /></div>
+      <div><label>Consumer Key</label><input placeholder="ck_xxxxxxxxxxxx" /></div>
+      <div><label>Consumer Secret</label><input type="password" placeholder="cs_xxxxxxxxxxxx" /></div>
+      <div style="padding:10px 12px;background:#1a3350;border-radius:8px;font-size:12px;color:#60a5fa;">
+        ℹ️ Generate keys at: WooCommerce → Settings → Advanced → REST API
+      </div>
+      <div style="display:flex;gap:10px;margin-top:6px;">
+        <button class="btn-ghost" style="flex:1;justify-content:center;" onclick="closeModal('modal-store')">Cancel</button>
+        <button class="btn-primary" style="flex:1;justify-content:center;" onclick="closeModal('modal-store')">Save Store</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function showPage(name, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  if (el) el.classList.add('active');
+}
+function openNewJobModal() { document.getElementById('modal-job').style.display = 'flex'; }
+function openAddStoreModal() { document.getElementById('modal-store').style.display = 'flex'; }
+function closeModal(id, e) {
+  if (!e || e.target.id === id) document.getElementById(id).style.display = 'none';
+}
+function simulateFetch() {
+  const btn = event.target.closest('button');
+  btn.disabled = true;
+  btn.innerHTML = '<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" style="animation:spin 1s linear infinite"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg> Fetching…';
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg> Fetch Products';
+    const r = document.getElementById('fetch-result');
+    r.style.display = 'block';
+    document.getElementById('r-fetched').textContent = '50';
+    document.getElementById('r-saved').textContent = '48';
+    document.getElementById('r-skipped').textContent = '2';
+    document.getElementById('r-job').textContent = '#10';
+  }, 1800);
+}
+</script>
+<style>
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+</style>
+</body>
+</html>
