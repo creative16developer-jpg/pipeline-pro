@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]
+asyncpg
+psycopg2-binary
+pydantic
+pydantic-settings
+httpx
+python-dotenv
+Pillow
+alembic
+python-multipart
+woocommerce

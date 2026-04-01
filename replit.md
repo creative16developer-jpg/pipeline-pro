@@ -1,123 +1,132 @@
-# WooCommerce Import Pipeline — Dashboard
+# PipelinePro — WooCommerce Import Dashboard
 
 ## Overview
 
-A full-stack management dashboard for automating WooCommerce product imports from the Sunsky API. Covers Phases 1, 3, and 4 of the client estimate.
+A full-stack management dashboard for automating WooCommerce product imports from the Sunsky API. Built across 4 milestones. Frontend is React/Vite; backend is Python FastAPI. Delivered via a shared private Git repo.
 
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
+- **Node.js version**: 24 (frontend tooling only)
 - **Package manager**: pnpm
 - **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (ESM bundle)
-- **Frontend**: React + Vite, TailwindCSS, Recharts, Framer Motion
+- **API framework**: Python FastAPI (port 8000) — **primary backend**
+- **Legacy API**: Node.js Express 5 (port 8080) — kept for reference; dashboard no longer targets it
+- **Database**: PostgreSQL (shared) — Python backend uses async SQLAlchemy + asyncpg
+- **API codegen**: Orval (from OpenAPI spec) → React Query hooks
+- **Build**: Vite (frontend), esbuild (Node legacy)
+- **Frontend**: React + Vite, TailwindCSS, shadcn/ui, Recharts, Framer Motion
 
-## Features
+## Architecture
 
-### Phase 1 — Sunsky API & Data Layer
-- Sunsky API integration (mock mode when no key, falls back to real API when configured)
-- PostgreSQL schema: stores, products, jobs, images, woo_categories, job_logs
-- Product fetch, pagination, category filtering
+```
+Browser
+  │
+  └──► Vite dev server (dashboard, dynamic port)
+          │  /api/* proxy
+          ▼
+       Python FastAPI  (port 8000, artifacts/pipeline/)
+          │
+          └──► PostgreSQL (DATABASE_URL env)
+```
 
-### Phase 3 — WooCommerce Upload & Dashboard
-- WooCommerce multi-store connector (add, test connection, delete)
-- Category sync from WooCommerce stores
-- Import job management (fetch, process, upload, sync types)
-- Dashboard with live stats (total products, pending, processed, uploaded, failed, active jobs, stores)
-- Job progress tracking with cancel support
-- Product list with search and status filtering
+The Vite dev server proxies all `/api/*` requests to the Python FastAPI backend at `http://localhost:8000`. No PHP anywhere — fully Python backend by client request.
 
-## Structure
+## Project Structure
 
 ```text
 artifacts/
-├── api-server/         # Express 5 API server
-│   └── src/
-│       ├── lib/
-│       │   ├── sunsky.ts       # Sunsky API integration (mock + real)
-│       │   └── woocommerce.ts  # WooCommerce REST API client
-│       └── routes/
-│           ├── stores.ts       # Store CRUD + test + category sync
-│           ├── products.ts     # Product list + detail
-│           ├── jobs.ts         # Job management + progress simulation
-│           ├── sunsky.ts       # Sunsky fetch endpoint
-│           └── dashboard.ts    # Stats aggregation
-├── dashboard/          # React dashboard frontend
-│   └── src/
-│       ├── pages/      # Dashboard, Products, Jobs, Stores, Sunsky
-│       ├── hooks/      # React Query hooks for each domain
-│       └── components/ # Layout, Modal, StatusBadge
+├── pipeline/           # Python FastAPI backend (PRIMARY BACKEND)
+│   ├── main.py                # App entry point, uvicorn, CORS
+│   ├── database.py            # Async SQLAlchemy engine (asyncpg, sslmode fix)
+│   ├── models/
+│   │   └── models.py          # ORM models: Store, Product, Job, Image, etc.
+│   ├── schemas/
+│   │   └── schemas.py         # Pydantic I/O schemas
+│   ├── routers/
+│   │   ├── dashboard.py       # GET /api/dashboard/stats
+│   │   ├── stores.py          # CRUD + test + category sync
+│   │   ├── products.py        # Product list + detail
+│   │   ├── jobs.py            # Job management + background runners
+│   │   └── sunsky.py          # Sunsky fetch + categories
+│   └── pipeline/
+│       ├── sunsky_client.py   # Sunsky API client (MD5 auth, mock fallback)
+│       ├── woo_client.py      # WooCommerce REST client (Basic Auth)
+│       └── image_processor.py # Pillow: download → resize → watermark → WebP
+├── api-server/         # Node.js Express backend (LEGACY — not actively used)
+├── dashboard/          # React + Vite frontend
+│   └── vite.config.ts  # Proxies /api/* → http://localhost:8000
 lib/
-├── api-spec/           # OpenAPI 3.1 spec (source of truth)
-├── api-client-react/   # Generated React Query hooks
+├── api-spec/           # OpenAPI 3.1 spec (source of truth for codegen)
+├── api-client-react/   # Generated React Query hooks (orval)
 ├── api-zod/            # Generated Zod schemas
-└── db/
-    └── schema/
-        ├── stores.ts
-        ├── products.ts
-        ├── jobs.ts
-        ├── images.ts
-        ├── categories.ts
-        └── jobLogs.ts
+└── db/                 # Drizzle ORM schema (Node.js, for reference)
+client-preview/
+└── pipeline-prototype.html   # Standalone HTML prototype with Roadmap/milestones
 ```
 
-## Environment Variables Needed
+## Environment Variables
 
 | Variable | Description |
 |---|---|
-| `DATABASE_URL` | Auto-provided by Replit |
-| `SUNSKY_API_KEY` | Sunsky API key (optional — uses mock data without it) |
+| `DATABASE_URL` | Auto-provided by Replit (asyncpg, sslmode stripped automatically) |
+| `SUNSKY_API_KEY` | Sunsky API key — IP-whitelisted; uses mock data without it |
 | `SUNSKY_API_SECRET` | Sunsky API secret |
-| `SUNSKY_API_URL` | Sunsky base URL (default: https://www.sunsky-online.com/api) |
+| `SUNSKY_API_URL` | Sunsky base URL (default: `https://www.sunsky-online.com/api`) |
+| `SESSION_SECRET` | Replit secret for future auth sessions |
 
-## WooCommerce Store Setup
+## Python Backend Endpoints
 
-Add stores via the dashboard UI. Each store requires:
-- Store name
-- WordPress/WooCommerce URL (e.g. `https://yourstore.com`)
-- Consumer Key (from WooCommerce → Settings → Advanced → REST API)
-- Consumer Secret
+All mounted under `/api/`:
 
-## API Endpoints
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/healthz` | Health check — `{"status":"ok","runtime":"python"}` |
+| GET | `/api/dashboard/stats` | Aggregate counts + recent jobs |
+| GET | `/api/stores` | List WooCommerce stores (credentials masked) |
+| POST | `/api/stores` | Add a new store |
+| GET/PUT/DELETE | `/api/stores/{id}` | Get/update/delete a store |
+| POST | `/api/stores/{id}/test` | Test WooCommerce connection |
+| GET/POST | `/api/stores/{id}/categories` | List / sync WooCommerce categories |
+| GET | `/api/products` | List products (pagination, search, status filter) |
+| GET | `/api/products/{id}` | Product detail |
+| GET | `/api/jobs` | List jobs |
+| POST | `/api/jobs` | Create & start a job (fetch/process/upload/sync) |
+| GET | `/api/jobs/{id}` | Job detail |
+| POST | `/api/jobs/{id}/cancel` | Cancel a running job |
+| POST | `/api/sunsky/fetch` | Fetch products from Sunsky into DB |
+| GET | `/api/sunsky/categories` | Get Sunsky category tree |
 
-- `GET /api/healthz` — health check
-- `GET/POST /api/stores` — manage WooCommerce stores
-- `POST /api/stores/:id/test` — test connection
-- `GET/POST /api/stores/:id/categories` — sync categories
-- `GET /api/products` — list products (with pagination, search, status filter)
-- `GET/POST /api/jobs` — import jobs
-- `POST /api/jobs/:id/cancel` — cancel a job
-- `POST /api/sunsky/fetch` — fetch products from Sunsky
-- `GET /api/sunsky/categories` — get Sunsky categories
-- `GET /api/dashboard/stats` — dashboard statistics
+## Sunsky Auth
 
-## Development Commands
+MD5 signature: sort all params (including `key`) alphabetically → concat values → append `@` + secret → MD5 hex. TESTKEY/TESTSECRET are IP-whitelisted and return 403 on non-whitelisted IPs; mock data is used automatically as fallback.
+
+## Milestone Plan
+
+| Milestone | Scope | Est. |
+|---|---|---|
+| M1 | Sunsky fetch + image processing pipeline | ~30h |
+| M2 | AI content generation (client's own API endpoint) | ~40h |
+| M3 | WooCommerce upload as drafts + category mapping | ~40h |
+| M4 | Dashboard polish, sync scheduler, Git delivery | ~22h |
+
+## Running Locally
 
 ```bash
-# Start API server
-pnpm --filter @workspace/api-server run dev
+# Python backend (port 8000)
+cd artifacts/pipeline && python3 main.py
 
-# Start dashboard
+# React dashboard
 pnpm --filter @workspace/dashboard run dev
 
-# Run codegen after OpenAPI spec changes
+# Regenerate API client after OpenAPI spec changes
 pnpm --filter @workspace/api-spec run codegen
-
-# Push DB schema changes
-pnpm --filter @workspace/db run push
 ```
 
-## Next Steps (for full implementation)
+## Key Design Decisions
 
-- Phase 2: Hook up Python image processing script (image download → compress → watermark)
-- Add CSV/XLS import module
-- Add Redis + Celery for proper job queuing (currently simulated)
-- Add daily price/stock sync scheduler
-- Add simulation mode and duplicate detection
-- Add CSV/XLS export
-- Performance testing with 5000+ products
+- **No PHP** — client explicitly requested full Python backend
+- **AI generation** — via client's own API endpoint only (URL + auth token TBD); no AI code shared by us
+- **All image processing** — Pillow (lossless compress → watermark → WebP conversion)
+- **Draft mode** — products uploaded to WooCommerce with `status: "draft"` so client can review before publishing
+- **Mock fallback** — Sunsky client automatically returns realistic mock data when real credentials aren't available (IP-whitelist restriction)
