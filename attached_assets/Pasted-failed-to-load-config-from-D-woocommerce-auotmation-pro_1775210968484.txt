@@ -1,0 +1,15 @@
+failed to load config from D:\woocommerce auotmation\project\pipeline-pro\artifacts\dashboard\vite.config.ts
+error when starting dev server:
+Error: PORT environment variable is required but was not provided.
+    at file:///D:/woocommerce%20auotmation/project/pipeline-pro/artifacts/dashboard/node_modules/.vite-temp/vite.config.ts.timestamp-1775210951201-82c5e8e697e518.mjs:10:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:413:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:660:26)
+    at async loadConfigFromBundledFile (file:///D:/woocommerce%20auotmation/project/pipeline-pro/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:35909:12)
+    at async bundleAndLoadConfigFile (file:///D:/woocommerce%20auotmation/project/pipeline-pro/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:35797:17)
+    at async loadConfigFromFile (file:///D:/woocommerce%20auotmation/project/pipeline-pro/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:35764:42)
+    at async resolveConfig (file:///D:/woocommerce%20auotmation/project/pipeline-pro/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:35413:22)
+    at async _createServer (file:///D:/woocommerce%20auotmation/project/pipeline-pro/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/chunks/config.js:25362:67)
+    at async CAC.<anonymous> (file:///D:/woocommerce%20auotmation/project/pipeline-pro/node_modules/.pnpm/vite@7.3.1_@types+node@25.3_847d3f1dfd8a5a4dca3b40dafc2c9d32/node_modules/vite/dist/node/cli.js:572:18)
+D:\woocommerce auotmation\project\pipeline-pro\artifacts\dashboard:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @workspace/dashboard@0.0.0 dev: `vite --config vite.config.ts --host 0.0.0.0`
+Exit status 1
