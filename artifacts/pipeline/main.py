@@ -16,15 +16,27 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from contextlib import asynccontextmanager
 from config import get_settings
+from database import engine, Base
 from routers import dashboard, stores, products, jobs, sunsky
+import models.models  # noqa: F401 — registers all ORM models with Base
 
 settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
 
 app = FastAPI(
     title="PipelinePro API",
     description="WooCommerce import pipeline — Python backend",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
