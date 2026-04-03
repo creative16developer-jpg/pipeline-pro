@@ -11,5 +11,11 @@
   "devDependencies": {
     "typescript": "~5.9.2",
     "prettier": "^3.8.1"
+  },
+  "optionalDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "*",
+    "@rollup/rollup-linux-x64-gnu": "*",
+    "@rollup/rollup-darwin-x64": "*",
+    "@rollup/rollup-darwin-arm64": "*"
   }
 }
