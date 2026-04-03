@@ -1,20 +1,30 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, Any
 from datetime import datetime
 
 
 class StoreCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str
     url: str
-    consumer_key: str
-    consumer_secret: str
+    consumer_key: str = Field(alias="consumerKey", default=None)
+    consumer_secret: str = Field(alias="consumerSecret", default=None)
+
+    def model_post_init(self, __context):
+        if self.consumer_key is None:
+            raise ValueError("consumer_key / consumerKey is required")
+        if self.consumer_secret is None:
+            raise ValueError("consumer_secret / consumerSecret is required")
 
 
 class StoreUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: Optional[str] = None
     url: Optional[str] = None
-    consumer_key: Optional[str] = None
-    consumer_secret: Optional[str] = None
+    consumer_key: Optional[str] = Field(None, alias="consumerKey")
+    consumer_secret: Optional[str] = Field(None, alias="consumerSecret")
 
 
 class StoreOut(BaseModel):
