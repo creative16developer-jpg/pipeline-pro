@@ -144,7 +144,7 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
     createJob.mutate({
       data: {
         type,
-        storeId: storeId ? parseInt(storeId) : undefined,
+        store_id: storeId ? parseInt(storeId) : undefined,
         config: {}
       }
     }, {
