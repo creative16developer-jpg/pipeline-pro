@@ -141,7 +141,13 @@ function AddStoreModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => vo
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    createStore.mutate({ data: formData }, {
+    const payload = {
+      name: formData.name,
+      url: formData.url,
+      consumer_key: formData.consumerKey,
+      consumer_secret: formData.consumerSecret,
+    };
+    createStore.mutate({ data: payload }, {
       onSuccess: () => {
         onClose();
         setFormData({ name: '', url: '', consumerKey: '', consumerSecret: '' });
