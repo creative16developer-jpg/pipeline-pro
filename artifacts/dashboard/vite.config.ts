@@ -43,6 +43,12 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
+    hmr: isReplit
+      ? undefined
+      : {
+          host: "0.0.0.0",
+          clientPort: port,
+        },
     proxy: {
       "/api": {
         target: "http://localhost:8000",
