@@ -15,12 +15,17 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from config import get_settings
 from database import engine, Base
 from routers import dashboard, stores, products, jobs, sunsky
 import models.models  # noqa: F401 — registers all ORM models with Base
+
+STATIC_DIR = Path(__file__).parent.parent / "dashboard" / "dist" / "public"
 
 settings = get_settings()
 
@@ -57,6 +62,19 @@ app.include_router(sunsky.router, prefix="/api")
 @app.get("/api/healthz")
 async def health():
     return {"status": "ok", "runtime": "python"}
+
+
+# Serve built React frontend (production / VPS mode)
+# Run: pnpm --filter @workspace/dashboard build  — then restart this server
+if STATIC_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        file = STATIC_DIR / full_path
+        if file.exists() and file.is_file():
+            return FileResponse(file)
+        return FileResponse(STATIC_DIR / "index.html")
 
 
 if __name__ == "__main__":
