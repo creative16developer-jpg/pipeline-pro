@@ -49,14 +49,26 @@ cd ..\..\..\..
 
 If you get a `lightningcss` or `@tailwindcss/oxide` error, same fix — go into that package folder and run `npm install --no-save`.
 
-### 3. Install Python dependencies
+### 3. Install Redis
 
-```cmd
-cd artifacts\pipeline
-pip install fastapi uvicorn sqlalchemy[asyncio] asyncpg psycopg2-binary pydantic-settings httpx Pillow python-multipart woocommerce python-dotenv
+**Ubuntu/Debian (VPS):**
+```bash
+sudo apt install redis-server -y
+sudo systemctl enable redis-server
+sudo systemctl start redis-server
 ```
 
-### 4. Create the database
+**Windows (local dev):**
+Download from https://github.com/tporadowski/redis/releases and run `redis-server.exe`
+
+### 4. Install Python dependencies
+
+```bash
+cd artifacts/pipeline
+pip install -r requirements.txt
+```
+
+### 5. Create the database
 
 Open `psql` and run:
 ```sql
@@ -85,16 +97,21 @@ You should see: `Done! All tables created successfully.`
 
 ## Running Locally
 
-Open **two separate terminals**:
+Open **three separate terminals**:
 
-**Terminal 1 — Python backend** (inside `artifacts\pipeline\`):
-```cmd
+**Terminal 1 — Python backend** (inside `artifacts/pipeline/`):
+```bash
 python main.py
 ```
 Backend runs at `http://localhost:8000`
 
-**Terminal 2 — Dashboard** (inside project root):
-```cmd
+**Terminal 2 — Celery worker** (inside `artifacts/pipeline/`):
+```bash
+celery -A celery_app worker --loglevel=info
+```
+
+**Terminal 3 — Dashboard** (inside project root):
+```bash
 pnpm --filter @workspace/dashboard run dev
 ```
 Dashboard runs at `http://localhost:5173`
@@ -103,11 +120,35 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
+## Running on VPS (Production)
+
+```bash
+# 1. Pull latest
+git pull origin main
+
+# 2. Install Python deps
+cd artifacts/pipeline && pip install -r requirements.txt
+
+# 3. Build frontend
+cd ../.. && pnpm --filter @workspace/dashboard build
+
+# 4. Start backend (serves frontend + API on port 8000)
+cd artifacts/pipeline && python main.py &
+
+# 5. Start Celery worker
+celery -A celery_app worker --loglevel=info &
+```
+
+Open `http://YOUR_SERVER_IP:8000` in your browser.
+
+---
+
 ## Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `REDIS_URL` | No | Redis URL (default: `redis://localhost:6379/0`) |
 | `SUNSKY_API_KEY` | No | Sunsky API key (uses mock data if not set) |
 | `SUNSKY_API_SECRET` | No | Sunsky API secret |
 | `SUNSKY_API_URL` | No | Sunsky base URL (default: `https://www.sunsky-online.com/api`) |
