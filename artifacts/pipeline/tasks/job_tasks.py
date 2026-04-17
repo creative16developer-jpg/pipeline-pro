@@ -2,6 +2,13 @@
 Celery tasks for background job processing.
 Each task wraps an async runner using asyncio.run().
 """
+import sys
+from pathlib import Path
+
+_pkg_dir = str(Path(__file__).parent.parent.resolve())
+if _pkg_dir not in sys.path:
+    sys.path.insert(0, _pkg_dir)
+
 import asyncio
 from celery_app import celery_app
 
