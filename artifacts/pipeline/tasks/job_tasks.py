@@ -219,7 +219,8 @@ async def _run_upload(db, job):
 
             payload = {
                 "name": product.name,
-                "sku": product.sku,
+                # Omit SKU on creation — duplicate SKUs from previous failed runs
+                # cause 400 errors. WooCommerce will auto-assign; we store ours in DB.
                 "price": product.price or "0",
                 "description": product.description or "",
                 "stock_quantity": 10 if product.stock_status == "in_stock" else 0,
