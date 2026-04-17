@@ -6,6 +6,7 @@ from models.models import Store, WooCategory, StoreStatus
 from schemas.schemas import StoreCreate, StoreUpdate, StoreOut, WooCategoryOut
 from pipeline import woo_client
 from datetime import datetime, timezone
+import httpx
 
 router = APIRouter(prefix="/stores", tags=["stores"])
 
@@ -105,3 +106,40 @@ async def sync_store_categories(store_id: int, db: AsyncSession = Depends(get_db
 
     await db.commit()
     return {"synced": len(raw_cats)}
+
+
+@router.post("/{store_id}/test-product")
+async def test_product_creation(store_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Send a minimal draft product to WooCommerce and return the full raw response.
+    Use this to diagnose 400 errors — the response body shows the exact reason.
+    """
+    store = await db.get(Store, store_id)
+    if not store:
+        raise HTTPException(404, "Store not found")
+
+    base_url = store.url.rstrip("/") + "/wp-json/wc/v3"
+    import base64
+    token = base64.b64encode(
+        f"{store.consumer_key}:{store.consumer_secret}".encode()
+    ).decode()
+    headers = {"Authorization": f"Basic {token}"}
+
+    payload = {
+        "name": "PipelinePro Test Product",
+        "status": "draft",
+        "regular_price": "9.99",
+        "description": "Diagnostic test — safe to delete.",
+    }
+
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        resp = await client.post(
+            f"{base_url}/products",
+            headers=headers,
+            json=payload,
+        )
+        return {
+            "status_code": resp.status_code,
+            "success": resp.is_success,
+            "body": resp.json() if resp.headers.get("content-type", "").startswith("application/json") else resp.text,
+        }
