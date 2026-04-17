@@ -70,24 +70,50 @@ async def create_product(store: Store, product_data: dict) -> dict:
     product_data keys: name, sku, regular_price, description, status,
                        images, categories, stock_quantity, manage_stock
     """
+    # Only include images that look like real URLs
+    raw_images = product_data.get("images", [])
+    images = [
+        {"src": url} for url in raw_images
+        if isinstance(url, str) and url.startswith("http")
+    ]
+
+    # Only include categories that are valid ints
+    raw_cats = product_data.get("category_ids", [])
+    categories = [{"id": int(cid)} for cid in raw_cats if cid]
+
     payload = {
-        "name": product_data.get("name", ""),
-        "sku": product_data.get("sku", ""),
-        "regular_price": str(product_data.get("price", "0")),
-        "description": product_data.get("description", ""),
+        "name": product_data.get("name", "") or "Unnamed Product",
+        "regular_price": str(product_data.get("price", "0") or "0"),
+        "description": product_data.get("description", "") or "",
         "status": "draft",
         "manage_stock": True,
-        "stock_quantity": product_data.get("stock_quantity", 0),
-        "images": [{"src": url} for url in product_data.get("images", [])],
-        "categories": [{"id": cid} for cid in product_data.get("category_ids", [])],
+        "stock_quantity": int(product_data.get("stock_quantity", 0) or 0),
     }
+
+    # SKU is optional — omit if blank to avoid duplicate-SKU 400 errors
+    sku = (product_data.get("sku", "") or "").strip()
+    if sku:
+        payload["sku"] = sku
+
+    if images:
+        payload["images"] = images
+
+    if categories:
+        payload["categories"] = categories
+
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
         resp = await client.post(
             f"{_base_url(store)}/products",
             headers=_auth_header(store),
             json=payload,
         )
-        resp.raise_for_status()
+        if not resp.is_success:
+            # Include full WooCommerce error body so we can diagnose 400s
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code}: {resp.text[:500]}",
+                request=resp.request,
+                response=resp,
+            )
         return resp.json()
 
 
