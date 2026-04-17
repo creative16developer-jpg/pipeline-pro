@@ -19,10 +19,23 @@ def _run(coro):
 
 @celery_app.task(bind=True, name="tasks.run_job")
 def run_job(self, job_id: int):
+    # Re-apply path fix inside the worker process (ForkPoolWorker may not
+    # inherit the module-level sys.path change reliably).
+    import sys
+    from pathlib import Path
+    _d = str(Path(__file__).parent.parent.resolve())
+    if _d not in sys.path:
+        sys.path.insert(0, _d)
     _run(_execute_job(job_id))
 
 
 async def _execute_job(job_id: int):
+    import sys
+    from pathlib import Path
+    _d = str(Path(__file__).parent.parent.resolve())
+    if _d not in sys.path:
+        sys.path.insert(0, _d)
+
     from database import AsyncSessionLocal
     from models.models import Job, JobStatus, JobType, LogLevel, JobLog
     from datetime import datetime, timezone
