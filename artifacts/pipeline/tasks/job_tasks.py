@@ -164,13 +164,27 @@ async def _run_upload(db, job):
     if not store:
         raise ValueError("Store not found")
 
+    from sqlalchemy import or_
+
+    # Upload both processed products (went through image processing) and
+    # plain pending products (skipped processing step — upload as-is).
     products = (
         await db.execute(
             select(Product)
-            .where(Product.status == ProductStatus.processed)
+            .where(
+                or_(
+                    Product.status == ProductStatus.processed,
+                    Product.status == ProductStatus.pending,
+                ),
+                Product.woo_product_id.is_(None),   # skip already-uploaded
+            )
             .limit(job.config.get("limit", 50) if job.config else 50)
         )
     ).scalars().all()
+
+    if not products:
+        await _log(db, job.id, LogLevel.info, "No products to upload (all already uploaded or none fetched yet)")
+        return
 
     job.total_items = len(products)
     await db.commit()
@@ -191,13 +205,14 @@ async def _run_upload(db, job):
         except Exception as e:
             product.status = ProductStatus.failed
             product.error_message = str(e)
-            job.failed_items += 1
+            job.failed_items = (job.failed_items or 0) + 1
+            await _log(db, job.id, LogLevel.error, f"Failed to upload {product.sku}: {e}")
 
         job.processed_items = i + 1
         job.progress_percent = round((i + 1) / len(products) * 100, 1)
         await db.commit()
 
-    await _log(db, job.id, LogLevel.info, f"Upload complete for {len(products)} products")
+    await _log(db, job.id, LogLevel.info, f"Upload complete: {len(products) - (job.failed_items or 0)} uploaded, {job.failed_items or 0} failed")
 
 
 async def _run_sync(db, job):
