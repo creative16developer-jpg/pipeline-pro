@@ -283,7 +283,8 @@ function inferResponseType(response: Response): "json" | "text" | "blob" {
   const mediaType = getMediaType(response.headers);
 
   if (isJsonMediaType(mediaType)) return "json";
-  if (isTextMediaType(mediaType) || mediaType == null) return "text";
+  if (mediaType == null) return "json"; // default to JSON when header is missing
+  if (isTextMediaType(mediaType)) return "text";
   return "blob";
 }
 

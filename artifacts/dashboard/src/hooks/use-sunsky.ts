@@ -5,7 +5,14 @@ import {
 } from "@workspace/api-client-react";
 
 export function useCategories() {
-  return useSunskyCategories();
+  const result = useSunskyCategories();
+  const raw = result.data;
+  const data = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+    ? (() => { try { const p = JSON.parse(raw); return Array.isArray(p) ? p : []; } catch { return []; } })()
+    : [];
+  return { ...result, data };
 }
 
 export function useSunskyFetch() {
