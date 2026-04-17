@@ -187,8 +187,10 @@ async def _run_upload(db, job):
 
     from sqlalchemy import or_
 
-    # Upload both processed products (went through image processing) and
-    # plain pending products (skipped processing step — upload as-is).
+    cfg = job.config or {}
+    skip_images = cfg.get("skip_images", True)  # default: skip images (WooCommerce fetches them; often blocked)
+
+    # Include pending, processed, AND previously-failed products that have no woo_product_id yet
     products = (
         await db.execute(
             select(Product)
@@ -196,10 +198,11 @@ async def _run_upload(db, job):
                 or_(
                     Product.status == ProductStatus.processed,
                     Product.status == ProductStatus.pending,
+                    Product.status == ProductStatus.failed,
                 ),
                 Product.woo_product_id.is_(None),   # skip already-uploaded
             )
-            .limit(job.config.get("limit", 50) if job.config else 50)
+            .limit(cfg.get("limit", 50))
         )
     ).scalars().all()
 
@@ -213,16 +216,26 @@ async def _run_upload(db, job):
     for i, product in enumerate(products):
         try:
             raw = product.raw_data or {}
-            result = await wc.create_product(store, {
+
+            payload = {
                 "name": product.name,
                 "sku": product.sku,
                 "price": product.price or "0",
                 "description": product.description or "",
-                "images": raw.get("images", []),
                 "stock_quantity": 10 if product.stock_status == "in_stock" else 0,
-            })
+            }
+
+            # Only attach images when explicitly enabled — WooCommerce tries to
+            # download them at creation time, and blocked CDN URLs cause 400 errors.
+            if not skip_images:
+                raw_imgs = raw.get("images", [])
+                if isinstance(raw_imgs, list):
+                    payload["images"] = [u for u in raw_imgs if isinstance(u, str) and u.startswith("http")]
+
+            result = await wc.create_product(store, payload)
             product.woo_product_id = result.get("id")
             product.status = ProductStatus.uploaded
+            product.error_message = None
         except Exception as e:
             product.status = ProductStatus.failed
             product.error_message = str(e)
@@ -233,7 +246,8 @@ async def _run_upload(db, job):
         job.progress_percent = round((i + 1) / len(products) * 100, 1)
         await db.commit()
 
-    await _log(db, job.id, LogLevel.info, f"Upload complete: {len(products) - (job.failed_items or 0)} uploaded, {job.failed_items or 0} failed")
+    uploaded = len(products) - (job.failed_items or 0)
+    await _log(db, job.id, LogLevel.info, f"Upload complete: {uploaded} uploaded, {job.failed_items or 0} failed")
 
 
 async def _run_sync(db, job):
