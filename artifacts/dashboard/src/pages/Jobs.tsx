@@ -134,24 +134,48 @@ export default function Jobs() {
 }
 
 function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
-  const [type, setType] = useState<CreateJobInputType>("process");
+  const [type, setType] = useState<CreateJobInputType>("fetch");
   const [storeId, setStoreId] = useState("");
+  // Fetch config
+  const [fetchPage, setFetchPage] = useState("1");
+  const [fetchLimit, setFetchLimit] = useState("50");
+  const [fetchKeyword, setFetchKeyword] = useState("");
+  const [fetchCategoryId, setFetchCategoryId] = useState("");
+  // Upload config
+  const [uploadLimit, setUploadLimit] = useState("50");
+
   const createJob = useCreateJob();
   const { data: stores } = useStores();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    let config: Record<string, any> = {};
+    if (type === "fetch") {
+      config = {
+        page: parseInt(fetchPage) || 1,
+        limit: parseInt(fetchLimit) || 50,
+        ...(fetchKeyword.trim() ? { keyword: fetchKeyword.trim() } : {}),
+        ...(fetchCategoryId.trim() ? { category_id: fetchCategoryId.trim() } : {}),
+      };
+    } else if (type === "upload") {
+      config = { limit: parseInt(uploadLimit) || 50 };
+    }
+
     createJob.mutate({
       data: {
         type,
         store_id: storeId ? parseInt(storeId) : undefined,
-        config: {}
+        config,
       }
     }, {
       onSuccess: () => {
         onClose();
-        setType("process");
+        setType("fetch");
         setStoreId("");
+        setFetchPage("1");
+        setFetchKeyword("");
+        setFetchCategoryId("");
       }
     });
   };
@@ -163,7 +187,7 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
           <label className="text-sm font-medium text-foreground block">Job Type</label>
           <select
             value={type}
-            onChange={(e) => setType(e.target.value as CreateJobInputType)}
+            onChange={(e) => { setType(e.target.value as CreateJobInputType); setStoreId(""); }}
             className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
             required
           >
@@ -174,6 +198,81 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
           </select>
         </div>
 
+        {/* Fetch-specific config */}
+        {type === "fetch" && (
+          <div className="space-y-3 p-4 bg-secondary/20 rounded-xl border border-border/50">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Fetch Options</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-foreground">Page Number</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={fetchPage}
+                  onChange={(e) => setFetchPage(e.target.value)}
+                  placeholder="1"
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-foreground">Limit (per page)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={fetchLimit}
+                  onChange={(e) => setFetchLimit(e.target.value)}
+                  placeholder="50"
+                  className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Keyword (optional)</label>
+              <input
+                type="text"
+                value={fetchKeyword}
+                onChange={(e) => setFetchKeyword(e.target.value)}
+                placeholder="e.g. bluetooth earbuds"
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Category ID (optional)</label>
+              <input
+                type="text"
+                value={fetchCategoryId}
+                onChange={(e) => setFetchCategoryId(e.target.value)}
+                placeholder="e.g. 123 (leave blank for all)"
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Run multiple fetch jobs with different page numbers to import more products. Each page fetches up to {fetchLimit || 50} new products.
+            </p>
+          </div>
+        )}
+
+        {/* Upload config */}
+        {type === "upload" && (
+          <div className="space-y-3 p-4 bg-secondary/20 rounded-xl border border-border/50">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Upload Options</p>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-foreground">Max Products to Upload</label>
+              <input
+                type="number"
+                min="1"
+                max="200"
+                value={uploadLimit}
+                onChange={(e) => setUploadLimit(e.target.value)}
+                placeholder="50"
+                className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Store selector for upload/sync */}
         {(type === "upload" || type === "sync") && (
           <div className="space-y-2">
             <label className="text-sm font-medium text-foreground block">Target WooCommerce Store</label>

@@ -43,7 +43,7 @@ async def list_products(
         total=total,
         page=page,
         limit=limit,
-        pages=max(1, math.ceil(total / limit)),
+        total_pages=max(1, math.ceil(total / limit)),
     )
 
 

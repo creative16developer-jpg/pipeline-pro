@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import math
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -26,6 +27,7 @@ async def list_jobs(
         total=total,
         page=page,
         limit=limit,
+        total_pages=max(1, math.ceil(total / limit)),
     )
 
 

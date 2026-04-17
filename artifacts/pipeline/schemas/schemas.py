@@ -83,7 +83,7 @@ class ProductListOut(BaseModel):
     total: int
     page: int
     limit: int
-    pages: int
+    total_pages: int
 
 
 class JobCreate(BaseModel):
@@ -115,6 +115,7 @@ class JobListOut(BaseModel):
     total: int
     page: int
     limit: int
+    total_pages: int
 
 
 class DashboardStats(BaseModel):
