@@ -1,0 +1,32 @@
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 585, in execute
+    self._adapt_connection.await_(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self._prepare_and_execute(operation, parameters)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 132, in await_only
+    return current.parent.switch(awaitable)  # type: ignore[no-any-return,attr-defined] # noqa: E501
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/sqlalchemy/util/_concurrency_py3k.py", line 196, in greenlet_spawn
+    value = await result
+            ^^^^^^^^^^^^
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 520, in _prepare_and_execute
+    await adapt_connection._start_transaction()
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 850, in _start_transaction
+    self._handle_exception(error)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 799, in _handle_exception
+    raise error
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 848, in _start_transaction
+    await self._transaction.start()
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/asyncpg/transaction.py", line 146, in start
+    await self._connection.execute(query)
+  File "/home/dev/public_html/venv/lib/python3.13/site-packages/asyncpg/connection.py", line 354, in execute
+    result = await self._protocol.query(query, timeout)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "asyncpg/protocol/protocol.pyx", line 369, in query
+RuntimeError: Task <Task pending name='Task-6' coro=<_execute_job() running at /home/dev/public_html/pipeline-pro/artifacts/pipeline/tasks/job_tasks.py:44> cb=[_run_until_complete_cb() at /usr/lib/python3.13/asyncio/base_events.py:181]> got Future <Future pending cb=[BaseProtocol._on_waiter_completed()]> attached to a different loop

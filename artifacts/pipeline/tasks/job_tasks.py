@@ -36,38 +36,46 @@ async def _execute_job(job_id: int):
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
-    from database import AsyncSessionLocal
+    # Use a fresh engine/session bound to THIS event loop (Celery creates a
+    # new loop per task via asyncio.run, so the global engine would cause
+    # "Future attached to a different loop" errors).
+    from database import make_session_factory
     from models.models import Job, JobStatus, JobType, LogLevel, JobLog
     from datetime import datetime, timezone
 
-    async with AsyncSessionLocal() as db:
-        job = await db.get(Job, job_id)
-        if not job:
-            return
+    CelerySession, celery_engine = make_session_factory()
 
-        job.status = JobStatus.running
-        job.started_at = datetime.now(timezone.utc)
-        await db.commit()
+    try:
+        async with CelerySession() as db:
+            job = await db.get(Job, job_id)
+            if not job:
+                return
 
-        try:
-            if job.type == JobType.fetch:
-                await _run_fetch(db, job)
-            elif job.type == JobType.process:
-                await _run_process(db, job)
-            elif job.type == JobType.upload:
-                await _run_upload(db, job)
-            elif job.type == JobType.sync:
-                await _run_sync(db, job)
+            job.status = JobStatus.running
+            job.started_at = datetime.now(timezone.utc)
+            await db.commit()
 
-            job.status = JobStatus.completed
-            job.progress_percent = 100.0
-        except Exception as e:
-            job.status = JobStatus.failed
-            job.error_message = str(e)
-            await _log(db, job.id, LogLevel.error, f"Job failed: {e}")
+            try:
+                if job.type == JobType.fetch:
+                    await _run_fetch(db, job)
+                elif job.type == JobType.process:
+                    await _run_process(db, job)
+                elif job.type == JobType.upload:
+                    await _run_upload(db, job)
+                elif job.type == JobType.sync:
+                    await _run_sync(db, job)
 
-        job.completed_at = datetime.now(timezone.utc)
-        await db.commit()
+                job.status = JobStatus.completed
+                job.progress_percent = 100.0
+            except Exception as e:
+                job.status = JobStatus.failed
+                job.error_message = str(e)
+                await _log(db, job.id, LogLevel.error, f"Job failed: {e}")
+
+            job.completed_at = datetime.now(timezone.utc)
+            await db.commit()
+    finally:
+        await celery_engine.dispose()
 
 
 async def _log(db, job_id: int, level, message: str):

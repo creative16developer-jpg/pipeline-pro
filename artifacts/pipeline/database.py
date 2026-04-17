@@ -62,3 +62,21 @@ async def get_db():
             yield session
         finally:
             await session.close()
+
+
+def make_session_factory():
+    """
+    Create a brand-new engine + session factory bound to the **current** event
+    loop.  Call this inside an asyncio.run() context (e.g. Celery tasks) so the
+    connection pool is never shared across loops.
+    """
+    raw_url = os.environ.get("DATABASE_URL", "")
+    url, connect_args = _build_engine_url(raw_url)
+    fresh_engine = create_async_engine(
+        url,
+        echo=False,
+        pool_size=5,
+        max_overflow=10,
+        connect_args=connect_args,
+    )
+    return async_sessionmaker(fresh_engine, expire_on_commit=False, class_=AsyncSession), fresh_engine
