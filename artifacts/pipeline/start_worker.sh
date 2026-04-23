@@ -9,24 +9,20 @@
 # Use -c N to set concurrency (parallel tasks). Default: 4.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
+VENV="/home/dev/public_html/venv"
 
+# Activate the virtualenv
+source "${VENV}/bin/activate"
+
+export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
 CONCURRENCY="${CELERY_CONCURRENCY:-4}"
 
 echo "Starting Celery worker (threads, concurrency=${CONCURRENCY})"
 echo "PYTHONPATH=${SCRIPT_DIR}"
+echo "Using Python: $(which python3)"
 cd "${SCRIPT_DIR}"
 
-# Prefer venv python if it exists, otherwise fall back to system python
-VENV_PYTHON="${SCRIPT_DIR}/venv/bin/python"
-if [ -f "${VENV_PYTHON}" ]; then
-    PYTHON="${VENV_PYTHON}"
-else
-    PYTHON="$(command -v python3 || command -v python)"
-fi
-
-echo "Using Python: ${PYTHON}"
-exec "${PYTHON}" -m celery -A celery_app worker \
+exec python3 -m celery -A celery_app worker \
     --loglevel=info \
     --pool=threads \
     --concurrency="${CONCURRENCY}" \
