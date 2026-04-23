@@ -91,8 +91,12 @@ class ProductListOut(BaseModel):
 
 
 class JobCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     type: str
-    store_id: Optional[int] = None
+    store_id: Optional[int] = Field(
+        None, validation_alias=AliasChoices("store_id", "storeId")
+    )
     config: Optional[dict] = None
     # Link to the preceding job in the pipeline
     # e.g. process job points to a fetch job_id; upload job points to a process job_id
