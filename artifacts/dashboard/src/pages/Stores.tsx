@@ -144,8 +144,8 @@ function AddStoreModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => vo
     const payload = {
       name: formData.name,
       url: formData.url,
-      consumer_key: formData.consumerKey,
-      consumer_secret: formData.consumerSecret,
+      consumerKey: formData.consumerKey,
+      consumerSecret: formData.consumerSecret,
     };
     createStore.mutate({ data: payload }, {
       onSuccess: () => {

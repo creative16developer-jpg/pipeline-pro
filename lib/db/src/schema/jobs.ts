@@ -11,6 +11,8 @@ export const jobsTable = pgTable("jobs", {
   type: jobTypeEnum("type").notNull(),
   status: jobStatusEnum("status").notNull().default("pending"),
   storeId: integer("store_id").references(() => storesTable.id),
+  // Link to the preceding job: process→fetch, upload→process or fetch
+  sourceJobId: integer("source_job_id"),
   totalItems: integer("total_items").notNull().default(0),
   processedItems: integer("processed_items").notNull().default(0),
   failedItems: integer("failed_items").notNull().default(0),

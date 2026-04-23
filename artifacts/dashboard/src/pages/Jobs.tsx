@@ -3,9 +3,9 @@ import { useJobs, useCreateJob, useCancelJob } from "@/hooks/use-jobs";
 import { useStores } from "@/hooks/use-stores";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Modal } from "@/components/Modal";
-import { Activity, Play, XCircle, MoreVertical } from "lucide-react";
+import { Activity, Play, XCircle, ChevronRight, Link2 } from "lucide-react";
 import { format } from "date-fns";
-import { CreateJobInputType } from "@workspace/api-client-react";
+import { CreateJobInputType, Job } from "@workspace/api-client-react";
 
 export default function Jobs() {
   const [page, setPage] = useState(1);
@@ -28,6 +28,17 @@ export default function Jobs() {
         </button>
       </div>
 
+      {/* Pipeline legend */}
+      <div className="flex items-center gap-2 text-sm text-muted-foreground bg-secondary/30 rounded-xl px-4 py-3 border border-border/40">
+        <span className="font-medium text-foreground">Pipeline flow:</span>
+        <StatusBadge status="fetch" />
+        <ChevronRight className="w-3.5 h-3.5" />
+        <StatusBadge status="process" />
+        <ChevronRight className="w-3.5 h-3.5" />
+        <StatusBadge status="upload" />
+        <span className="ml-2">— Select a source Job ID when creating process/upload jobs to scope them to specific products.</span>
+      </div>
+
       <div className="bg-card border border-border/50 rounded-2xl overflow-hidden shadow-lg shadow-black/5">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -36,20 +47,22 @@ export default function Jobs() {
                 <th className="p-4 font-medium">Job ID</th>
                 <th className="p-4 font-medium">Type</th>
                 <th className="p-4 font-medium">Status</th>
-                <th className="p-4 font-medium w-1/4">Progress</th>
-                <th className="p-4 font-medium">Items (Done/Total)</th>
-                <th className="p-4 font-medium">Started At</th>
+                <th className="p-4 font-medium">Source Job</th>
+                <th className="p-4 font-medium">Config / Filter</th>
+                <th className="p-4 font-medium w-1/5">Progress</th>
+                <th className="p-4 font-medium">Items</th>
+                <th className="p-4 font-medium">Started</th>
                 <th className="p-4 font-medium text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="p-8 text-center text-muted-foreground">Loading jobs...</td>
+                  <td colSpan={9} className="p-8 text-center text-muted-foreground">Loading jobs…</td>
                 </tr>
               ) : data?.jobs?.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-12 text-center text-muted-foreground">
+                  <td colSpan={9} className="p-12 text-center text-muted-foreground">
                     <Activity className="w-12 h-12 mx-auto opacity-20 mb-3" />
                     No jobs recorded yet.
                   </td>
@@ -57,14 +70,32 @@ export default function Jobs() {
               ) : (
                 data?.jobs?.map((job) => (
                   <tr key={job.id} className="hover:bg-secondary/20 transition-colors">
-                    <td className="p-4 font-medium">#{job.id}</td>
+                    <td className="p-4 font-mono font-medium">#{job.id}</td>
                     <td className="p-4"><StatusBadge status={job.type} /></td>
                     <td className="p-4"><StatusBadge status={job.status} /></td>
+
+                    {/* Source job link */}
+                    <td className="p-4 text-sm">
+                      {job.sourceJobId ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-500/10 text-indigo-400 font-mono text-xs">
+                          <Link2 className="w-3 h-3" />#{job.sourceJobId}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">—</span>
+                      )}
+                    </td>
+
+                    {/* Config summary */}
+                    <td className="p-4 text-xs text-muted-foreground max-w-[180px]">
+                      <ConfigSummary job={job} />
+                    </td>
+
+                    {/* Progress bar */}
                     <td className="p-4">
                       <div className="flex items-center gap-3">
                         <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
-                          <div 
-                            className={`h-full rounded-full ${job.status === 'failed' ? 'bg-rose-500' : 'bg-primary'} transition-all duration-500`} 
+                          <div
+                            className={`h-full rounded-full ${job.status === 'failed' ? 'bg-rose-500' : 'bg-primary'} transition-all duration-500`}
                             style={{ width: `${job.progressPercent}%` }}
                           />
                         </div>
@@ -74,8 +105,12 @@ export default function Jobs() {
                         <p className="text-xs text-rose-400 mt-1 line-clamp-1" title={job.errorMessage}>{job.errorMessage}</p>
                       )}
                     </td>
-                    <td className="p-4 text-sm font-medium">
+
+                    <td className="p-4 text-sm font-medium tabular-nums">
                       {job.processedItems} / {job.totalItems}
+                      {(job.failedItems ?? 0) > 0 && (
+                        <span className="text-rose-400 ml-1">({job.failedItems} failed)</span>
+                      )}
                     </td>
                     <td className="p-4 text-sm text-muted-foreground">
                       {job.startedAt ? format(new Date(job.startedAt), "MMM d, HH:mm:ss") : '—'}
@@ -90,9 +125,9 @@ export default function Jobs() {
                           Cancel
                         </button>
                       ) : (
-                        <button className="p-1.5 rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors">
-                          <MoreVertical className="w-5 h-5" />
-                        </button>
+                        <span className="text-xs text-muted-foreground">
+                          {job.completedAt ? format(new Date(job.completedAt), "HH:mm:ss") : '—'}
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -101,23 +136,24 @@ export default function Jobs() {
             </tbody>
           </table>
         </div>
-        
+
         {/* Pagination */}
         {data && data.totalPages > 1 && (
           <div className="p-4 border-t border-border/50 bg-secondary/20 flex items-center justify-between">
             <span className="text-sm text-muted-foreground">
-              Showing page <span className="font-medium text-foreground">{data.page}</span> of {data.totalPages}
+              Page <span className="font-medium text-foreground">{data.page}</span> of {data.totalPages}
+              {" "}· {data.total} total jobs
             </span>
             <div className="flex gap-2">
-              <button 
-                disabled={page <= 1} 
+              <button
+                disabled={page <= 1}
                 onClick={() => setPage(p => p - 1)}
                 className="px-4 py-2 rounded-xl border border-border bg-background hover:bg-secondary transition-colors disabled:opacity-50 text-sm font-medium"
               >
                 Previous
               </button>
-              <button 
-                disabled={page >= data.totalPages} 
+              <button
+                disabled={page >= data.totalPages}
                 onClick={() => setPage(p => p + 1)}
                 className="px-4 py-2 rounded-xl border border-border bg-background hover:bg-secondary transition-colors disabled:opacity-50 text-sm font-medium"
               >
@@ -133,24 +169,67 @@ export default function Jobs() {
   );
 }
 
-function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+/** Shows a compact summary of the job's config (filters used) */
+function ConfigSummary({ job }: { job: Job }) {
+  const cfg = (job.config ?? {}) as Record<string, unknown>;
+  const parts: string[] = [];
+
+  if (job.type === "fetch") {
+    if (cfg.keyword) parts.push(`kw: "${cfg.keyword}"`);
+    if (cfg.category_id) parts.push(`cat: ${cfg.category_id}`);
+    if (cfg.page) parts.push(`p${cfg.page}`);
+    if (cfg.limit) parts.push(`×${cfg.limit}`);
+  } else if (job.type === "process" || job.type === "upload") {
+    if (cfg.limit) parts.push(`limit: ${cfg.limit}`);
+    if (job.type === "upload" && cfg.skip_images !== undefined) {
+      parts.push(cfg.skip_images ? "no imgs" : "with imgs");
+    }
+  }
+
+  if (parts.length === 0) return <span className="text-muted-foreground/50">—</span>;
+  return <span className="font-mono text-xs">{parts.join(" · ")}</span>;
+}
+
+
+function NewJobModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [type, setType] = useState<CreateJobInputType>("fetch");
   const [storeId, setStoreId] = useState("");
-  // Fetch config
+  const [sourceJobId, setSourceJobId] = useState("");
+
+  // Fetch-specific config
   const [fetchPage, setFetchPage] = useState("1");
   const [fetchLimit, setFetchLimit] = useState("50");
   const [fetchKeyword, setFetchKeyword] = useState("");
   const [fetchCategoryId, setFetchCategoryId] = useState("");
+
   // Upload config
   const [uploadLimit, setUploadLimit] = useState("50");
+  const [skipImages, setSkipImages] = useState(true);
 
   const createJob = useCreateJob();
   const { data: stores } = useStores();
 
+  // Load all jobs to populate the source job dropdown — we filter by type below
+  const { data: allJobsData } = useJobs({ page: 1, limit: 100 });
+  const allJobs = allJobsData?.jobs ?? [];
+
+  // For process jobs, pick from completed fetch jobs
+  const fetchJobs = allJobs.filter(j => j.type === "fetch" && j.status === "completed");
+  // For upload jobs, pick from completed process or fetch jobs
+  const processableFetchJobs = allJobs.filter(
+    j => (j.type === "fetch" || j.type === "process") && j.status === "completed"
+  );
+
+  const handleTypeChange = (newType: CreateJobInputType) => {
+    setType(newType);
+    setStoreId("");
+    setSourceJobId("");
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    let config: Record<string, any> = {};
+    let config: Record<string, unknown> = {};
     if (type === "fetch") {
       config = {
         page: parseInt(fetchPage) || 1,
@@ -158,14 +237,20 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
         ...(fetchKeyword.trim() ? { keyword: fetchKeyword.trim() } : {}),
         ...(fetchCategoryId.trim() ? { category_id: fetchCategoryId.trim() } : {}),
       };
+    } else if (type === "process") {
+      config = { limit: 50 };
     } else if (type === "upload") {
-      config = { limit: parseInt(uploadLimit) || 50 };
+      config = {
+        limit: parseInt(uploadLimit) || 50,
+        skip_images: skipImages,
+      };
     }
 
     createJob.mutate({
       data: {
         type,
-        store_id: storeId ? parseInt(storeId) : undefined,
+        storeId: storeId ? parseInt(storeId) : undefined,
+        sourceJobId: sourceJobId ? parseInt(sourceJobId) : undefined,
         config,
       }
     }, {
@@ -173,6 +258,7 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
         onClose();
         setType("fetch");
         setStoreId("");
+        setSourceJobId("");
         setFetchPage("1");
         setFetchKeyword("");
         setFetchCategoryId("");
@@ -183,20 +269,56 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Start New Pipeline Job">
       <form onSubmit={handleSubmit} className="space-y-5">
+
+        {/* Job Type */}
         <div className="space-y-2">
           <label className="text-sm font-medium text-foreground block">Job Type</label>
           <select
             value={type}
-            onChange={(e) => { setType(e.target.value as CreateJobInputType); setStoreId(""); }}
+            onChange={(e) => handleTypeChange(e.target.value as CreateJobInputType)}
             className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
             required
           >
-            <option value="fetch">Fetch (from Sunsky)</option>
-            <option value="process">Process (Watermark & AI)</option>
-            <option value="upload">Upload (to WooCommerce)</option>
-            <option value="sync">Sync (Categories/Attributes)</option>
+            <option value="fetch">Fetch — pull products from Sunsky</option>
+            <option value="process">Process — compress & watermark images</option>
+            <option value="upload">Upload — push to WooCommerce</option>
+            <option value="sync">Sync — categories & attributes</option>
           </select>
         </div>
+
+        {/* Source Job selector (process / upload) */}
+        {(type === "process" || type === "upload") && (
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-foreground block">
+              Source Job <span className="text-muted-foreground font-normal">(scope to products from a specific fetch job)</span>
+            </label>
+            <select
+              value={sourceJobId}
+              onChange={(e) => setSourceJobId(e.target.value)}
+              className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
+            >
+              <option value="">— All eligible products (no filter) —</option>
+              {(type === "process" ? fetchJobs : processableFetchJobs).map(j => (
+                <option key={j.id} value={j.id}>
+                  #{j.id} · {j.type.toUpperCase()} · {j.totalItems} items
+                  {(j.config as any)?.keyword ? ` · kw: "${(j.config as any).keyword}"` : ""}
+                  {(j.config as any)?.category_id ? ` · cat: ${(j.config as any).category_id}` : ""}
+                </option>
+              ))}
+            </select>
+            {sourceJobId && (
+              <p className="text-xs text-indigo-400 flex items-center gap-1">
+                <Link2 className="w-3 h-3" />
+                This job will only operate on products fetched by job #{sourceJobId}.
+              </p>
+            )}
+            {!sourceJobId && (
+              <p className="text-xs text-muted-foreground">
+                Leave blank to process/upload ALL eligible products regardless of which fetch job created them.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Fetch-specific config */}
         {type === "fetch" && (
@@ -248,7 +370,7 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              Run multiple fetch jobs with different page numbers to import more products. Each page fetches up to {fetchLimit || 50} new products.
+              Run multiple fetch jobs with different pages to import more products. Each job fetches up to {fetchLimit || 50} products.
             </p>
           </div>
         )}
@@ -269,6 +391,17 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
                 className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
               />
             </div>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={skipImages}
+                onChange={(e) => setSkipImages(e.target.checked)}
+                className="w-4 h-4 rounded accent-primary"
+              />
+              <span className="text-sm">
+                Skip images <span className="text-muted-foreground text-xs">(recommended — WooCommerce often blocks CDN URLs)</span>
+              </span>
+            </label>
           </div>
         )}
 
@@ -282,7 +415,7 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
               className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all"
               required
             >
-              <option value="">Select a store...</option>
+              <option value="">Select a store…</option>
               {stores?.map(store => (
                 <option key={store.id} value={store.id}>{store.name}</option>
               ))}
@@ -303,7 +436,9 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void
             disabled={createJob.isPending}
             className="px-6 py-2.5 rounded-xl bg-primary text-primary-foreground font-medium shadow-lg shadow-primary/25 hover:shadow-xl hover:shadow-primary/40 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:transform-none flex items-center gap-2"
           >
-            {createJob.isPending ? "Starting..." : <><Play className="w-4 h-4 fill-current" /> Start Job</>}
+            {createJob.isPending
+              ? "Starting…"
+              : <><Play className="w-4 h-4 fill-current" /> Start Job</>}
           </button>
         </div>
       </form>

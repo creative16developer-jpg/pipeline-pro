@@ -573,6 +573,12 @@ components:
         config:
           type: object
           nullable: true
+        sourceJobId:
+          type: integer
+          nullable: true
+          description: >
+            Links this job to the preceding job in the pipeline.
+            Process jobs point to a fetch job; upload jobs point to a process or fetch job.
       required:
         - id
         - type
@@ -617,6 +623,13 @@ components:
         config:
           type: object
           nullable: true
+        sourceJobId:
+          type: integer
+          nullable: true
+          description: >
+            ID of the preceding job to scope this one against.
+            Process jobs: set to a fetch job ID.
+            Upload jobs: set to a fetch or process job ID.
       required:
         - type
 

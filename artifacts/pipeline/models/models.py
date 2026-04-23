@@ -86,10 +86,15 @@ class Product(Base):
     woo_product_id = Column(Integer, nullable=True)
     error_message = Column(Text, nullable=True)
     raw_data = Column(JSON, nullable=True)
+
+    # Which fetch job created this product — used to scope process/upload jobs
+    fetch_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     images = relationship("Image", back_populates="product", cascade="all, delete-orphan")
+    fetch_job = relationship("Job", foreign_keys=[fetch_job_id])
 
 
 class Job(Base):
@@ -105,12 +110,19 @@ class Job(Base):
     progress_percent = Column(Float, nullable=False, default=0.0)
     error_message = Column(Text, nullable=True)
     config = Column(JSON, nullable=True)
+
+    # Links this job to a preceding job in the pipeline:
+    #   process job → source is a fetch job
+    #   upload job  → source is a process or fetch job
+    source_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     store = relationship("Store", back_populates="jobs")
     logs = relationship("JobLog", back_populates="job", cascade="all, delete-orphan")
+    source_job = relationship("Job", foreign_keys=[source_job_id], remote_side="Job.id")
 
 
 class Image(Base):

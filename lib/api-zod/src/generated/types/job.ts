@@ -23,4 +23,7 @@ export interface Job {
   completedAt?: string | null;
   createdAt: string;
   config?: JobConfig;
+  /** Links this job to the preceding job in the pipeline. Process jobs point to a fetch job; upload jobs point to a process or fetch job.
+   */
+  sourceJobId?: number | null;
 }

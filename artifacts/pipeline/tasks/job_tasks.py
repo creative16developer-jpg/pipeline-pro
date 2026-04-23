@@ -84,6 +84,10 @@ async def _log(db, job_id: int, level, message: str):
     await db.commit()
 
 
+# ---------------------------------------------------------------------------
+# FETCH — pull products from Sunsky, stamp each with this job's id
+# ---------------------------------------------------------------------------
+
 async def _run_fetch(db, job):
     from models.models import Product, ProductStatus, LogLevel
     from pipeline import sunsky_client
@@ -95,12 +99,19 @@ async def _run_fetch(db, job):
     category_id = cfg.get("category_id")
     keyword = cfg.get("keyword")
 
-    await _log(db, job.id, LogLevel.info, f"Fetching from Sunsky (page={page}, limit={limit})")
+    await _log(
+        db, job.id, LogLevel.info,
+        f"Fetch started — page={page}, limit={limit}"
+        + (f", keyword='{keyword}'" if keyword else "")
+        + (f", category_id={category_id}" if category_id else ""),
+    )
 
     result = await sunsky_client.search_products(
         category_id=category_id, keyword=keyword, page=page, limit=limit
     )
     products = result.get("products", [])
+
+    await _log(db, job.id, LogLevel.info, f"Sunsky returned {len(products)} product(s)")
 
     job.total_items = len(products)
     await db.commit()
@@ -115,7 +126,6 @@ async def _run_fetch(db, job):
             skipped += 1
         else:
             images = p.get("images", [])
-            # raw_data already has merged normalised images from _normalise_product
             raw_data = p.get("raw_data", {})
             db.add(Product(
                 sunsky_id=str(p["id"]),
@@ -128,6 +138,7 @@ async def _run_fetch(db, job):
                 image_count=len(images),
                 raw_data=raw_data,
                 status=ProductStatus.pending,
+                fetch_job_id=job.id,   # stamp which fetch job created this product
             ))
             saved += 1
 
@@ -137,21 +148,35 @@ async def _run_fetch(db, job):
             await db.commit()
 
     await db.commit()
-    await _log(db, job.id, LogLevel.info, f"Fetch complete: {saved} saved, {skipped} skipped")
+    await _log(
+        db, job.id, LogLevel.info,
+        f"Fetch complete — {saved} saved, {skipped} skipped (already in DB)",
+    )
 
+
+# ---------------------------------------------------------------------------
+# PROCESS — download + compress images; scoped to a single fetch job
+# ---------------------------------------------------------------------------
 
 async def _run_process(db, job):
     from models.models import Product, ProductStatus, Image, ImageStatus, LogLevel
     from pipeline.image_processor import ImageProcessor
     from sqlalchemy import select
 
-    products = (
-        await db.execute(
-            select(Product)
-            .where(Product.status == ProductStatus.pending)
-            .limit(job.config.get("limit", 50) if job.config else 50)
-        )
-    ).scalars().all()
+    cfg = job.config or {}
+
+    # If a source_job_id is set, only process products from that fetch job
+    q = select(Product).where(Product.status == ProductStatus.pending)
+    if job.source_job_id:
+        q = q.where(Product.fetch_job_id == job.source_job_id)
+        await _log(db, job.id, LogLevel.info,
+                   f"Process scoped to fetch job #{job.source_job_id}")
+    else:
+        await _log(db, job.id, LogLevel.info,
+                   "No source job selected — processing ALL pending products")
+
+    q = q.limit(cfg.get("limit", 50))
+    products = (await db.execute(q)).scalars().all()
 
     if not products:
         await _log(db, job.id, LogLevel.info, "No pending products to process")
@@ -173,11 +198,13 @@ async def _run_process(db, job):
             image_urls = raw.get("images", [])
             if isinstance(image_urls, str):
                 image_urls = [image_urls]
-            # Keep only valid absolute URLs, max 5
-            image_urls = [u for u in image_urls if isinstance(u, str) and u.startswith("http")][:5]
+            image_urls = [
+                u for u in image_urls if isinstance(u, str) and u.startswith("http")
+            ][:5]
 
             await _log(db, job.id, LogLevel.info,
-                       f"Product {product.sku} (id={product.id}): {len(image_urls)} image(s) — {image_urls}")
+                       f"Product {product.sku} (id={product.id}): "
+                       f"{len(image_urls)} image(s) — {image_urls}")
 
             processed_count = 0
             for pos, url in enumerate(image_urls):
@@ -186,10 +213,9 @@ async def _run_process(db, job):
                     await _log(db, job.id, LogLevel.debug,
                                f"  [{pos}] {url} → {processed_path}")
 
-                    # Use "watermarked" as the terminal-success status (covers compress + optional watermark)
                     img_status = ImageStatus.watermarked if processed_path else ImageStatus.failed
                     db.add(Image(
-                        product_id=product.id,          # DB primary key, NOT sku
+                        product_id=product.id,
                         original_url=url,
                         processed_path=processed_path,
                         position=pos,
@@ -216,11 +242,11 @@ async def _run_process(db, job):
                         error_message=str(img_err),
                     ))
 
-                await db.commit()  # commit after each image so failures don't roll back others
+                await db.commit()
 
             product.status = ProductStatus.processed
             await _log(db, job.id, LogLevel.info,
-                       f"Product {product.sku}: {processed_count}/{len(image_urls)} images saved to DB")
+                       f"Product {product.sku}: {processed_count}/{len(image_urls)} images saved")
 
         except Exception as e:
             product.status = ProductStatus.failed
@@ -232,13 +258,18 @@ async def _run_process(db, job):
         job.progress_percent = round((i + 1) / len(products) * 100, 1)
         await db.commit()
 
-    await _log(db, job.id, LogLevel.info, f"Process job done: {len(products)} product(s) handled")
+    await _log(db, job.id, LogLevel.info,
+               f"Process job done: {len(products)} product(s) handled")
 
+
+# ---------------------------------------------------------------------------
+# UPLOAD — push to WooCommerce; scoped to a fetch job via source_job_id
+# ---------------------------------------------------------------------------
 
 async def _run_upload(db, job):
     from models.models import Product, ProductStatus, Store, LogLevel
     from pipeline import woo_client as wc
-    from sqlalchemy import select
+    from sqlalchemy import select, or_
 
     if not job.store_id:
         raise ValueError("store_id required for upload jobs")
@@ -247,29 +278,55 @@ async def _run_upload(db, job):
     if not store:
         raise ValueError("Store not found")
 
-    from sqlalchemy import or_
-
     cfg = job.config or {}
-    skip_images = cfg.get("skip_images", True)  # default: skip images (WooCommerce fetches them; often blocked)
+    skip_images = cfg.get("skip_images", True)
 
-    # Include pending, processed, AND previously-failed products that have no woo_product_id yet
+    # Base filter: not yet uploaded to WooCommerce
+    base_filter = [
+        or_(
+            Product.status == ProductStatus.processed,
+            Product.status == ProductStatus.pending,
+            Product.status == ProductStatus.failed,
+        ),
+        Product.woo_product_id.is_(None),
+    ]
+
+    # If a source_job_id is set, scope to products from that fetch job
+    if job.source_job_id:
+        # Resolve what fetch job to use:
+        # If the source is a process job it scoped its products by a fetch job too —
+        # follow it one level up. Otherwise treat it directly as a fetch job.
+        from models.models import Job as JobModel
+        source_job = await db.get(JobModel, job.source_job_id)
+        if source_job:
+            from models.models import JobType
+            if source_job.type == JobType.process and source_job.source_job_id:
+                fetch_job_id = source_job.source_job_id
+                await _log(db, job.id, LogLevel.info,
+                           f"Upload scoped via process job #{source_job.id} → fetch job #{fetch_job_id}")
+            else:
+                fetch_job_id = source_job.id
+                await _log(db, job.id, LogLevel.info,
+                           f"Upload scoped to fetch job #{fetch_job_id}")
+            base_filter.append(Product.fetch_job_id == fetch_job_id)
+        else:
+            await _log(db, job.id, LogLevel.warn,
+                       f"Source job #{job.source_job_id} not found — uploading ALL eligible products")
+    else:
+        await _log(db, job.id, LogLevel.info,
+                   "No source job selected — uploading ALL eligible products")
+
     products = (
         await db.execute(
             select(Product)
-            .where(
-                or_(
-                    Product.status == ProductStatus.processed,
-                    Product.status == ProductStatus.pending,
-                    Product.status == ProductStatus.failed,
-                ),
-                Product.woo_product_id.is_(None),   # skip already-uploaded
-            )
+            .where(*base_filter)
             .limit(cfg.get("limit", 50))
         )
     ).scalars().all()
 
     if not products:
-        await _log(db, job.id, LogLevel.info, "No products to upload (all already uploaded or none fetched yet)")
+        await _log(db, job.id, LogLevel.info,
+                   "No products to upload (all already uploaded or none match the filter)")
         return
 
     job.total_items = len(products)
@@ -281,37 +338,46 @@ async def _run_upload(db, job):
 
             payload = {
                 "name": product.name,
-                # Omit SKU on creation — duplicate SKUs from previous failed runs
-                # cause 400 errors. WooCommerce will auto-assign; we store ours in DB.
                 "price": product.price or "0",
                 "description": product.description or "",
                 "stock_quantity": 10 if product.stock_status == "in_stock" else 0,
             }
 
-            # Only attach images when explicitly enabled — WooCommerce tries to
-            # download them at creation time, and blocked CDN URLs cause 400 errors.
             if not skip_images:
                 raw_imgs = raw.get("images", [])
                 if isinstance(raw_imgs, list):
-                    payload["images"] = [u for u in raw_imgs if isinstance(u, str) and u.startswith("http")]
+                    payload["images"] = [
+                        u for u in raw_imgs if isinstance(u, str) and u.startswith("http")
+                    ]
 
+            await _log(db, job.id, LogLevel.info,
+                       f"Uploading {product.sku} to store #{job.store_id}…")
             result = await wc.create_product(store, payload)
             product.woo_product_id = result.get("id")
             product.status = ProductStatus.uploaded
             product.error_message = None
+            await _log(db, job.id, LogLevel.info,
+                       f"  ✓ {product.sku} → WooCommerce id={product.woo_product_id}")
+
         except Exception as e:
             product.status = ProductStatus.failed
             product.error_message = str(e)
             job.failed_items = (job.failed_items or 0) + 1
-            await _log(db, job.id, LogLevel.error, f"Failed to upload {product.sku}: {e}")
+            await _log(db, job.id, LogLevel.error,
+                       f"Failed to upload {product.sku}: {e}")
 
         job.processed_items = i + 1
         job.progress_percent = round((i + 1) / len(products) * 100, 1)
         await db.commit()
 
     uploaded = len(products) - (job.failed_items or 0)
-    await _log(db, job.id, LogLevel.info, f"Upload complete: {uploaded} uploaded, {job.failed_items or 0} failed")
+    await _log(db, job.id, LogLevel.info,
+               f"Upload complete — {uploaded} uploaded, {job.failed_items or 0} failed")
 
+
+# ---------------------------------------------------------------------------
+# SYNC (stub)
+# ---------------------------------------------------------------------------
 
 async def _run_sync(db, job):
     from models.models import LogLevel

@@ -1,4 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field, AliasChoices
+from pydantic.alias_generators import to_camel
 from typing import Optional, Any
 from datetime import datetime
 
@@ -26,7 +27,7 @@ class StoreUpdate(BaseModel):
 
 
 class StoreOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True, alias_generator=to_camel)
 
     id: int
     name: str
@@ -46,7 +47,7 @@ class StoreOut(BaseModel):
 
 
 class WooCategoryOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True, alias_generator=to_camel)
 
     id: int
     store_id: int
@@ -59,7 +60,7 @@ class WooCategoryOut(BaseModel):
 
 
 class ProductOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True, alias_generator=to_camel)
 
     id: int
     sunsky_id: str
@@ -74,11 +75,14 @@ class ProductOut(BaseModel):
     woo_product_id: Optional[int] = None
     error_message: Optional[str] = None
     raw_data: Optional[Any] = None
+    fetch_job_id: Optional[int] = None
     created_at: datetime
     updated_at: datetime
 
 
 class ProductListOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
     products: list[ProductOut]
     total: int
     page: int
@@ -90,10 +94,15 @@ class JobCreate(BaseModel):
     type: str
     store_id: Optional[int] = None
     config: Optional[dict] = None
+    # Link to the preceding job in the pipeline
+    # e.g. process job points to a fetch job_id; upload job points to a process job_id
+    source_job_id: Optional[int] = Field(
+        None, validation_alias=AliasChoices("source_job_id", "sourceJobId")
+    )
 
 
 class JobOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True, alias_generator=to_camel)
 
     id: int
     type: str
@@ -105,12 +114,15 @@ class JobOut(BaseModel):
     progress_percent: float
     error_message: Optional[str] = None
     config: Optional[Any] = None
+    source_job_id: Optional[int] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: datetime
 
 
 class JobListOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
     jobs: list[JobOut]
     total: int
     page: int
@@ -119,6 +131,8 @@ class JobListOut(BaseModel):
 
 
 class DashboardStats(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
+
     total_products: int
     pending_products: int
     processing_products: int

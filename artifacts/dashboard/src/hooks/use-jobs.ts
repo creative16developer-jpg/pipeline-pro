@@ -15,7 +15,7 @@ export function useJobs(params?: ListJobsParams) {
 
 export function useJob(id: number) {
   return useGetJob(id, {
-    query: { refetchInterval: 3000 }
+    query: { refetchInterval: 3000 } as any
   });
 }
 

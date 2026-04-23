@@ -18,6 +18,7 @@ const createJobBody = z.object({
   type: z.enum(["fetch", "process", "upload", "sync"]),
   storeId: z.number().nullable().optional(),
   config: z.record(z.unknown()).nullable().optional(),
+  sourceJobId: z.number().nullable().optional(),
 });
 
 router.get("/", async (req, res) => {
@@ -52,6 +53,7 @@ router.post("/", async (req, res) => {
       type: body.type,
       status: "pending",
       storeId: body.storeId ?? null,
+      sourceJobId: body.sourceJobId ?? null,
       config: body.config ?? null,
       totalItems: 0,
       processedItems: 0,

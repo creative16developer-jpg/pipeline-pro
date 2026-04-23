@@ -1,0 +1,164 @@
+Update my existing project to address the following client requirements and issues.
+
+### Problems to Fix
+
+1. I cannot see what data is being fetched from Sunsky.
+2. There is no clear way to fetch multiple products or control fetch size/options.
+3. The `/jobs` endpoint (http://localhost:8000/jobs) does not show useful information.
+4. There is no way to map fetch → process → upload jobs.
+5. No UI/logic to select which job should be used for next action (process/upload/sync).
+6. Image fetching and storage is not clearly visible or traceable.
+
+---
+
+### Required Improvements
+
+### 1. Improve Fetch Visibility
+
+* Log and store:
+
+  * category_id
+  * keyword
+  * page, limit
+  * number of products fetched
+* Save this info inside job.config and job logs
+* Update `/jobs` API to return:
+
+  * job_id
+  * job_type (fetch/process/upload)
+  * status
+  * total_items / processed_items
+  * config (filters used)
+
+---
+
+### 2. Sunsky Fetch Options (IMPORTANT)
+
+* Add support for filters similar to Sunsky website:
+
+  * category selection
+  * keyword search
+  * pagination (page, limit)
+* Ensure fetch job accepts these via API request
+
+---
+
+### 3. Job Mapping System (CRITICAL)
+
+Implement job linking:
+
+* Each job should have:
+
+  * `parent_job_id` OR `source_job_id`
+
+Flow:
+
+* Fetch Job → creates products
+* Process Job → should run only on products from selected fetch job
+* Upload Job → should run only on products from selected process job
+
+---
+
+### 4. Add Job Selection Logic
+
+When creating a new job:
+
+* Provide dropdown/select option for:
+
+  * Existing job IDs
+  * Action type: fetch / process / upload / sync
+
+Example:
+
+* Select Fetch Job ID → run Process
+* Select Process Job ID → run Upload
+
+---
+
+### 5. Backend Changes
+
+* Modify Product table to include:
+
+  * `job_id` (which fetch job created it)
+
+* Update `_run_fetch`:
+
+  * assign job.id to each product
+
+* Update `_run_process`:
+
+  * filter products by selected job_id
+
+* Update `_run_upload`:
+
+  * only upload products from selected processed job
+
+---
+
+### 6. Improve `/jobs` API
+
+Return structured response like:
+
+```json
+{
+  "id": 1,
+  "type": "fetch",
+  "status": "completed",
+  "config": {
+    "category_id": "123",
+    "page": 1,
+    "limit": 50
+  },
+  "total_items": 50,
+  "processed_items": 50
+}
+```
+
+---
+
+### 7. Multiple Jobs Clarification
+
+* Do NOT run random parallel jobs without purpose
+* Instead:
+
+  * Allow multiple jobs but each must be traceable
+  * User must select which job to process/upload
+
+---
+
+### 8. Logging Improvements
+
+Add logs for:
+
+* Fetch start/end
+* Images fetched per product
+* Processing start/end
+* Upload success/failure
+
+---
+
+### 9. Goal
+
+Create a clear pipeline:
+
+Fetch Job (with filters)
+↓
+User selects Job ID
+↓
+Process Job (only that job’s products)
+↓
+User selects Job ID
+↓
+Upload Job
+
+---
+
+### 10. Keep Changes Minimal
+
+* Do not break existing structure
+* Extend current models and job_tasks logic
+* Focus on clarity, traceability, and control
+
+---
+
+Apply all changes directly to the existing codebase.

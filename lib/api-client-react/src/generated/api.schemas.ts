@@ -131,6 +131,9 @@ export interface Job {
   completedAt?: string | null;
   createdAt: string;
   config?: JobConfig;
+  /** Links this job to the preceding job in the pipeline. Process jobs point to a fetch job; upload jobs point to a process or fetch job.
+   */
+  sourceJobId?: number | null;
 }
 
 export interface JobListResponse {
@@ -157,6 +160,9 @@ export interface CreateJobInput {
   type: CreateJobInputType;
   storeId?: number | null;
   config?: CreateJobInputConfig;
+  /** ID of the preceding job to scope this one against. Process jobs: set to a fetch job ID. Upload jobs: set to a fetch or process job ID.
+   */
+  sourceJobId?: number | null;
 }
 
 export interface SunskyFetchInput {

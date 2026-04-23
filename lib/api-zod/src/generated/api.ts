@@ -245,6 +245,12 @@ export const ListJobsResponse = zod.object({
       completedAt: zod.string().nullish(),
       createdAt: zod.string(),
       config: zod.object({}).passthrough().nullish(),
+      sourceJobId: zod
+        .number()
+        .nullish()
+        .describe(
+          "Links this job to the preceding job in the pipeline. Process jobs point to a fetch job; upload jobs point to a process or fetch job.\n",
+        ),
     }),
   ),
   total: zod.number(),
@@ -260,6 +266,12 @@ export const CreateJobBody = zod.object({
   type: zod.enum(["fetch", "process", "upload", "sync"]),
   storeId: zod.number().nullish(),
   config: zod.object({}).passthrough().nullish(),
+  sourceJobId: zod
+    .number()
+    .nullish()
+    .describe(
+      "ID of the preceding job to scope this one against. Process jobs: set to a fetch job ID. Upload jobs: set to a fetch or process job ID.\n",
+    ),
 });
 
 /**
@@ -283,6 +295,12 @@ export const GetJobResponse = zod.object({
   completedAt: zod.string().nullish(),
   createdAt: zod.string(),
   config: zod.object({}).passthrough().nullish(),
+  sourceJobId: zod
+    .number()
+    .nullish()
+    .describe(
+      "Links this job to the preceding job in the pipeline. Process jobs point to a fetch job; upload jobs point to a process or fetch job.\n",
+    ),
 });
 
 /**
@@ -306,6 +324,12 @@ export const CancelJobResponse = zod.object({
   completedAt: zod.string().nullish(),
   createdAt: zod.string(),
   config: zod.object({}).passthrough().nullish(),
+  sourceJobId: zod
+    .number()
+    .nullish()
+    .describe(
+      "Links this job to the preceding job in the pipeline. Process jobs point to a fetch job; upload jobs point to a process or fetch job.\n",
+    ),
 });
 
 /**
@@ -370,6 +394,12 @@ export const GetDashboardStatsResponse = zod.object({
       completedAt: zod.string().nullish(),
       createdAt: zod.string(),
       config: zod.object({}).passthrough().nullish(),
+      sourceJobId: zod
+        .number()
+        .nullish()
+        .describe(
+          "Links this job to the preceding job in the pipeline. Process jobs point to a fetch job; upload jobs point to a process or fetch job.\n",
+        ),
     }),
   ),
 });

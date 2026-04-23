@@ -12,4 +12,7 @@ export interface CreateJobInput {
   type: CreateJobInputType;
   storeId?: number | null;
   config?: CreateJobInputConfig;
+  /** ID of the preceding job to scope this one against. Process jobs: set to a fetch job ID. Upload jobs: set to a fetch or process job ID.
+   */
+  sourceJobId?: number | null;
 }
