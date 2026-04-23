@@ -5,6 +5,8 @@ Uses HTTP Basic Auth: consumer_key:consumer_secret (Base64) over HTTPS.
 
 import httpx
 import base64
+import mimetypes
+from pathlib import Path
 from typing import Optional
 from models.models import Store
 
@@ -17,6 +19,10 @@ def _auth_header(store: Store) -> dict:
 
 def _base_url(store: Store) -> str:
     return store.url.rstrip("/") + "/wp-json/wc/v3"
+
+
+def _wp_base_url(store: Store) -> str:
+    return store.url.rstrip("/") + "/wp-json/wp/v2"
 
 
 async def test_connection(store: Store) -> dict:
@@ -64,20 +70,70 @@ async def get_categories(store: Store, per_page: int = 100) -> list[dict]:
     return categories
 
 
+async def upload_image_to_wordpress(
+    store: Store,
+    file_path: str,
+    filename: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Upload a local image file to the WordPress media library.
+    Returns the public URL of the uploaded attachment, or None on failure.
+
+    Uses the WordPress REST API:  POST /wp-json/wp/v2/media
+    Auth: same Basic credentials as WooCommerce.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return None
+
+    fname = filename or path.name
+    mime_type, _ = mimetypes.guess_type(fname)
+    if not mime_type:
+        if fname.endswith(".webp"):
+            mime_type = "image/webp"
+        elif fname.endswith(".png"):
+            mime_type = "image/png"
+        else:
+            mime_type = "image/jpeg"
+
+    headers = _auth_header(store)
+    headers["Content-Disposition"] = f'attachment; filename="{fname}"'
+    headers["Content-Type"] = mime_type
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+            resp = await client.post(
+                f"{_wp_base_url(store)}/media",
+                headers=headers,
+                content=path.read_bytes(),
+            )
+            if resp.is_success:
+                data = resp.json()
+                # source_url is the direct file URL; fall back to guid
+                url = data.get("source_url") or (
+                    data.get("guid", {}).get("rendered") if isinstance(data.get("guid"), dict) else None
+                )
+                return url
+            else:
+                print(f"[woo_client] WP media upload failed {resp.status_code}: {resp.text[:300]}")
+                return None
+    except Exception as e:
+        print(f"[woo_client] WP media upload error for {file_path}: {e}")
+        return None
+
+
 async def create_product(store: Store, product_data: dict) -> dict:
     """
     Create a WooCommerce product as a draft.
     product_data keys: name, sku, regular_price, description, status,
-                       images, categories, stock_quantity, manage_stock
+                       images (list of URLs), categories, stock_quantity, manage_stock
     """
-    # Only include images that look like real URLs
     raw_images = product_data.get("images", [])
     images = [
         {"src": url} for url in raw_images
         if isinstance(url, str) and url.startswith("http")
     ]
 
-    # Only include categories that are valid ints
     raw_cats = product_data.get("category_ids", [])
     categories = [{"id": int(cid)} for cid in raw_cats if cid]
 
@@ -90,7 +146,6 @@ async def create_product(store: Store, product_data: dict) -> dict:
         "stock_quantity": int(product_data.get("stock_quantity", 0) or 0),
     }
 
-    # SKU is optional — omit if blank to avoid duplicate-SKU 400 errors
     sku = (product_data.get("sku", "") or "").strip()
     if sku:
         payload["sku"] = sku
@@ -108,7 +163,6 @@ async def create_product(store: Store, product_data: dict) -> dict:
             json=payload,
         )
         if not resp.is_success:
-            # Include full WooCommerce error body so we can diagnose 400s
             raise httpx.HTTPStatusError(
                 f"HTTP {resp.status_code}: {resp.text[:500]}",
                 request=resp.request,

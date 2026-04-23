@@ -263,6 +263,67 @@ async def _run_process(db, job):
 
 
 # ---------------------------------------------------------------------------
+# IMAGE RESOLUTION HELPER — uploads processed images to WP media library
+# ---------------------------------------------------------------------------
+
+async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> list[str]:
+    """
+    For a product, return a list of image URLs to send to WooCommerce:
+
+    Priority:
+      1. Processed/watermarked images already saved locally → upload each to
+         the WordPress media library and return the resulting WP attachment URLs.
+      2. Raw Sunsky CDN URLs from raw_data (fallback when no processed images
+         exist, e.g. process job was skipped).
+
+    Returns an empty list if nothing is available.
+    """
+    from models.models import Image, ImageStatus, LogLevel
+    from sqlalchemy import select
+
+    # 1. Look for locally processed images in the DB
+    imgs_q = (
+        select(Image)
+        .where(
+            Image.product_id == product.id,
+            Image.status == ImageStatus.watermarked,
+            Image.processed_path.isnot(None),
+        )
+        .order_by(Image.position)
+    )
+    processed_images = (await db.execute(imgs_q)).scalars().all()
+
+    if processed_images:
+        await _log(
+            db, job.id, LogLevel.info,
+            f"  {product.sku}: uploading {len(processed_images)} processed image(s) to WP media…",
+        )
+        urls: list[str] = []
+        for img in processed_images:
+            wp_url = await wc.upload_image_to_wordpress(store, img.processed_path)
+            if wp_url:
+                urls.append(wp_url)
+                await _log(db, job.id, LogLevel.debug,
+                           f"    pos={img.position} uploaded → {wp_url}")
+            else:
+                await _log(db, job.id, LogLevel.warn,
+                           f"    pos={img.position} WP upload failed for {img.processed_path}")
+        return urls
+
+    # 2. Fallback: use raw Sunsky CDN URLs
+    raw_imgs = raw.get("images", [])
+    if isinstance(raw_imgs, str):
+        raw_imgs = [raw_imgs]
+    fallback = [u for u in raw_imgs if isinstance(u, str) and u.startswith("http")][:5]
+    if fallback:
+        await _log(
+            db, job.id, LogLevel.warn,
+            f"  {product.sku}: no processed images found — using {len(fallback)} raw Sunsky URL(s) as fallback",
+        )
+    return fallback
+
+
+# ---------------------------------------------------------------------------
 # UPLOAD — push to WooCommerce; scoped to a fetch job via source_job_id
 # ---------------------------------------------------------------------------
 
@@ -344,11 +405,9 @@ async def _run_upload(db, job):
             }
 
             if not skip_images:
-                raw_imgs = raw.get("images", [])
-                if isinstance(raw_imgs, list):
-                    payload["images"] = [
-                        u for u in raw_imgs if isinstance(u, str) and u.startswith("http")
-                    ]
+                image_urls = await _resolve_product_images(db, job, product, raw, wc, store)
+                if image_urls:
+                    payload["images"] = image_urls
 
             await _log(db, job.id, LogLevel.info,
                        f"Uploading {product.sku} to store #{job.store_id}…")
