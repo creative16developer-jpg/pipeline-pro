@@ -20,6 +20,7 @@ from config import get_settings
 settings = get_settings()
 
 SUNSKY_BASE = settings.sunsky_api_url.rstrip("/")
+SUNSKY_CDN  = "https://www.sunsky-online.com"
 
 
 def _build_signature(params: dict) -> str:
@@ -44,6 +45,59 @@ async def _post(endpoint: str, params: dict) -> dict:
         return resp.json()
 
 
+def _normalise_images(raw: dict) -> list[str]:
+    """
+    Extract and normalise image URLs from a raw Sunsky product dict.
+    Tries every known field name and ensures all URLs are absolute.
+    Returns up to 5 URLs.
+    """
+    # Try list fields first (most common)
+    images: list = []
+    for field in ("images", "imageList", "imgs", "picList", "imageUrls", "pics"):
+        val = raw.get(field)
+        if val:
+            images = val if isinstance(val, list) else [val]
+            break
+
+    # Fall back to single-image fields
+    if not images:
+        for field in ("picUrl", "mainImage", "image", "pic", "thumbnail"):
+            val = raw.get(field)
+            if val:
+                images = [val]
+                break
+
+    # Normalise each entry to an absolute URL string
+    result: list[str] = []
+    for img in images:
+        if isinstance(img, str):
+            url = img.strip()
+        elif isinstance(img, dict):
+            url = (
+                img.get("url") or img.get("src") or
+                img.get("pic") or img.get("path") or ""
+            ).strip()
+        else:
+            continue
+
+        if not url:
+            continue
+
+        # Make absolute
+        if url.startswith("//"):
+            url = "https:" + url
+        elif url.startswith("/"):
+            url = SUNSKY_CDN + url
+
+        if url.startswith("http"):
+            result.append(url)
+
+        if len(result) >= 5:
+            break
+
+    return result
+
+
 async def get_categories(parent_id: str = "0") -> list[dict]:
     """
     Fetch child categories of a given parent.
@@ -63,7 +117,7 @@ async def get_categories(parent_id: str = "0") -> list[dict]:
                 for c in categories
             ]
         return []
-    except Exception as e:
+    except Exception:
         return _mock_categories()
 
 
@@ -95,7 +149,7 @@ async def search_products(
 
         products = [_normalise_product(p) for p in raw_products]
         return {"products": products, "total": total}
-    except Exception as e:
+    except Exception:
         return {"products": _mock_products(page, limit), "total": limit * 3}
 
 
@@ -114,9 +168,11 @@ async def get_product_detail(product_id: str) -> Optional[dict]:
 
 def _normalise_product(raw: dict) -> dict:
     """Map Sunsky raw product fields to our internal schema."""
-    images = raw.get("images", raw.get("imageList", raw.get("imgs", [])))
-    if isinstance(images, str):
-        images = [images]
+    images = _normalise_images(raw)
+
+    # Merge normalised images back into raw_data so the process job
+    # can find them via raw_data["images"] without re-parsing.
+    merged_raw = {**raw, "images": images}
 
     return {
         "id": str(raw.get("id", raw.get("itemNo", raw.get("sku", "")))),
@@ -126,8 +182,8 @@ def _normalise_product(raw: dict) -> dict:
         "price": str(raw.get("price", raw.get("sellPrice", "0.00"))),
         "stock_status": "in_stock" if raw.get("stockNum", raw.get("stock", 1)) else "out_of_stock",
         "category_id": str(raw.get("categoryId", raw.get("catId", ""))),
-        "images": images if isinstance(images, list) else [],
-        "raw_data": raw,
+        "images": images,
+        "raw_data": merged_raw,
     }
 
 
@@ -145,6 +201,10 @@ def _mock_products(page: int, limit: int) -> list[dict]:
         noun = nouns[(idx // len(adjectives)) % len(nouns)]
         cat = categories[idx % len(categories)]
         sku = f"SK-{1000 + idx:06d}"
+        images = [
+            f"https://placehold.co/800x800/png?text={noun}+1",
+            f"https://placehold.co/800x800/png?text={noun}+2",
+        ]
         products.append({
             "id": f"sunsky-{idx + 1}",
             "sku": sku,
@@ -156,11 +216,8 @@ def _mock_products(page: int, limit: int) -> list[dict]:
             "price": f"{5 + (idx * 7.3) % 95:.2f}",
             "stock_status": "in_stock" if idx % 5 != 0 else "out_of_stock",
             "category_id": cat,
-            "images": [
-                f"https://placehold.co/800x800/png?text={noun}+1",
-                f"https://placehold.co/800x800/png?text={noun}+2",
-            ],
-            "raw_data": {"source": "mock", "category": cat},
+            "images": images,
+            "raw_data": {"source": "mock", "category": cat, "images": images},
         })
     return products
 

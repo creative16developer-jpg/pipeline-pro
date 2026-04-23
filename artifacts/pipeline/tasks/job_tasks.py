@@ -114,6 +114,9 @@ async def _run_fetch(db, job):
         if existing:
             skipped += 1
         else:
+            images = p.get("images", [])
+            # raw_data already has merged normalised images from _normalise_product
+            raw_data = p.get("raw_data", {})
             db.add(Product(
                 sunsky_id=str(p["id"]),
                 sku=p["sku"],
@@ -122,8 +125,8 @@ async def _run_fetch(db, job):
                 price=p.get("price", "0"),
                 stock_status=p.get("stock_status", "in_stock"),
                 category_id=p.get("category_id", ""),
-                image_count=len(p.get("images", [])),
-                raw_data=p.get("raw_data", {}),
+                image_count=len(images),
+                raw_data=raw_data,
                 status=ProductStatus.pending,
             ))
             saved += 1
@@ -138,7 +141,7 @@ async def _run_fetch(db, job):
 
 
 async def _run_process(db, job):
-    from models.models import Product, ProductStatus, LogLevel
+    from models.models import Product, ProductStatus, Image, ImageStatus, LogLevel
     from pipeline.image_processor import ImageProcessor
     from sqlalchemy import select
 
@@ -150,27 +153,86 @@ async def _run_process(db, job):
         )
     ).scalars().all()
 
+    if not products:
+        await _log(db, job.id, LogLevel.info, "No pending products to process")
+        return
+
     job.total_items = len(products)
     await db.commit()
 
     processor = ImageProcessor()
+
     for i, product in enumerate(products):
         product.status = ProductStatus.processing
         await db.commit()
+
         try:
             raw = product.raw_data or {}
-            for pos, url in enumerate((raw.get("images", []))[:5]):
-                await processor.process(url, product.sku, pos)
+
+            # Get the normalised absolute-URL list stored during fetch
+            image_urls = raw.get("images", [])
+            if isinstance(image_urls, str):
+                image_urls = [image_urls]
+            # Keep only valid absolute URLs, max 5
+            image_urls = [u for u in image_urls if isinstance(u, str) and u.startswith("http")][:5]
+
+            await _log(db, job.id, LogLevel.info,
+                       f"Product {product.sku} (id={product.id}): {len(image_urls)} image(s) — {image_urls}")
+
+            processed_count = 0
+            for pos, url in enumerate(image_urls):
+                try:
+                    processed_path = await processor.process(url, product.sku, pos)
+                    await _log(db, job.id, LogLevel.debug,
+                               f"  [{pos}] {url} → {processed_path}")
+
+                    # Use "watermarked" as the terminal-success status (covers compress + optional watermark)
+                    img_status = ImageStatus.watermarked if processed_path else ImageStatus.failed
+                    db.add(Image(
+                        product_id=product.id,          # DB primary key, NOT sku
+                        original_url=url,
+                        processed_path=processed_path,
+                        position=pos,
+                        status=img_status,
+                        is_main=(pos == 0),
+                    ))
+                    if processed_path:
+                        processed_count += 1
+                        await _log(db, job.id, LogLevel.debug,
+                                   f"  DB insert OK — image {pos} for product {product.id}")
+                    else:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  processor returned None for {url}")
+
+                except Exception as img_err:
+                    await _log(db, job.id, LogLevel.error,
+                               f"  Image {pos} error for {product.sku}: {img_err}")
+                    db.add(Image(
+                        product_id=product.id,
+                        original_url=url,
+                        position=pos,
+                        status=ImageStatus.failed,
+                        is_main=(pos == 0),
+                        error_message=str(img_err),
+                    ))
+
+                await db.commit()  # commit after each image so failures don't roll back others
+
             product.status = ProductStatus.processed
+            await _log(db, job.id, LogLevel.info,
+                       f"Product {product.sku}: {processed_count}/{len(image_urls)} images saved to DB")
+
         except Exception as e:
             product.status = ProductStatus.failed
             product.error_message = str(e)
+            await _log(db, job.id, LogLevel.error,
+                       f"Process failed for {product.sku}: {e}")
 
         job.processed_items = i + 1
         job.progress_percent = round((i + 1) / len(products) * 100, 1)
         await db.commit()
 
-    await _log(db, job.id, LogLevel.info, f"Processed {len(products)} products")
+    await _log(db, job.id, LogLevel.info, f"Process job done: {len(products)} product(s) handled")
 
 
 async def _run_upload(db, job):

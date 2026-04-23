@@ -29,5 +29,12 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,
+    # prefetch=1 means each worker only takes one task at a time — fair scheduling
     worker_prefetch_multiplier=1,
+    # Allow up to 4 tasks to run in parallel (one per worker process).
+    # Increase this on machines with more CPUs / RAM.
+    worker_concurrency=4,
+    # Use threads instead of fork so each task gets its own clean asyncio loop
+    # without cross-loop database connection issues.
+    worker_pool="threads",
 )
