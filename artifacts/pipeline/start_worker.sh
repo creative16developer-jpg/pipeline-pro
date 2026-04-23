@@ -17,7 +17,16 @@ echo "Starting Celery worker (threads, concurrency=${CONCURRENCY})"
 echo "PYTHONPATH=${SCRIPT_DIR}"
 cd "${SCRIPT_DIR}"
 
-exec celery -A celery_app worker \
+# Prefer venv python if it exists, otherwise fall back to system python
+VENV_PYTHON="${SCRIPT_DIR}/venv/bin/python"
+if [ -f "${VENV_PYTHON}" ]; then
+    PYTHON="${VENV_PYTHON}"
+else
+    PYTHON="$(command -v python3 || command -v python)"
+fi
+
+echo "Using Python: ${PYTHON}"
+exec "${PYTHON}" -m celery -A celery_app worker \
     --loglevel=info \
     --pool=threads \
     --concurrency="${CONCURRENCY}" \

@@ -19,7 +19,10 @@ module.exports = {
       args: "start_worker.sh",
       interpreter: "none",
       autorestart: true,
-      watch: false
+      watch: false,
+      env: {
+        PATH: "/home/dev/public_html/pipeline-pro/artifacts/pipeline/venv/bin:/usr/local/bin:/usr/bin:/bin"
+      }
     },
     {
       name: "dashboard-build",
