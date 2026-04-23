@@ -61,6 +61,8 @@ class Store(Base):
     url = Column(String, nullable=False)
     consumer_key = Column(String, nullable=False)
     consumer_secret = Column(String, nullable=False)
+    wp_username = Column(String, nullable=True)
+    wp_app_password = Column(String, nullable=True)
     status = Column(SAEnum(StoreStatus, name="store_status"), nullable=False, default=StoreStatus.inactive)
     last_tested_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

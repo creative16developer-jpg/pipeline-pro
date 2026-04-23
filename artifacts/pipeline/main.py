@@ -26,6 +26,8 @@ from routers import dashboard, stores, products, jobs, sunsky
 import models.models  # noqa: F401 — registers all ORM models with Base
 
 STATIC_DIR = Path(__file__).parent.parent / "dashboard" / "dist" / "public"
+IMAGES_DIR = Path(__file__).parent / "images" / "processed"
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 settings = get_settings()
 
@@ -57,6 +59,10 @@ app.include_router(stores.router, prefix="/api")
 app.include_router(products.router, prefix="/api")
 app.include_router(jobs.router, prefix="/api")
 app.include_router(sunsky.router, prefix="/api")
+
+# Serve processed images publicly so WooCommerce can sideload them
+# URL pattern: {SERVER_BASE_URL}/media/images/{sku}_{pos}.webp
+app.mount("/media/images", StaticFiles(directory=IMAGES_DIR), name="processed_images")
 
 
 @app.get("/api/healthz")

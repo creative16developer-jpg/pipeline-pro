@@ -13,6 +13,12 @@ class StoreCreate(BaseModel):
     consumer_secret: str = Field(
         validation_alias=AliasChoices("consumer_secret", "consumerSecret")
     )
+    wp_username: Optional[str] = Field(
+        None, validation_alias=AliasChoices("wp_username", "wpUsername")
+    )
+    wp_app_password: Optional[str] = Field(
+        None, validation_alias=AliasChoices("wp_app_password", "wpAppPassword")
+    )
 
 
 class StoreUpdate(BaseModel):
@@ -24,6 +30,12 @@ class StoreUpdate(BaseModel):
     consumer_secret: Optional[str] = Field(
         None, validation_alias=AliasChoices("consumer_secret", "consumerSecret")
     )
+    wp_username: Optional[str] = Field(
+        None, validation_alias=AliasChoices("wp_username", "wpUsername")
+    )
+    wp_app_password: Optional[str] = Field(
+        None, validation_alias=AliasChoices("wp_app_password", "wpAppPassword")
+    )
 
 
 class StoreOut(BaseModel):
@@ -33,6 +45,7 @@ class StoreOut(BaseModel):
     name: str
     url: str
     consumer_key: str
+    wp_username: Optional[str] = None
     status: str
     last_tested_at: Optional[datetime] = None
     created_at: datetime

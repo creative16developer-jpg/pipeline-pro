@@ -103,8 +103,21 @@ function StoreCard({ store }: { store: any }) {
 
       <div className="space-y-2 mb-6">
         <div className="flex items-center gap-2 text-sm text-muted-foreground bg-secondary/30 px-3 py-2 rounded-lg">
-          <LinkIcon className="w-4 h-4" /> 
+          <LinkIcon className="w-4 h-4" />
           <span className="truncate">{store.url}</span>
+        </div>
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs">
+          {store.wpUsername ? (
+            <span className="flex items-center gap-1.5 text-emerald-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+              WP media upload enabled ({store.wpUsername})
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 text-amber-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+              No WP credentials — images use static URL fallback
+            </span>
+          )}
         </div>
         {store.lastTestedAt && (
           <div className="text-xs text-muted-foreground px-1">
@@ -137,20 +150,26 @@ function StoreCard({ store }: { store: any }) {
 
 function AddStoreModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
   const createStore = useCreateStore();
-  const [formData, setFormData] = useState({ name: '', url: '', consumerKey: '', consumerSecret: '' });
+  const [formData, setFormData] = useState({
+    name: '', url: '', consumerKey: '', consumerSecret: '',
+    wpUsername: '', wpAppPassword: '',
+  });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const payload = {
+    const payload: Record<string, string> = {
       name: formData.name,
       url: formData.url,
       consumerKey: formData.consumerKey,
       consumerSecret: formData.consumerSecret,
     };
+    if (formData.wpUsername.trim()) payload.wpUsername = formData.wpUsername.trim();
+    if (formData.wpAppPassword.trim()) payload.wpAppPassword = formData.wpAppPassword.trim();
+
     createStore.mutate({ data: payload }, {
       onSuccess: () => {
         onClose();
-        setFormData({ name: '', url: '', consumerKey: '', consumerSecret: '' });
+        setFormData({ name: '', url: '', consumerKey: '', consumerSecret: '', wpUsername: '', wpAppPassword: '' });
       }
     });
   };
@@ -174,6 +193,26 @@ function AddStoreModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => vo
           <label className="text-sm font-medium">Consumer Secret</label>
           <input required type="password" value={formData.consumerSecret} onChange={e => setFormData({...formData, consumerSecret: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" placeholder="cs_..." />
         </div>
+
+        {/* WordPress Application Password — for image upload */}
+        <div className="pt-1 space-y-3 p-4 bg-secondary/20 rounded-xl border border-border/50">
+          <div>
+            <p className="text-xs font-medium text-foreground uppercase tracking-wide">WordPress Credentials (for image upload)</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Required to upload processed images directly to WordPress media.
+              WP Admin → Users → Profile → Application Passwords → Add New.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">WP Username</label>
+            <input type="text" value={formData.wpUsername} onChange={e => setFormData({...formData, wpUsername: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" placeholder="admin" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">WP Application Password</label>
+            <input type="password" value={formData.wpAppPassword} onChange={e => setFormData({...formData, wpAppPassword: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" placeholder="xxxx xxxx xxxx xxxx xxxx xxxx" />
+          </div>
+        </div>
+
         <div className="pt-4 flex justify-end gap-3">
           <button type="button" onClick={onClose} className="px-5 py-2.5 rounded-xl border border-border hover:bg-secondary font-medium">Cancel</button>
           <button type="submit" disabled={createStore.isPending} className="px-6 py-2.5 rounded-xl bg-primary text-primary-foreground font-medium shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all disabled:opacity-50 flex items-center gap-2">

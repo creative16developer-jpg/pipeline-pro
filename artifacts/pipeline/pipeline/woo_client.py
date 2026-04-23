@@ -79,11 +79,24 @@ async def upload_image_to_wordpress(
     Upload a local image file to the WordPress media library.
     Returns the public URL of the uploaded attachment, or None on failure.
 
-    Uses the WordPress REST API:  POST /wp-json/wp/v2/media
-    Auth: same Basic credentials as WooCommerce.
+    Requires wp_username + wp_app_password on the Store (WordPress Application
+    Password — NOT the WooCommerce consumer key/secret, which only work with
+    /wp-json/wc/v3/* and cannot authenticate /wp-json/wp/v2/media).
+
+    How to create a WordPress Application Password:
+      WP Admin → Users → Profile → Application Passwords → Add New
     """
+    if not store.wp_username or not store.wp_app_password:
+        print(
+            "[woo_client] Skipping WP media upload — "
+            "wp_username / wp_app_password not set on store. "
+            "Add them in the Stores page to enable image upload."
+        )
+        return None
+
     path = Path(file_path)
     if not path.exists():
+        print(f"[woo_client] File not found: {file_path}")
         return None
 
     fname = filename or path.name
@@ -96,9 +109,14 @@ async def upload_image_to_wordpress(
         else:
             mime_type = "image/jpeg"
 
-    headers = _auth_header(store)
-    headers["Content-Disposition"] = f'attachment; filename="{fname}"'
-    headers["Content-Type"] = mime_type
+    # WordPress Application Password: Basic auth with WP username + app password
+    wp_creds = f"{store.wp_username}:{store.wp_app_password}"
+    wp_token = base64.b64encode(wp_creds.encode()).decode()
+    headers = {
+        "Authorization": f"Basic {wp_token}",
+        "Content-Disposition": f'attachment; filename="{fname}"',
+        "Content-Type": mime_type,
+    }
 
     try:
         async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
@@ -109,13 +127,16 @@ async def upload_image_to_wordpress(
             )
             if resp.is_success:
                 data = resp.json()
-                # source_url is the direct file URL; fall back to guid
                 url = data.get("source_url") or (
-                    data.get("guid", {}).get("rendered") if isinstance(data.get("guid"), dict) else None
+                    data.get("guid", {}).get("rendered")
+                    if isinstance(data.get("guid"), dict) else None
                 )
                 return url
             else:
-                print(f"[woo_client] WP media upload failed {resp.status_code}: {resp.text[:300]}")
+                print(
+                    f"[woo_client] WP media upload failed {resp.status_code}: "
+                    f"{resp.text[:400]}"
+                )
                 return None
     except Exception as e:
         print(f"[woo_client] WP media upload error for {file_path}: {e}")

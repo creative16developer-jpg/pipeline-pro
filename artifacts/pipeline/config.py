@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     sunsky_api_url: str = "https://www.sunsky-online.com/api"
     port: int = 8000
     cors_origins: list[str] = ["*"]
+    # Public base URL of this server (e.g. https://xxxx.zrok.io)
+    # Used to build public URLs for processed images so WooCommerce can sideload them.
+    # Leave empty if you are using wp_username + wp_app_password for direct WP media upload.
+    server_base_url: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
