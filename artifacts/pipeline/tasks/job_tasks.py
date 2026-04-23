@@ -164,19 +164,33 @@ async def _run_process(db, job):
     from sqlalchemy import select
 
     cfg = job.config or {}
+    limit = cfg.get("limit", 50)
 
-    # If a source_job_id is set, only process products from that fetch job
-    q = select(Product).where(Product.status == ProductStatus.pending)
+    base_q = select(Product).where(Product.status == ProductStatus.pending)
+
     if job.source_job_id:
-        q = q.where(Product.fetch_job_id == job.source_job_id)
-        await _log(db, job.id, LogLevel.info,
-                   f"Process scoped to fetch job #{job.source_job_id}")
+        # First try: products properly stamped with this fetch job id (new code)
+        stamped_q = base_q.where(Product.fetch_job_id == job.source_job_id).limit(limit)
+        products = (await db.execute(stamped_q)).scalars().all()
+
+        if products:
+            await _log(db, job.id, LogLevel.info,
+                       f"Process scoped to fetch job #{job.source_job_id} — "
+                       f"{len(products)} product(s) found")
+        else:
+            # Fallback: products fetched before job-linking migration (fetch_job_id is NULL)
+            await _log(db, job.id, LogLevel.warn,
+                       f"No products stamped with fetch_job_id={job.source_job_id} — "
+                       f"falling back to un-linked pending products (fetched before migration)")
+            fallback_q = base_q.where(Product.fetch_job_id.is_(None)).limit(limit)
+            products = (await db.execute(fallback_q)).scalars().all()
+            if products:
+                await _log(db, job.id, LogLevel.info,
+                           f"Found {len(products)} un-linked pending product(s) to process")
     else:
         await _log(db, job.id, LogLevel.info,
                    "No source job selected — processing ALL pending products")
-
-    q = q.limit(cfg.get("limit", 50))
-    products = (await db.execute(q)).scalars().all()
+        products = (await db.execute(base_q.limit(limit))).scalars().all()
 
     if not products:
         await _log(db, job.id, LogLevel.info, "No pending products to process")
@@ -353,6 +367,7 @@ async def _run_upload(db, job):
     ]
 
     # If a source_job_id is set, scope to products from that fetch job
+    fetch_job_id = None
     if job.source_job_id:
         # Resolve what fetch job to use:
         # If the source is a process job it scoped its products by a fetch job too —
@@ -369,7 +384,6 @@ async def _run_upload(db, job):
                 fetch_job_id = source_job.id
                 await _log(db, job.id, LogLevel.info,
                            f"Upload scoped to fetch job #{fetch_job_id}")
-            base_filter.append(Product.fetch_job_id == fetch_job_id)
         else:
             await _log(db, job.id, LogLevel.warn,
                        f"Source job #{job.source_job_id} not found — uploading ALL eligible products")
@@ -377,13 +391,31 @@ async def _run_upload(db, job):
         await _log(db, job.id, LogLevel.info,
                    "No source job selected — uploading ALL eligible products")
 
-    products = (
-        await db.execute(
-            select(Product)
-            .where(*base_filter)
-            .limit(cfg.get("limit", 50))
-        )
-    ).scalars().all()
+    limit = cfg.get("limit", 50)
+
+    if fetch_job_id:
+        # Try stamped products first (new code path)
+        stamped_filter = base_filter + [Product.fetch_job_id == fetch_job_id]
+        products = (
+            await db.execute(select(Product).where(*stamped_filter).limit(limit))
+        ).scalars().all()
+
+        if not products:
+            # Fallback: old products fetched before migration have NULL fetch_job_id
+            await _log(db, job.id, LogLevel.warn,
+                       f"No products stamped with fetch_job_id={fetch_job_id} — "
+                       f"falling back to un-linked eligible products (fetched before migration)")
+            fallback_filter = base_filter + [Product.fetch_job_id.is_(None)]
+            products = (
+                await db.execute(select(Product).where(*fallback_filter).limit(limit))
+            ).scalars().all()
+            if products:
+                await _log(db, job.id, LogLevel.info,
+                           f"Found {len(products)} un-linked product(s) to upload")
+    else:
+        products = (
+            await db.execute(select(Product).where(*base_filter).limit(limit))
+        ).scalars().all()
 
     if not products:
         await _log(db, job.id, LogLevel.info,
