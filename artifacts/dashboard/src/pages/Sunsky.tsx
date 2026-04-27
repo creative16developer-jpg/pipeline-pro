@@ -1,18 +1,50 @@
-import { useState } from "react";
-import { useCategories, useSunskyFetch } from "@/hooks/use-sunsky";
+import { useEffect, useState } from "react";
+import { useSunskyFetch } from "@/hooks/use-sunsky";
 import { CloudDownload, AlertCircle, Info, Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
+type Category = {
+  id: string;
+  name: string;
+  parent_id?: string | null;
+};
+
 export default function Sunsky() {
-  const { data: categories } = useCategories();
   const fetchMutation = useSunskyFetch();
   const { toast } = useToast();
 
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [isCategoriesLoading, setIsCategoriesLoading] = useState(true);
   const [categoryId, setCategoryId] = useState("");
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(50);
   const [lastResult, setLastResult] = useState<any>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const load = async () => {
+      setIsCategoriesLoading(true);
+      try {
+        const res = await fetch("/api/sunsky/categories", { signal: controller.signal });
+        if (!res.ok) {
+          throw new Error(`Failed to load categories (${res.status})`);
+        }
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : [];
+        setCategories(list);
+      } catch (err: any) {
+        if (err.name !== "AbortError") {
+          setCategories([]);
+          toast({ title: "Categories unavailable", description: err.message, variant: "destructive" });
+        }
+      } finally {
+        setIsCategoriesLoading(false);
+      }
+    };
+    load();
+    return () => controller.abort();
+  }, [toast]);
 
   const handleFetch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,8 +87,8 @@ export default function Sunsky() {
                     onChange={(e) => setCategoryId(e.target.value)}
                     className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all"
                   >
-                    <option value="">All Categories</option>
-                    {categories?.map(c => (
+                    <option value="">{isCategoriesLoading ? "Loading categories..." : "All Categories"}</option>
+                    {categories.map((c) => (
                       <option key={c.id} value={c.id}>{c.name}</option>
                     ))}
                   </select>
