@@ -288,23 +288,42 @@ async def _run_process(db, job):
             ][:5]
 
             # ── Stage 2: fetch product detail (correct endpoint: product!detail.do) ──
+            # Always call detail API to get paramsTable / optionList / modelLabel
+            # for the later sync step, even if we already have image URLs.
             zip_bytes: Optional[bytes] = None
-            if not image_urls and item_no:
+            if item_no:
                 await _log(db, job.id, LogLevel.info,
                            f"  {product.sku}: fetching detail from Sunsky (product!detail.do)…")
                 detail = await sunsky_client.get_product_detail(item_no)
                 if detail:
-                    image_urls = [
-                        u for u in detail.get("images", [])
-                        if isinstance(u, str) and u.startswith("http")
-                    ][:5]
-                    if image_urls:
-                        updated_raw = {**raw, "images": image_urls}
-                        product.raw_data = updated_raw
-                        product.image_count = len(image_urls)
-                        await db.commit()
-                        await _log(db, job.id, LogLevel.info,
-                                   f"  {product.sku}: {len(image_urls)} image URL(s) from detail API")
+                    detail_raw = detail.get("raw_data") or {}
+                    # Pull spec fields out of the raw detail response
+                    params_table = detail_raw.get("paramsTable", "")
+                    option_list  = detail_raw.get("optionList", {})
+                    model_label  = detail_raw.get("modelLabel", "")
+
+                    if not image_urls:
+                        image_urls = [
+                            u for u in detail.get("images", [])
+                            if isinstance(u, str) and u.startswith("http")
+                        ][:5]
+
+                    # Merge everything back into raw_data
+                    updated_raw = {
+                        **raw,
+                        "images": image_urls,
+                        "paramsTable": params_table,
+                        "optionList": option_list,
+                        "modelLabel": model_label,
+                    }
+                    product.raw_data = updated_raw
+                    product.image_count = len(image_urls)
+                    await db.commit()
+                    await _log(db, job.id, LogLevel.info,
+                               f"  {product.sku}: detail fetched — "
+                               f"{len(image_urls)} image(s), "
+                               f"paramsTable={'yes' if params_table else 'no'}, "
+                               f"optionList={'yes' if option_list else 'no'}")
 
             # ── Stage 3: download ZIP via product!getImages.do ──
             if not image_urls and item_no:
@@ -843,10 +862,13 @@ async def _run_sync(db, job):
                 cats_synced += 1
 
             sunsky_to_woo_cat[parent["id"]] = parent_woo_id
+            if parent.get("alias_id"):
+                sunsky_to_woo_cat[parent["alias_id"]] = parent_woo_id
 
-            # Fetch children of this parent
+            # Fetch children of this parent — use raw primary ID for API call
+            fetch_parent_id = parent["id"] or parent.get("alias_id", "")
             try:
-                children = await sunsky_client.get_categories(parent["id"])
+                children = await sunsky_client.get_categories(fetch_parent_id)
             except Exception as e:
                 await _log(db, job.id, LogLevel.warn, f"  Could not fetch children of {parent['name']}: {e}")
                 children = []
@@ -869,6 +891,8 @@ async def _run_sync(db, job):
                     cats_synced += 1
 
                 sunsky_to_woo_cat[child["id"]] = child_woo_id
+                if child.get("alias_id"):
+                    sunsky_to_woo_cat[child["alias_id"]] = child_woo_id
 
         await _log(db, job.id, LogLevel.info,
                    f"  Categories done: {cats_created} created, {cats_synced} already existed "
@@ -885,17 +909,35 @@ async def _run_sync(db, job):
         cat_q = cat_q.limit(limit)
         cat_products = (await db.execute(cat_q)).scalars().all()
 
+        cat_ok = cat_miss = 0
         for prod in cat_products:
             raw = prod.raw_data or {}
-            sunsky_cat_id = str(raw.get("category_id") or prod.category_id or "")
+            # Try multiple sources for the Sunsky category ID
+            sunsky_cat_id = (
+                str(raw.get("categoryId") or "").strip()          # from raw Sunsky search data
+                or str(raw.get("category_id") or "").strip()      # normalized field stored in raw_data
+                or str(prod.category_id or "").strip()            # Product model column
+            )
             woo_cat_id = sunsky_to_woo_cat.get(sunsky_cat_id)
             if woo_cat_id and prod.woo_product_id:
                 try:
                     await woo_client.set_product_categories(store, prod.woo_product_id, [woo_cat_id])
                     products_updated += 1
+                    cat_ok += 1
                 except Exception as e:
                     await _log(db, job.id, LogLevel.warn,
                                f"  Could not update category for product {prod.sku}: {e}")
+            elif not woo_cat_id and sunsky_cat_id:
+                cat_miss += 1
+                await _log(db, job.id, LogLevel.debug,
+                           f"  {prod.sku}: Sunsky cat_id={sunsky_cat_id!r} not in mapping (skipped)")
+            elif not sunsky_cat_id:
+                await _log(db, job.id, LogLevel.debug,
+                           f"  {prod.sku}: no category_id found on product (skipped)")
+        if cat_miss:
+            await _log(db, job.id, LogLevel.warn,
+                       f"  {cat_miss} product(s) had a category_id not found in the Sunsky→WooCommerce map "
+                       f"(they may belong to a sub-category not returned by the top-2-level tree)")
 
         await _log(db, job.id, LogLevel.info,
                    f"  Category update done: {products_updated} product(s) updated")
@@ -964,6 +1006,27 @@ async def _run_sync(db, job):
         for prod in attr_products:
             raw = prod.raw_data or {}
             woo_attrs: list[dict] = []
+
+            # ── If spec data is missing, fetch it now from the detail API ──
+            if not raw.get("paramsTable") and not raw.get("optionList") and (prod.sku or prod.sunsky_id):
+                item_no = prod.sku or prod.sunsky_id
+                try:
+                    detail = await sunsky_client.get_product_detail(item_no)
+                    if detail:
+                        detail_raw = detail.get("raw_data") or {}
+                        raw = {
+                            **raw,
+                            "paramsTable": detail_raw.get("paramsTable", ""),
+                            "optionList":  detail_raw.get("optionList", {}),
+                            "modelLabel":  detail_raw.get("modelLabel", ""),
+                        }
+                        prod.raw_data = raw
+                        await db.commit()
+                        await _log(db, job.id, LogLevel.debug,
+                                   f"  {prod.sku}: fetched detail spec data from Sunsky")
+                except Exception as de:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  {prod.sku}: could not fetch detail for attributes: {de}")
 
             # ── Variant attribute: modelLabel + optionList ──
             model_label = str(raw.get("modelLabel") or "").strip()

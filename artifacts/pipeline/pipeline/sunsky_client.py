@@ -104,9 +104,17 @@ def _extract_total(data: dict, fallback: int) -> int:
 
 
 def _normalise_category(raw: dict) -> dict:
+    # Expose both possible ID fields so callers can map either one.
+    # Sunsky sometimes uses "id" and sometimes "categoryId"; products always
+    # store the value from their "categoryId" field.
+    raw_id       = str(raw.get("id", "")).strip()
+    raw_cat_id   = str(raw.get("categoryId", "")).strip()
+    primary_id   = raw_cat_id or raw_id  # prefer categoryId to match product data
+    alias_id     = raw_id if raw_id and raw_id != primary_id else ""
     return {
-        "id": str(raw.get("id", raw.get("categoryId", ""))),
-        "name": raw.get("name", raw.get("title", "")),
+        "id":       primary_id,
+        "alias_id": alias_id,           # secondary key (may be empty)
+        "name":     raw.get("name", raw.get("title", "")),
         "parent_id": str(raw.get("parentId", raw.get("parent_id", "0"))) if raw.get("parentId", raw.get("parent_id")) not in (None, "", 0, "0") else None,
     }
 
