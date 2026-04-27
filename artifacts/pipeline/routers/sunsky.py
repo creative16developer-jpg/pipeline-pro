@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 router = APIRouter(prefix="/sunsky", tags=["sunsky"])
 
 
+
 @router.get("/categories", response_model=list[SunskyCategoryOut])
 async def get_categories(parent_id: str = Query(default="0")):
     """

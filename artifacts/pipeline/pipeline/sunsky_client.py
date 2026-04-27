@@ -67,7 +67,7 @@ def _extract_list(data: dict) -> list:
         if isinstance(val, list):
             return val
         if isinstance(val, dict):
-            for nested in ("list", "items", "rows", "data"):
+            for nested in ("result", "list", "items", "rows", "data"):
                 nested_val = val.get(nested)
                 if isinstance(nested_val, list):
                     return nested_val
