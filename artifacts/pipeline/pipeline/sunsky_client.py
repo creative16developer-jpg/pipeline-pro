@@ -61,6 +61,46 @@ async def _post(endpoint: str, params: dict) -> dict:
     raise last_error
 
 
+def _extract_list(data: dict) -> list:
+    for key in ("data", "result", "rows", "list", "items"):
+        val = data.get(key)
+        if isinstance(val, list):
+            return val
+        if isinstance(val, dict):
+            for nested in ("list", "items", "rows", "data"):
+                nested_val = val.get(nested)
+                if isinstance(nested_val, list):
+                    return nested_val
+    return []
+
+
+def _extract_total(data: dict, fallback: int) -> int:
+    for key in ("total", "totalCount", "count", "recordsTotal"):
+        val = data.get(key)
+        if isinstance(val, int):
+            return val
+        if isinstance(val, str) and val.isdigit():
+            return int(val)
+    for key in ("data", "result"):
+        val = data.get(key)
+        if isinstance(val, dict):
+            for nested in ("total", "totalCount", "count"):
+                nested_val = val.get(nested)
+                if isinstance(nested_val, int):
+                    return nested_val
+                if isinstance(nested_val, str) and nested_val.isdigit():
+                    return int(nested_val)
+    return fallback
+
+
+def _normalise_category(raw: dict) -> dict:
+    return {
+        "id": str(raw.get("id", raw.get("categoryId", ""))),
+        "name": raw.get("name", raw.get("title", "")),
+        "parent_id": str(raw.get("parentId", raw.get("parent_id", "0"))) if raw.get("parentId", raw.get("parent_id")) not in (None, "", 0, "0") else None,
+    }
+
+
 def _normalise_images(raw: dict) -> list[str]:
     images: list = []
     for field in ("images", "imageList", "imgs", "picList", "imageUrls", "pics"):
@@ -100,18 +140,8 @@ def _normalise_images(raw: dict) -> list[str]:
 
 async def get_categories(parent_id: str = "0") -> list[dict]:
     data = await _post("category!getChildren.do", {"parentId": parent_id})
-    categories = data.get("data", data.get("result", data))
-    if not isinstance(categories, list):
-        categories = []
-    return [
-        {
-            "id": str(c.get("id", c.get("categoryId", ""))),
-            "name": c.get("name", c.get("title", "")),
-            "parent_id": parent_id if parent_id != "0" else None,
-        }
-        for c in categories
-        if c.get("id") or c.get("categoryId")
-    ]
+    categories = _extract_list(data)
+    return [_normalise_category(c) for c in categories if c.get("id") or c.get("categoryId")]
 
 
 async def get_category_tree() -> list[dict]:
@@ -144,15 +174,8 @@ async def search_products(
         params["keyword"] = keyword
 
     data = await _post("product!search.do", params)
-    raw_products = data.get("data", data.get("result", []))
-    total = int(data.get("total", 0))
-
-    if isinstance(raw_products, dict):
-        total = int(raw_products.get("total", total))
-        raw_products = raw_products.get("list", raw_products.get("items", []))
-
-    if not isinstance(raw_products, list):
-        raw_products = []
+    raw_products = _extract_list(data)
+    total = _extract_total(data, len(raw_products))
 
     products = [_normalise_product(p) for p in raw_products]
     pages = max(1, (total + page_size - 1) // page_size) if total else 1

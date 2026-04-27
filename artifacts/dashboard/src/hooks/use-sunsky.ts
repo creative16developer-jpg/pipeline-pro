@@ -11,6 +11,17 @@ type SunskyCategory = {
   parentId?: string | null;
 };
 
+function normalizeList(raw: unknown): SunskyCategory[] {
+  const items = Array.isArray(raw) ? raw : [];
+  return items
+    .map((item: any) => ({
+      id: String(item.id ?? item.categoryId ?? ""),
+      name: String(item.name ?? item.title ?? ""),
+      parent_id: item.parent_id ?? item.parentId ?? null,
+    }))
+    .filter((item) => item.id && item.name);
+}
+
 function buildTreeList(items: SunskyCategory[]) {
   const normalized = items.map((item) => ({
     id: String(item.id),
@@ -18,9 +29,7 @@ function buildTreeList(items: SunskyCategory[]) {
     parent_id: item.parent_id ?? item.parentId ?? null,
   }));
 
-  const byId = new Map(normalized.map((item) => [item.id, item]));
   const children = new Map<string | null, SunskyCategory[]>();
-
   for (const item of normalized) {
     const parent = item.parent_id ?? null;
     const list = children.get(parent) ?? [];
@@ -38,28 +47,13 @@ function buildTreeList(items: SunskyCategory[]) {
   };
 
   walk(null, 0);
-  if (!ordered.length && byId.size) {
-    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }
-  return ordered;
+  return ordered.length ? ordered : normalized.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function useCategories() {
   const result = useSunskyCategories();
   const raw = result.data;
-  const items = Array.isArray(raw)
-    ? raw
-    : typeof raw === "string"
-      ? (() => {
-          try {
-            const parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? parsed : [];
-          } catch {
-            return [];
-          }
-        })()
-      : [];
-
+  const items = normalizeList(raw);
   return { ...result, data: buildTreeList(items) };
 }
 
