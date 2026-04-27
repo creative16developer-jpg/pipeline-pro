@@ -192,6 +192,72 @@ async def create_product(store: Store, product_data: dict) -> dict:
         return resp.json()
 
 
+async def get_product_by_sku(store: Store, sku: str) -> Optional[dict]:
+    """
+    Look up a WooCommerce product by SKU.
+    Returns the WooCommerce product dict if found, or None.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
+            resp = await client.get(
+                f"{_base_url(store)}/products",
+                headers=_auth_header(store),
+                params={"sku": sku, "per_page": 1},
+            )
+            resp.raise_for_status()
+            results = resp.json()
+            if isinstance(results, list) and results:
+                return results[0]
+            return None
+    except Exception:
+        return None
+
+
+async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
+    """
+    Update an existing WooCommerce product (full payload).
+    """
+    raw_images = product_data.get("images", [])
+    images = [
+        {"src": url} for url in raw_images
+        if isinstance(url, str) and url.startswith("http")
+    ]
+
+    raw_cats = product_data.get("category_ids", [])
+    categories = [{"id": int(cid)} for cid in raw_cats if cid]
+
+    payload: dict = {}
+    if "name" in product_data:
+        payload["name"] = product_data["name"] or "Unnamed Product"
+    if "price" in product_data:
+        payload["regular_price"] = str(product_data["price"] or "0")
+    if "description" in product_data:
+        payload["description"] = product_data["description"] or ""
+    if "stock_quantity" in product_data:
+        payload["manage_stock"] = True
+        payload["stock_quantity"] = int(product_data["stock_quantity"] or 0)
+    if "sku" in product_data and product_data["sku"]:
+        payload["sku"] = product_data["sku"].strip()
+    if images:
+        payload["images"] = images
+    if categories:
+        payload["categories"] = categories
+
+    async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        resp = await client.put(
+            f"{_base_url(store)}/products/{woo_id}",
+            headers=_auth_header(store),
+            json=payload,
+        )
+        if not resp.is_success:
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code}: {resp.text[:500]}",
+                request=resp.request,
+                response=resp,
+            )
+        return resp.json()
+
+
 async def update_product_stock(store: Store, woo_id: int, price: str, stock_qty: int) -> dict:
     """Update price and stock for an existing WooCommerce product."""
     async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
