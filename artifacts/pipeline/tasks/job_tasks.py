@@ -890,102 +890,163 @@ async def _run_sync(db, job):
                        f"  {len(target_products)} product(s) use {len(needed_cat_ids)} unique category ID(s): "
                        f"{', '.join(sorted(needed_cat_ids))}")
 
-            # 2. Load existing WooCommerce categories: (name_lower, parent_woo_id) → woo_id
+            # 2. Load existing WooCommerce categories
+            #    Two lookups: by (name_lower, parent_woo_id) for exact match,
+            #    and by name_lower alone as a fallback when parent is unknown.
             existing_woo_cats = await woo_client.get_all_woo_categories(store)
             woo_cat_lookup: dict[tuple, int] = {
                 (c["name"].lower(), int(c.get("parent") or 0)): c["id"]
                 for c in existing_woo_cats
             }
+            woo_cat_by_name: dict[str, int] = {
+                c["name"].lower(): c["id"]
+                for c in existing_woo_cats
+            }
             await _log(db, job.id, LogLevel.info,
                        f"  {len(existing_woo_cats)} existing WooCommerce categories loaded")
 
-            # 3. Traverse Sunsky category tree — only create/find categories we actually need
+            # 3. BFS through the Sunsky category tree — level by level, concurrent
+            #    fetching — until all needed category IDs are found (any depth).
+            #
+            #    Data structures:
+            #      bfs_meta[sunsky_id] = {"id", "alias_id", "name", "sunsky_parent_id"}
+            #    We record the Sunsky parent ID so we can reconstruct the ancestor
+            #    chain when creating WooCommerce categories.
+
+            bfs_meta: dict[str, dict] = {}          # sunsky_id → cat info + parent ref
+            sunsky_woo_id: dict[str, int] = {}       # sunsky_id → woo_category_id
+            remaining = set(needed_cat_ids)
+            # BFS queue: list of (sunsky_parent_id, list_of_cat_dicts_at_this_level)
+            # Seed: top-level categories
             try:
-                parents = await sunsky_client.get_categories("0")
+                root_cats = await sunsky_client.get_categories("0")
             except Exception as e:
-                await _log(db, job.id, LogLevel.error, f"  Failed to fetch Sunsky parent categories: {e}")
-                parents = []
+                await _log(db, job.id, LogLevel.error, f"  Failed to fetch root categories: {e}")
+                root_cats = []
 
-            remaining = set(needed_cat_ids)  # track which ones we haven't found yet
+            # Initialise BFS with root level (parent = "0" / no parent in WooCommerce)
+            # Each queue item: (sunsky_parent_id_str, [cat, cat, ...])
+            bfs_levels: list[tuple[str, list]] = [("0", root_cats)]
 
-            for parent in parents:
-                parent_ids = {parent["id"]} | ({parent["alias_id"]} if parent.get("alias_id") else set())
+            MAX_DEPTH = 6
+            depth = 0
+            seen_parent_ids: set[str] = {"0"}
 
-                # Fetch this parent's children to check if any are needed
-                fetch_parent_id = parent["id"] or parent.get("alias_id", "")
-                try:
-                    children = await sunsky_client.get_categories(fetch_parent_id)
-                except Exception as e:
-                    await _log(db, job.id, LogLevel.warn,
-                               f"  Could not fetch children of {parent['name']}: {e}")
-                    children = []
+            while bfs_levels and remaining and depth < MAX_DEPTH:
+                depth += 1
+                next_levels: list[tuple[str, list]] = []
 
-                child_ids_needed = {
-                    c["id"] for c in children
-                    if ({c["id"]} | ({c.get("alias_id")} if c.get("alias_id") else set())) & needed_cat_ids
-                }
-                parent_needed = bool(parent_ids & needed_cat_ids) or bool(child_ids_needed)
+                # Record all cats at this batch of levels
+                for sunsky_parent_id, cats in bfs_levels:
+                    for cat in cats:
+                        cat_ids = {cat["id"]}
+                        if cat.get("alias_id"):
+                            cat_ids.add(cat["alias_id"])
+                        for cid in cat_ids:
+                            bfs_meta[cid] = {**cat, "sunsky_parent_id": sunsky_parent_id}
+                        if cat_ids & remaining:
+                            remaining -= cat_ids
 
-                if not parent_needed:
-                    continue  # skip this entire branch
+                if not remaining:
+                    break  # all found — stop fetching deeper
 
-                # Ensure parent category exists in WooCommerce
-                parent_woo_id = woo_cat_lookup.get((parent["name"].lower(), 0))
-                if not parent_woo_id:
-                    try:
-                        created = await woo_client.create_woo_category(store, parent["name"], 0)
-                        parent_woo_id = created["id"]
-                        woo_cat_lookup[(parent["name"].lower(), 0)] = parent_woo_id
-                        cats_created += 1
-                        await _log(db, job.id, LogLevel.info,
-                                   f"  Created parent category: {parent['name']} → WooCommerce #{parent_woo_id}")
-                    except Exception as e:
-                        await _log(db, job.id, LogLevel.warn,
-                                   f"  Could not create parent category {parent['name']!r}: {e}")
+                # Fetch the next level concurrently for all cats at this depth
+                all_cats_this_level = [
+                    cat for (_, cats) in bfs_levels for cat in cats
+                    if cat["id"] not in seen_parent_ids
+                ]
+                if not all_cats_this_level:
+                    break
+
+                fetch_ids = []
+                for cat in all_cats_this_level:
+                    pid = cat["id"]
+                    if pid not in seen_parent_ids:
+                        seen_parent_ids.add(pid)
+                        fetch_ids.append(pid)
+
+                if not fetch_ids:
+                    break
+
+                await _log(db, job.id, LogLevel.debug,
+                           f"  BFS depth {depth}: fetching children of {len(fetch_ids)} categories…")
+
+                tasks = [sunsky_client.get_categories(pid) for pid in fetch_ids]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                next_levels = []
+                for pid, result in zip(fetch_ids, results):
+                    if isinstance(result, Exception) or not result:
                         continue
-                else:
-                    cats_synced += 1
-                    await _log(db, job.id, LogLevel.debug,
-                               f"  Parent category exists: {parent['name']} → WooCommerce #{parent_woo_id}")
+                    next_levels.append((pid, result))
 
-                for pid in parent_ids:
-                    sunsky_to_woo_cat[pid] = parent_woo_id
-                remaining -= parent_ids
-
-                # Process only children that are actually needed
-                for child in children:
-                    child_ids = {child["id"]} | ({child["alias_id"]} if child.get("alias_id") else set())
-                    if not (child_ids & needed_cat_ids):
-                        continue  # this sub-category not needed by any product
-
-                    child_woo_id = woo_cat_lookup.get((child["name"].lower(), parent_woo_id))
-                    if not child_woo_id:
-                        try:
-                            created = await woo_client.create_woo_category(
-                                store, child["name"], parent_woo_id
-                            )
-                            child_woo_id = created["id"]
-                            woo_cat_lookup[(child["name"].lower(), parent_woo_id)] = child_woo_id
-                            cats_created += 1
-                            await _log(db, job.id, LogLevel.info,
-                                       f"    Created sub-category: {child['name']} → WooCommerce #{child_woo_id}")
-                        except Exception as e:
-                            await _log(db, job.id, LogLevel.warn,
-                                       f"    Could not create sub-category {child['name']!r}: {e}")
-                            continue
-                    else:
-                        cats_synced += 1
-                        await _log(db, job.id, LogLevel.debug,
-                                   f"    Sub-category exists: {child['name']} → WooCommerce #{child_woo_id}")
-
-                    for cid in child_ids:
-                        sunsky_to_woo_cat[cid] = child_woo_id
-                    remaining -= child_ids
+                bfs_levels = next_levels
 
             if remaining:
                 await _log(db, job.id, LogLevel.warn,
-                           f"  Could not find Sunsky categories for IDs: {', '.join(sorted(remaining))} "
-                           f"(may be >2 levels deep or not in Sunsky API)")
+                           f"  Could not locate Sunsky categories: {', '.join(sorted(remaining))} "
+                           f"after {depth} levels — they may not exist in the Sunsky API")
+
+            # 4. For each found category, ensure its full ancestor chain exists in
+            #    WooCommerce, then register the leaf mapping.
+
+            async def _ensure_woo_cat(sunsky_id: str, depth_guard: int = 0) -> Optional[int]:
+                """Recursively ensure a Sunsky category (and its ancestors) exist in WooCommerce."""
+                if depth_guard > 8:
+                    return None
+                if sunsky_id in sunsky_woo_id:
+                    return sunsky_woo_id[sunsky_id]
+
+                meta = bfs_meta.get(sunsky_id)
+                if not meta:
+                    return None
+
+                name = meta.get("name", "").strip()
+                if not name:
+                    return None
+
+                sunsky_pid = meta.get("sunsky_parent_id", "0")
+                woo_parent_id = 0
+
+                if sunsky_pid and sunsky_pid != "0":
+                    woo_parent_id = await _ensure_woo_cat(sunsky_pid, depth_guard + 1) or 0
+
+                # Check WooCommerce lookup (exact name + parent, then name-only fallback)
+                woo_id = (
+                    woo_cat_lookup.get((name.lower(), woo_parent_id))
+                    or (woo_cat_by_name.get(name.lower()) if woo_parent_id == 0 else None)
+                )
+                if woo_id:
+                    nonlocal cats_synced
+                    cats_synced += 1
+                else:
+                    try:
+                        created = await woo_client.create_woo_category(store, name, woo_parent_id)
+                        woo_id = created["id"]
+                        woo_cat_lookup[(name.lower(), woo_parent_id)] = woo_id
+                        woo_cat_by_name[name.lower()] = woo_id
+                        nonlocal cats_created
+                        cats_created += 1
+                        indent = "  " * (depth_guard + 1)
+                        await _log(db, job.id, LogLevel.info,
+                                   f"{indent}Created WooCommerce category: {name} (id={woo_id})")
+                    except Exception as e:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  Could not create category {name!r}: {e}")
+                        return None
+
+                sunsky_woo_id[sunsky_id] = woo_id
+                # Register all alias IDs too
+                alias = meta.get("alias_id")
+                if alias:
+                    sunsky_woo_id[alias] = woo_id
+                return woo_id
+
+            for cat_id in needed_cat_ids:
+                if cat_id in bfs_meta:
+                    woo_id = await _ensure_woo_cat(cat_id)
+                    if woo_id:
+                        sunsky_to_woo_cat[cat_id] = woo_id
 
             await _log(db, job.id, LogLevel.info,
                        f"  Categories: {cats_created} created, {cats_synced} already existed "
