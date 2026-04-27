@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     database_url: str = ""
     sunsky_api_key: str = "TESTKEY"
     sunsky_api_secret: str = "TESTSECRET"
-    sunsky_api_url: str = "https://www.sunsky-online.com/api"
+    sunsky_api_url: str = "https://open.sunsky-online.com/openapi"
     port: int = 8000
     cors_origins: list[str] = ["*"]
     # Public base URL of this server (e.g. https://xxxx.zrok.io)
