@@ -3,7 +3,7 @@ import { useJobs, useCreateJob, useCancelJob } from "@/hooks/use-jobs";
 import { useStores } from "@/hooks/use-stores";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Modal } from "@/components/Modal";
-import { Activity, Play, XCircle, ChevronRight, Link2 } from "lucide-react";
+import { Activity, Play, XCircle, ChevronRight, Link2, ArrowRightLeft } from "lucide-react";
 import { format } from "date-fns";
 import { CreateJobInputType, Job } from "@workspace/api-client-react";
 
@@ -29,14 +29,18 @@ export default function Jobs() {
       </div>
 
       {/* Pipeline legend */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground bg-secondary/30 rounded-xl px-4 py-3 border border-border/40">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground bg-secondary/30 rounded-xl px-4 py-3 border border-border/40">
         <span className="font-medium text-foreground">Pipeline flow:</span>
         <StatusBadge status="fetch" />
         <ChevronRight className="w-3.5 h-3.5" />
         <StatusBadge status="process" />
         <ChevronRight className="w-3.5 h-3.5" />
         <StatusBadge status="upload" />
-        <span className="ml-2">— Select a source Job ID when creating process/upload jobs to scope them to specific products.</span>
+        <ChevronRight className="w-3.5 h-3.5" />
+        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-violet-500/15 text-violet-400 border border-violet-500/20 font-medium text-xs">
+          <ArrowRightLeft className="w-3 h-3" /> sync
+        </span>
+        <span className="ml-1">— Use sync to push categories &amp; attributes to WooCommerce after uploading.</span>
       </div>
 
       <div className="bg-card border border-border/50 rounded-2xl overflow-hidden shadow-lg shadow-black/5">
@@ -206,6 +210,10 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
   const [uploadLimit, setUploadLimit] = useState("50");
   const [skipImages, setSkipImages] = useState(true);
 
+  // Sync config
+  const [syncCategories, setSyncCategories] = useState(true);
+  const [syncAttributes, setSyncAttributes] = useState(true);
+
   const createJob = useCreateJob();
   const { data: stores } = useStores();
 
@@ -219,6 +227,8 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
   const processableFetchJobs = allJobs.filter(
     j => (j.type === "fetch" || j.type === "process") && j.status === "completed"
   );
+  // For sync jobs, pick from completed upload jobs
+  const uploadJobs = allJobs.filter(j => j.type === "upload" && j.status === "completed");
 
   const handleTypeChange = (newType: CreateJobInputType) => {
     setType(newType);
@@ -243,6 +253,14 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
       config = {
         limit: parseInt(uploadLimit) || 50,
         skip_images: skipImages,
+      };
+    } else if (type === "sync") {
+      config = {
+        store_id: storeId ? parseInt(storeId) : undefined,
+        sync_categories: syncCategories,
+        sync_attributes: syncAttributes,
+        limit: 200,
+        ...(sourceJobId ? { source_job_id: parseInt(sourceJobId) } : {}),
       };
     }
 
@@ -317,6 +335,32 @@ function NewJobModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void
                 Leave blank to process/upload ALL eligible products regardless of which fetch job created them.
               </p>
             )}
+          </div>
+        )}
+
+        {/* Sync-specific config */}
+        {type === "sync" && (
+          <div className="space-y-3 p-4 bg-secondary/20 rounded-xl border border-border/50">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Sync Options</p>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" checked={syncCategories} onChange={(e) => setSyncCategories(e.target.checked)} className="w-4 h-4 rounded accent-primary" />
+              <span className="text-sm">Sync Categories <span className="text-muted-foreground text-xs">(create Sunsky categories in WooCommerce)</span></span>
+            </label>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input type="checkbox" checked={syncAttributes} onChange={(e) => setSyncAttributes(e.target.checked)} className="w-4 h-4 rounded accent-primary" />
+              <span className="text-sm">Sync Attributes <span className="text-muted-foreground text-xs">(push product specs & variant options)</span></span>
+            </label>
+            <div className="space-y-1 pt-1">
+              <label className="text-xs font-medium text-foreground">
+                Scope to Upload Job <span className="text-muted-foreground font-normal">(optional)</span>
+              </label>
+              <select value={sourceJobId} onChange={(e) => setSourceJobId(e.target.value)} className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all">
+                <option value="">— All uploaded products —</option>
+                {uploadJobs.map(j => (
+                  <option key={j.id} value={j.id}>#{j.id} · UPLOAD · {j.totalItems} products</option>
+                ))}
+              </select>
+            </div>
           </div>
         )}
 

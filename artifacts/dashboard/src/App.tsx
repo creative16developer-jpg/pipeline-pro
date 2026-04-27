@@ -11,6 +11,7 @@ import Products from "./pages/Products";
 import Jobs from "./pages/Jobs";
 import Stores from "./pages/Stores";
 import Sunsky from "./pages/Sunsky";
+import Sync from "./pages/Sync";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,6 +31,7 @@ function Router() {
         <Route path="/jobs" component={Jobs} />
         <Route path="/stores" component={Stores} />
         <Route path="/sunsky" component={Sunsky} />
+        <Route path="/sync" component={Sync} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

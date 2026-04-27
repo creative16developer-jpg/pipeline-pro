@@ -744,8 +744,297 @@ async def _run_upload(db, job):
 # SYNC — fetch from Sunsky + upload delta to WooCommerce in one job
 # ---------------------------------------------------------------------------
 
+def _parse_params_table(html: str) -> dict[str, str]:
+    """Extract key-value spec pairs from Sunsky paramsTable HTML."""
+    import re
+    from html import unescape
+
+    keys = [unescape(k.strip()) for k in re.findall(
+        r'class=["\']params_key["\'][^>]*>\s*(.*?)\s*</td>', html, re.DOTALL | re.IGNORECASE
+    )]
+    vals = [unescape(re.sub(r'<[^>]+>', '', v).strip()) for v in re.findall(
+        r'class=["\']params_val["\'][^>]*>\s*(.*?)\s*</td>', html, re.DOTALL | re.IGNORECASE
+    )]
+    return {k: v for k, v in zip(keys, vals) if k and v}
+
+
 async def _run_sync(db, job):
-    from models.models import LogLevel
+    """
+    Sync job: push Sunsky categories and/or product attributes into WooCommerce.
+
+    Config keys:
+      store_id          (int, required) — target WooCommerce store
+      sync_categories   (bool, default True)  — create Sunsky categories in WooCommerce
+      sync_attributes   (bool, default True)  — push product spec attributes to WooCommerce
+      source_job_id     (int, optional)       — limit to products from a specific fetch job
+      limit             (int, default 200)    — max products to update with attributes
+    """
+    import re
+    from html import unescape
+    from models.models import Product, ProductStatus, Store, LogLevel
+    from pipeline import woo_client, sunsky_client
+    from sqlalchemy import select
+
+    cfg = job.config or {}
+    store_id = cfg.get("store_id") or job.store_id
+    do_categories = cfg.get("sync_categories", True)
+    do_attributes = cfg.get("sync_attributes", True)
+    limit = int(cfg.get("limit", 200))
+    source_job_id = cfg.get("source_job_id") or job.source_job_id
+
+    if not store_id:
+        await _log(db, job.id, LogLevel.error, "Sync job requires a store_id in config")
+        return
+
+    store = await db.get(Store, store_id)
+    if not store:
+        await _log(db, job.id, LogLevel.error, f"Store #{store_id} not found")
+        return
+
     await _log(db, job.id, LogLevel.info,
-               "Sync job: run Fetch + Process + Upload sequentially. "
-               "Use individual job types for more control.")
+               f"Starting sync → store: {store.name} | categories={do_categories} | attributes={do_attributes}")
+
+    cats_synced = cats_created = 0
+    attrs_synced = attrs_created = terms_created = 0
+    products_updated = 0
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP A: Sync Sunsky categories → WooCommerce
+    # ─────────────────────────────────────────────────────────────────────────
+    # sunsky_cat_id → woo_cat_id mapping (used later for product category update)
+    sunsky_to_woo_cat: dict[str, int] = {}
+
+    if do_categories:
+        await _log(db, job.id, LogLevel.info, "── Step A: Syncing categories ──")
+
+        # Load all existing WooCommerce categories into a lookup: (name_lower, parent_woo_id) → woo_id
+        existing_woo_cats = await woo_client.get_all_woo_categories(store)
+        woo_cat_lookup: dict[tuple, int] = {
+            (c["name"].lower(), int(c.get("parent") or 0)): c["id"]
+            for c in existing_woo_cats
+        }
+        await _log(db, job.id, LogLevel.info, f"  {len(existing_woo_cats)} existing WooCommerce categories loaded")
+
+        # Fetch Sunsky parent categories
+        try:
+            parents = await sunsky_client.get_categories("0")
+        except Exception as e:
+            await _log(db, job.id, LogLevel.error, f"  Failed to fetch Sunsky parent categories: {e}")
+            parents = []
+
+        job.total_items = (job.total_items or 0) + len(parents)
+        await db.commit()
+
+        for parent in parents:
+            parent_woo_id = woo_cat_lookup.get((parent["name"].lower(), 0))
+            if not parent_woo_id:
+                try:
+                    created = await woo_client.create_woo_category(store, parent["name"], 0)
+                    parent_woo_id = created["id"]
+                    woo_cat_lookup[(parent["name"].lower(), 0)] = parent_woo_id
+                    cats_created += 1
+                    await _log(db, job.id, LogLevel.debug,
+                               f"  Created WooCommerce category: {parent['name']} (id={parent_woo_id})")
+                except Exception as e:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  Could not create category {parent['name']!r}: {e}")
+                    continue
+            else:
+                cats_synced += 1
+
+            sunsky_to_woo_cat[parent["id"]] = parent_woo_id
+
+            # Fetch children of this parent
+            try:
+                children = await sunsky_client.get_categories(parent["id"])
+            except Exception as e:
+                await _log(db, job.id, LogLevel.warn, f"  Could not fetch children of {parent['name']}: {e}")
+                children = []
+
+            for child in children:
+                child_woo_id = woo_cat_lookup.get((child["name"].lower(), parent_woo_id))
+                if not child_woo_id:
+                    try:
+                        created = await woo_client.create_woo_category(store, child["name"], parent_woo_id)
+                        child_woo_id = created["id"]
+                        woo_cat_lookup[(child["name"].lower(), parent_woo_id)] = child_woo_id
+                        cats_created += 1
+                        await _log(db, job.id, LogLevel.debug,
+                                   f"    Created sub-category: {child['name']} (id={child_woo_id})")
+                    except Exception as e:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"    Could not create sub-category {child['name']!r}: {e}")
+                        continue
+                else:
+                    cats_synced += 1
+
+                sunsky_to_woo_cat[child["id"]] = child_woo_id
+
+        await _log(db, job.id, LogLevel.info,
+                   f"  Categories done: {cats_created} created, {cats_synced} already existed "
+                   f"({len(sunsky_to_woo_cat)} total mapped)")
+
+        # Update WooCommerce products with the correct category
+        await _log(db, job.id, LogLevel.info, "  Updating product categories in WooCommerce…")
+        cat_q = select(Product).where(
+            Product.woo_product_id.isnot(None),
+            Product.status == ProductStatus.uploaded,
+        )
+        if source_job_id:
+            cat_q = cat_q.where(Product.fetch_job_id == source_job_id)
+        cat_q = cat_q.limit(limit)
+        cat_products = (await db.execute(cat_q)).scalars().all()
+
+        for prod in cat_products:
+            raw = prod.raw_data or {}
+            sunsky_cat_id = str(raw.get("category_id") or prod.category_id or "")
+            woo_cat_id = sunsky_to_woo_cat.get(sunsky_cat_id)
+            if woo_cat_id and prod.woo_product_id:
+                try:
+                    await woo_client.set_product_categories(store, prod.woo_product_id, [woo_cat_id])
+                    products_updated += 1
+                except Exception as e:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  Could not update category for product {prod.sku}: {e}")
+
+        await _log(db, job.id, LogLevel.info,
+                   f"  Category update done: {products_updated} product(s) updated")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # STEP B: Sync product attributes → WooCommerce
+    # ─────────────────────────────────────────────────────────────────────────
+    if do_attributes:
+        await _log(db, job.id, LogLevel.info, "── Step B: Syncing product attributes ──")
+
+        # Pre-load all WooCommerce attributes: name_lower → {id, slug}
+        existing_attrs = await woo_client.get_all_woo_attributes(store)
+        attr_lookup: dict[str, dict] = {a["name"].lower(): a for a in existing_attrs}
+        await _log(db, job.id, LogLevel.info,
+                   f"  {len(existing_attrs)} existing WooCommerce attributes loaded")
+
+        # Per-attribute term cache: attr_id → {term_name_lower: term_id}
+        term_cache: dict[int, dict[str, int]] = {}
+
+        async def get_or_create_attr(name: str) -> Optional[dict]:
+            key = name.lower()
+            if key in attr_lookup:
+                return attr_lookup[key]
+            try:
+                created = await woo_client.create_woo_attribute(store, name)
+                attr_lookup[key] = created
+                nonlocal attrs_created
+                attrs_created += 1
+                return created
+            except Exception as e:
+                await _log(db, job.id, LogLevel.warn, f"  Could not create attribute {name!r}: {e}")
+                return None
+
+        async def get_or_create_term(attr_id: int, term_name: str) -> Optional[int]:
+            nonlocal terms_created
+            if attr_id not in term_cache:
+                existing_terms = await woo_client.get_attribute_terms(store, attr_id)
+                term_cache[attr_id] = {t["name"].lower(): t["id"] for t in existing_terms}
+
+            key = term_name.lower()
+            if key in term_cache[attr_id]:
+                return term_cache[attr_id][key]
+            try:
+                created = await woo_client.create_attribute_term(store, attr_id, term_name)
+                term_cache[attr_id][key] = created["id"]
+                terms_created += 1
+                return created["id"]
+            except Exception as e:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Could not create term {term_name!r} for attr {attr_id}: {e}")
+                return None
+
+        # Query uploaded products with a woo_product_id
+        attr_q = select(Product).where(Product.woo_product_id.isnot(None))
+        if source_job_id:
+            attr_q = attr_q.where(Product.fetch_job_id == source_job_id)
+        attr_q = attr_q.limit(limit)
+        attr_products = (await db.execute(attr_q)).scalars().all()
+
+        job.total_items = (job.total_items or 0) + len(attr_products)
+        await db.commit()
+
+        await _log(db, job.id, LogLevel.info,
+                   f"  Processing attributes for {len(attr_products)} product(s)…")
+
+        for prod in attr_products:
+            raw = prod.raw_data or {}
+            woo_attrs: list[dict] = []
+
+            # ── Variant attribute: modelLabel + optionList ──
+            model_label = str(raw.get("modelLabel") or "").strip()
+            option_list = raw.get("optionList") or {}
+            if isinstance(option_list, str):
+                import json
+                try:
+                    option_list = json.loads(option_list)
+                except Exception:
+                    option_list = {}
+
+            option_items = option_list.get("items", []) if isinstance(option_list, dict) else []
+            option_values = [
+                str(item.get("keywords") or item.get("value") or "").strip()
+                for item in option_items
+                if isinstance(item, dict)
+            ]
+            option_values = [v for v in option_values if v]
+
+            if model_label and option_values:
+                attr = await get_or_create_attr(model_label)
+                if attr:
+                    for val in option_values:
+                        await get_or_create_term(attr["id"], val)
+                    woo_attrs.append({
+                        "id": attr["id"],
+                        "name": attr["name"],
+                        "options": option_values[:10],
+                        "visible": True,
+                        "variation": True,
+                    })
+                    attrs_synced += 1
+
+            # ── Spec attributes: paramsTable HTML key-value pairs ──
+            params_html = str(raw.get("paramsTable") or "")
+            if params_html:
+                spec_pairs = _parse_params_table(params_html)
+                for spec_key, spec_val in list(spec_pairs.items())[:15]:
+                    if len(spec_key) > 60 or len(spec_val) > 100:
+                        continue
+                    attr = await get_or_create_attr(spec_key)
+                    if attr:
+                        await get_or_create_term(attr["id"], spec_val)
+                        woo_attrs.append({
+                            "id": attr["id"],
+                            "name": attr["name"],
+                            "options": [spec_val],
+                            "visible": True,
+                            "variation": False,
+                        })
+                        attrs_synced += 1
+
+            if woo_attrs and prod.woo_product_id:
+                try:
+                    await woo_client.set_product_attributes(store, prod.woo_product_id, woo_attrs)
+                    products_updated += 1
+                    job.processed_items = (job.processed_items or 0) + 1
+                    await db.commit()
+                except Exception as e:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  Failed to set attributes on product {prod.sku} "
+                               f"(woo_id={prod.woo_product_id}): {e}")
+            elif not woo_attrs:
+                await _log(db, job.id, LogLevel.debug,
+                           f"  {prod.sku}: no attributes extracted, skipping")
+
+        await _log(db, job.id, LogLevel.info,
+                   f"  Attributes done: {attrs_created} new attributes, "
+                   f"{terms_created} new terms, {products_updated} product(s) updated")
+
+    await _log(db, job.id, LogLevel.info,
+               f"Sync complete — categories: +{cats_created} new / {cats_synced} existing | "
+               f"attributes: +{attrs_created} new | terms: +{terms_created} new | "
+               f"products updated: {products_updated}")

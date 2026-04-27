@@ -268,3 +268,145 @@ async def update_product_stock(store: Store, woo_id: int, price: str, stock_qty:
         )
         resp.raise_for_status()
         return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Category sync helpers
+# ---------------------------------------------------------------------------
+
+async def get_all_woo_categories(store: Store) -> list[dict]:
+    """Fetch every WooCommerce category (all pages)."""
+    results = []
+    page = 1
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        while True:
+            resp = await client.get(
+                f"{_base_url(store)}/products/categories",
+                headers=_auth_header(store),
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            results.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+    return results
+
+
+async def create_woo_category(store: Store, name: str, parent_woo_id: int = 0) -> dict:
+    """Create a WooCommerce category and return the created dict."""
+    payload: dict = {"name": name}
+    if parent_woo_id:
+        payload["parent"] = parent_woo_id
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        resp = await client.post(
+            f"{_base_url(store)}/products/categories",
+            headers=_auth_header(store),
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Attribute sync helpers
+# ---------------------------------------------------------------------------
+
+async def get_all_woo_attributes(store: Store) -> list[dict]:
+    """List all WooCommerce global product attributes."""
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        resp = await client.get(
+            f"{_base_url(store)}/products/attributes",
+            headers=_auth_header(store),
+            params={"per_page": 100},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def create_woo_attribute(store: Store, name: str) -> dict:
+    """Create a WooCommerce global product attribute."""
+    payload = {"name": name, "type": "select", "order_by": "menu_order", "has_archives": False}
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        resp = await client.post(
+            f"{_base_url(store)}/products/attributes",
+            headers=_auth_header(store),
+            json=payload,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def get_attribute_terms(store: Store, attr_id: int) -> list[dict]:
+    """List all terms for a given WooCommerce product attribute."""
+    results = []
+    page = 1
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        while True:
+            resp = await client.get(
+                f"{_base_url(store)}/products/attributes/{attr_id}/terms",
+                headers=_auth_header(store),
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            results.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+    return results
+
+
+async def create_attribute_term(store: Store, attr_id: int, term_name: str) -> dict:
+    """Create a term for a WooCommerce product attribute."""
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        resp = await client.post(
+            f"{_base_url(store)}/products/attributes/{attr_id}/terms",
+            headers=_auth_header(store),
+            json={"name": term_name},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def set_product_attributes(store: Store, woo_id: int, attributes: list[dict]) -> dict:
+    """
+    Update the attributes on an existing WooCommerce product.
+    attributes = [{"id": attr_id, "name": name, "options": ["val1","val2"], "visible": True}]
+    """
+    async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        resp = await client.put(
+            f"{_base_url(store)}/products/{woo_id}",
+            headers=_auth_header(store),
+            json={"attributes": attributes},
+        )
+        if not resp.is_success:
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code}: {resp.text[:500]}",
+                request=resp.request,
+                response=resp,
+            )
+        return resp.json()
+
+
+async def set_product_categories(store: Store, woo_id: int, category_woo_ids: list[int]) -> dict:
+    """Update the categories on an existing WooCommerce product."""
+    cats = [{"id": cid} for cid in category_woo_ids if cid]
+    async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        resp = await client.put(
+            f"{_base_url(store)}/products/{woo_id}",
+            headers=_auth_header(store),
+            json={"categories": cats},
+        )
+        if not resp.is_success:
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code}: {resp.text[:500]}",
+                request=resp.request,
+                response=resp,
+            )
+        return resp.json()

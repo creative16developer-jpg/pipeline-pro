@@ -6,6 +6,7 @@ import {
   Activity, 
   Store, 
   CloudDownload,
+  ArrowRightLeft,
   Settings,
   Bell
 } from "lucide-react";
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { href: "/jobs", label: "Import Jobs", icon: Activity },
   { href: "/stores", label: "Stores", icon: Store },
   { href: "/sunsky", label: "Sunsky Fetch", icon: CloudDownload },
+  { href: "/sync", label: "Sync WooCommerce", icon: ArrowRightLeft },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
