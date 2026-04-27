@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from database import get_db
 from models.models import Job, JobStatus, JobType, ProductStatus
@@ -10,14 +10,15 @@ router = APIRouter(prefix="/sunsky", tags=["sunsky"])
 
 
 @router.get("/categories", response_model=list[SunskyCategoryOut])
-async def get_categories():
+async def get_categories(parent_id: str = Query(default="0")):
     """
-    Fetch the full Sunsky category tree (all levels).
-    Returns a flat list sorted by parent/child order.
-    Raises 502 if the API call fails (no mock fallback).
+    Fetch ONE level of Sunsky categories.
+    Pass parent_id=0 (default) to get root categories.
+    Pass parent_id=<id> to get direct children of that category.
+    This is a single API call — fast and lazy.
     """
     try:
-        cats = await sunsky_client.get_category_tree()
+        cats = await sunsky_client.get_categories(parent_id=parent_id)
     except Exception as e:
         raise HTTPException(502, f"Sunsky API error fetching categories: {e}")
     return [
@@ -43,7 +44,7 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
             "category_id": body.category_id,
             "keyword":     body.keyword,
             "page_size":   body.limit,
-            "max_pages":   1,  # Sync endpoint: one page only (use background job for all)
+            "max_pages":   1,
         },
     )
     db.add(job)
@@ -77,7 +78,6 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
         raw_data = p.get("raw_data", {})
 
         if existing:
-            # Compare and update if changed
             changed = False
             if p["name"] and existing.name != p["name"]:
                 existing.name = p["name"]; changed = True

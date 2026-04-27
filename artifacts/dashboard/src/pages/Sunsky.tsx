@@ -1,68 +1,95 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useSunskyFetch } from "@/hooks/use-sunsky";
-import { CloudDownload, AlertCircle, Info, Search } from "lucide-react";
+import { CloudDownload, Info, Search, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-type Category = {
-  id: string;
-  name: string;
-  parent_id?: string | null;
-};
+type Category = { id: string; name: string };
+
+async function fetchLevel(parentId: string, signal?: AbortSignal): Promise<Category[]> {
+  const res = await fetch(`/api/sunsky/categories?parent_id=${parentId}`, { signal });
+  if (!res.ok) throw new Error(`Categories error (${res.status})`);
+  const data = await res.json();
+  const list: any[] = Array.isArray(data) ? data : [];
+  return list
+    .map((c: any) => ({ id: String(c.id ?? ""), name: String(c.name ?? "") }))
+    .filter((c) => c.id && c.name)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
 
 export default function Sunsky() {
   const fetchMutation = useSunskyFetch();
   const { toast } = useToast();
 
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [isCategoriesLoading, setIsCategoriesLoading] = useState(true);
-  const [categoryId, setCategoryId] = useState("");
+  const [parentCats, setParentCats] = useState<Category[]>([]);
+  const [childCats, setChildCats] = useState<Category[]>([]);
+  const [parentLoading, setParentLoading] = useState(true);
+  const [childLoading, setChildLoading] = useState(false);
+
+  const [parentId, setParentId] = useState("");
+  const [childId, setChildId] = useState("");
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(50);
   const [lastResult, setLastResult] = useState<any>(null);
 
+  const effectiveCategoryId = childId || parentId;
+
   useEffect(() => {
     const controller = new AbortController();
-    const load = async () => {
-      setIsCategoriesLoading(true);
-      try {
-        const res = await fetch("/api/sunsky/categories", { signal: controller.signal });
-        if (!res.ok) {
-          throw new Error(`Failed to load categories (${res.status})`);
-        }
-        const data = await res.json();
-        const list = Array.isArray(data) ? data : [];
-        setCategories(list);
-      } catch (err: any) {
+    setParentLoading(true);
+    fetchLevel("0", controller.signal)
+      .then(setParentCats)
+      .catch((err) => {
         if (err.name !== "AbortError") {
-          setCategories([]);
-          toast({ title: "Categories unavailable", description: err.message, variant: "destructive" });
+          toast({ title: "Could not load categories", description: err.message, variant: "destructive" });
         }
-      } finally {
-        setIsCategoriesLoading(false);
-      }
-    };
-    load();
+      })
+      .finally(() => setParentLoading(false));
     return () => controller.abort();
   }, [toast]);
+
+  const handleParentChange = useCallback(
+    (id: string) => {
+      setParentId(id);
+      setChildId("");
+      setChildCats([]);
+      if (!id) return;
+      const controller = new AbortController();
+      setChildLoading(true);
+      fetchLevel(id, controller.signal)
+        .then((cats) => {
+          setChildCats(cats);
+        })
+        .catch((err) => {
+          if (err.name !== "AbortError") {
+            toast({ title: "Could not load sub-categories", description: err.message, variant: "destructive" });
+          }
+        })
+        .finally(() => setChildLoading(false));
+    },
+    [toast]
+  );
 
   const handleFetch = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
       const result = await fetchMutation.mutateAsync({
         data: {
-          categoryId: categoryId || undefined,
+          categoryId: effectiveCategoryId || undefined,
           keyword: keyword || undefined,
           page,
-          limit
-        }
+          limit,
+        },
       });
       setLastResult(result);
-      toast({ title: "Fetch Initiated", description: "Products are being fetched in the background." });
-    } catch (e: any) {
-      toast({ title: "Fetch Failed", description: e.message, variant: "destructive" });
+      toast({ title: "Products fetched", description: "Products have been queued for processing." });
+    } catch (err: any) {
+      toast({ title: "Fetch Failed", description: err.message, variant: "destructive" });
     }
   };
+
+  const inputClass =
+    "w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all";
 
   return (
     <div className="max-w-4xl mx-auto space-y-8">
@@ -76,62 +103,98 @@ export default function Sunsky() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
         <div className="md:col-span-2">
           <form onSubmit={handleFetch} className="bg-card border border-border/50 rounded-2xl p-6 shadow-lg shadow-black/5 space-y-6">
-            <div className="space-y-4">
-              <h2 className="text-xl font-display font-semibold border-b border-border/50 pb-2">Fetch Configuration</h2>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">Target Category</label>
-                  <select
-                    value={categoryId}
-                    onChange={(e) => setCategoryId(e.target.value)}
-                    className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all"
-                  >
-                    <option value="">{isCategoriesLoading ? "Loading categories..." : "All Categories"}</option>
-                    {categories.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                </div>
-                
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">Keyword Filter</label>
-                  <div className="relative">
-                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                    <input
-                      type="text"
-                      value={keyword}
-                      onChange={(e) => setKeyword(e.target.value)}
-                      placeholder="e.g. iPhone Case"
-                      className="w-full bg-background border border-border rounded-xl pl-9 pr-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all"
-                    />
-                  </div>
-                </div>
+            <h2 className="text-xl font-display font-semibold border-b border-border/50 pb-2">Fetch Configuration</h2>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">API Page</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={page}
-                    onChange={(e) => setPage(parseInt(e.target.value) || 1)}
-                    className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all"
-                  />
-                </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Parent Category</label>
+                <select
+                  value={parentId}
+                  onChange={(e) => handleParentChange(e.target.value)}
+                  className={inputClass}
+                  disabled={parentLoading}
+                >
+                  <option value="">
+                    {parentLoading ? "Loading…" : "— All Categories —"}
+                  </option>
+                  {parentCats.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
 
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground">Items per Page (Limit)</label>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground flex items-center gap-1">
+                  <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+                  Sub-Category
+                  {childLoading && (
+                    <span className="ml-2 w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin inline-block" />
+                  )}
+                </label>
+                <select
+                  value={childId}
+                  onChange={(e) => setChildId(e.target.value)}
+                  className={inputClass}
+                  disabled={!parentId || childLoading || childCats.length === 0}
+                >
+                  <option value="">
+                    {!parentId
+                      ? "Select parent first"
+                      : childLoading
+                      ? "Loading…"
+                      : childCats.length === 0
+                      ? "No sub-categories"
+                      : "— All in parent —"}
+                  </option>
+                  {childCats.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-2 sm:col-span-2">
+                <label className="text-sm font-medium text-foreground">Keyword Filter</label>
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                   <input
-                    type="number"
-                    min="1"
-                    max="100"
-                    value={limit}
-                    onChange={(e) => setLimit(parseInt(e.target.value) || 50)}
-                    className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all"
+                    type="text"
+                    value={keyword}
+                    onChange={(e) => setKeyword(e.target.value)}
+                    placeholder="e.g. iPhone Case"
+                    className="w-full bg-background border border-border rounded-xl pl-9 pr-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all"
                   />
                 </div>
               </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">API Page</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={page}
+                  onChange={(e) => setPage(parseInt(e.target.value) || 1)}
+                  className={inputClass}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">Items per Page</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={limit}
+                  onChange={(e) => setLimit(parseInt(e.target.value) || 50)}
+                  className={inputClass}
+                />
+              </div>
             </div>
+
+            {effectiveCategoryId && (
+              <p className="text-xs text-muted-foreground">
+                Fetching category ID: <span className="font-mono text-primary">{effectiveCategoryId}</span>
+              </p>
+            )}
 
             <div className="pt-2">
               <button
@@ -144,7 +207,7 @@ export default function Sunsky() {
                 ) : (
                   <CloudDownload className="w-6 h-6" />
                 )}
-                {fetchMutation.isPending ? "Fetching Products..." : "Fetch Products"}
+                {fetchMutation.isPending ? "Fetching Products…" : "Fetch Products"}
               </button>
             </div>
           </form>
@@ -153,10 +216,15 @@ export default function Sunsky() {
         <div className="space-y-6">
           <div className="bg-secondary/30 border border-border rounded-2xl p-5">
             <h3 className="font-medium flex items-center gap-2 mb-3">
-              <Info className="w-4 h-4 text-primary" /> API Limits
+              <Info className="w-4 h-4 text-primary" /> How it works
             </h3>
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              Sunsky API imposes rate limits. It is recommended to fetch no more than 50-100 products per request to avoid timeouts. The pipeline will automatically create a background job to process the fetched items.
+            <ol className="text-sm text-muted-foreground leading-relaxed space-y-2 list-decimal list-inside">
+              <li>Pick a parent category (top level)</li>
+              <li>Optionally narrow to a sub-category</li>
+              <li>Set page &amp; limit, then fetch</li>
+            </ol>
+            <p className="text-sm text-muted-foreground mt-3">
+              Max 50–100 items per request to avoid timeouts. Products are saved as drafts and queued for processing.
             </p>
           </div>
 
@@ -164,22 +232,17 @@ export default function Sunsky() {
             <div className="bg-card border border-border/50 rounded-2xl p-5 shadow-lg shadow-black/5 animate-in fade-in slide-in-from-bottom-4">
               <h3 className="font-display font-medium text-lg mb-4">Last Fetch Result</h3>
               <div className="space-y-3">
-                <div className="flex justify-between items-center py-2 border-b border-border/50">
-                  <span className="text-muted-foreground text-sm">Fetched</span>
-                  <span className="font-medium">{lastResult.fetched}</span>
-                </div>
-                <div className="flex justify-between items-center py-2 border-b border-border/50">
-                  <span className="text-muted-foreground text-sm">Saved New</span>
-                  <span className="font-medium text-emerald-400">{lastResult.saved}</span>
-                </div>
-                <div className="flex justify-between items-center py-2 border-b border-border/50">
-                  <span className="text-muted-foreground text-sm">Skipped (Exists)</span>
-                  <span className="font-medium text-amber-400">{lastResult.skipped}</span>
-                </div>
-                <div className="flex justify-between items-center py-2">
-                  <span className="text-muted-foreground text-sm">Created Job</span>
-                  <span className="font-medium text-primary">#{lastResult.jobId}</span>
-                </div>
+                {[
+                  { label: "Fetched", value: lastResult.fetched, color: "" },
+                  { label: "Saved New", value: lastResult.saved, color: "text-emerald-400" },
+                  { label: "Skipped", value: lastResult.skipped, color: "text-amber-400" },
+                  { label: "Job ID", value: `#${lastResult.job_id ?? lastResult.jobId}`, color: "text-primary" },
+                ].map(({ label, value, color }) => (
+                  <div key={label} className="flex justify-between items-center py-2 border-b border-border/50 last:border-0">
+                    <span className="text-muted-foreground text-sm">{label}</span>
+                    <span className={`font-medium ${color}`}>{value}</span>
+                  </div>
+                ))}
               </div>
             </div>
           )}
