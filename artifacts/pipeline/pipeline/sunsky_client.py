@@ -219,19 +219,66 @@ async def get_all_products(
     return all_products
 
 
-async def get_product_detail(product_id: str) -> Optional[dict]:
-    data = await _post("product!getDetail.do", {"id": product_id})
-    raw = data.get("data", data.get("result", {}))
-    # Handle nested: {"data": {"result": {...}}}
-    if isinstance(raw, dict) and not raw.get("id") and not raw.get("itemNo"):
-        for candidate_key in ("result", "data", "product", "item"):
-            candidate = raw.get(candidate_key)
-            if isinstance(candidate, dict) and (candidate.get("id") or candidate.get("itemNo")):
-                raw = candidate
-                break
-    if not raw or not isinstance(raw, dict):
+async def _post_binary(endpoint: str, params: dict) -> Optional[bytes]:
+    """POST request that expects a binary (e.g. ZIP) response instead of JSON."""
+    params = dict(params)
+    params["key"] = settings.sunsky_api_key
+    params["signature"] = _build_signature(params)
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+        resp = await client.post(f"{SUNSKY_BASE}/{endpoint.lstrip('/')}", data=params)
+
+        if resp.status_code == 404:
+            return None
+
+        resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "")
+        if "application/json" in content_type or "text/" in content_type:
+            # API returned JSON instead of binary — check for error
+            try:
+                data = resp.json()
+                result_field = str(data.get("result", "")).lower()
+                if result_field == "error":
+                    msgs = data.get("messages", data.get("message", ""))
+                    raise ValueError(f"Sunsky API error for {endpoint}: {msgs}")
+            except (ValueError, AttributeError):
+                raise
+            return None
+
+        return resp.content
+
+
+async def get_product_detail(item_no: str) -> Optional[dict]:
+    """
+    Fetch full product information using the correct endpoint:
+      POST product!detail.do  with param itemNo=<SKU>
+    """
+    try:
+        data = await _post("product!detail.do", {"itemNo": item_no, "lang": "en"})
+        raw = data.get("data", {})
+        if not raw or not isinstance(raw, dict):
+            return None
+        return _normalise_product(raw)
+    except Exception as exc:
+        print(f"[sunsky_client] get_product_detail({item_no!r}) failed: {exc}")
         return None
-    return _normalise_product(raw)
+
+
+async def download_product_images(item_no: str, size: str = "middle", watermark: int = 0) -> Optional[bytes]:
+    """
+    Download all product images as a ZIP archive.
+      POST product!getImages.do  with params itemNo, size, watermark
+    Returns raw ZIP bytes, or None if the product has no images / not found.
+    """
+    try:
+        return await _post_binary(
+            "product!getImages.do",
+            {"itemNo": item_no, "size": size, "watermark": watermark},
+        )
+    except Exception as exc:
+        print(f"[sunsky_client] download_product_images({item_no!r}) failed: {exc}")
+        return None
 
 
 def _normalise_product(raw: dict) -> dict:

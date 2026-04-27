@@ -11,6 +11,7 @@ if _pkg_dir not in sys.path:
 
 import asyncio
 from pathlib import Path
+from typing import Optional
 from celery_app import celery_app
 
 
@@ -271,7 +272,14 @@ async def _run_process(db, job):
         await db.commit()
 
         try:
+            import io, zipfile
+            from pipeline import sunsky_client
+
             raw = product.raw_data or {}
+            # The SKU is the Sunsky itemNo — use it for all API calls
+            item_no = product.sku or product.sunsky_id
+
+            # ── Stage 1: image URLs already in raw_data (rare, cached from prior run) ──
             image_urls = raw.get("images", [])
             if isinstance(image_urls, str):
                 image_urls = [image_urls]
@@ -279,41 +287,96 @@ async def _run_process(db, job):
                 u for u in image_urls if isinstance(u, str) and u.startswith("http")
             ][:5]
 
-            # Sunsky product search does NOT include images — fetch from detail API
-            if not image_urls and product.sunsky_id:
+            # ── Stage 2: fetch product detail (correct endpoint: product!detail.do) ──
+            zip_bytes: Optional[bytes] = None
+            if not image_urls and item_no:
                 await _log(db, job.id, LogLevel.info,
-                           f"  {product.sku}: no images in raw_data, fetching from Sunsky detail API…")
-                try:
-                    from pipeline import sunsky_client
-                    detail = await sunsky_client.get_product_detail(product.sunsky_id)
-                    if detail:
-                        image_urls = [
-                            u for u in detail.get("images", [])
-                            if isinstance(u, str) and u.startswith("http")
-                        ][:5]
-                        if image_urls:
-                            updated_raw = {**(product.raw_data or {}), "images": image_urls}
-                            product.raw_data = updated_raw
-                            product.image_count = len(image_urls)
-                            await db.commit()
-                            await _log(db, job.id, LogLevel.info,
-                                       f"  {product.sku}: got {len(image_urls)} image(s) from detail API")
-                        else:
-                            await _log(db, job.id, LogLevel.warn,
-                                       f"  {product.sku}: detail API returned no images either")
-                except Exception as detail_err:
+                           f"  {product.sku}: fetching detail from Sunsky (product!detail.do)…")
+                detail = await sunsky_client.get_product_detail(item_no)
+                if detail:
+                    image_urls = [
+                        u for u in detail.get("images", [])
+                        if isinstance(u, str) and u.startswith("http")
+                    ][:5]
+                    if image_urls:
+                        updated_raw = {**raw, "images": image_urls}
+                        product.raw_data = updated_raw
+                        product.image_count = len(image_urls)
+                        await db.commit()
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  {product.sku}: {len(image_urls)} image URL(s) from detail API")
+
+            # ── Stage 3: download ZIP via product!getImages.do ──
+            if not image_urls and item_no:
+                await _log(db, job.id, LogLevel.info,
+                           f"  {product.sku}: downloading images ZIP from Sunsky (product!getImages.do)…")
+                zip_bytes = await sunsky_client.download_product_images(item_no, size="middle")
+                if zip_bytes:
+                    await _log(db, job.id, LogLevel.info,
+                               f"  {product.sku}: ZIP received ({len(zip_bytes):,} bytes)")
+                else:
                     await _log(db, job.id, LogLevel.warn,
-                               f"  {product.sku}: detail API error: {detail_err}")
+                               f"  {product.sku}: no images available from any Sunsky source")
 
             await _log(db, job.id, LogLevel.info,
-                       f"Processing {product.sku}: {len(image_urls)} image(s)")
+                       f"Processing {product.sku}: "
+                       f"{'ZIP' if zip_bytes else str(len(image_urls)) + ' URL(s)'}")
 
             processed_count = 0
+
+            # ── Process from ZIP bytes ──
+            if zip_bytes:
+                try:
+                    zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+                    img_names = sorted([
+                        n for n in zf.namelist()
+                        if n.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
+                        and not n.startswith("__MACOSX")
+                    ])[:5]
+
+                    for pos, name in enumerate(img_names):
+                        ext = name.rsplit(".", 1)[-1].lower()
+                        img_data = zf.read(name)
+                        processed_path = await processor.process_from_bytes(
+                            img_data, product.sku, pos, ext
+                        )
+                        if processed_path:
+                            db.add(Image(
+                                product_id=product.id,
+                                original_url=f"sunsky-zip://{item_no}/{name}",
+                                processed_path=processed_path,
+                                position=pos,
+                                status=ImageStatus.watermarked,
+                                is_main=(pos == 0),
+                            ))
+                            processed_count += 1
+                            total_images_ok += 1
+                            await _log(db, job.id, LogLevel.debug,
+                                       f"  [{product.sku}] ZIP img {pos} ({name}) OK → {processed_path}")
+                        else:
+                            db.add(Image(
+                                product_id=product.id,
+                                original_url=f"sunsky-zip://{item_no}/{name}",
+                                position=pos,
+                                status=ImageStatus.failed,
+                                is_main=(pos == 0),
+                                error_message="process_from_bytes returned None",
+                            ))
+                            total_images_fail += 1
+                            await _log(db, job.id, LogLevel.warn,
+                                       f"  [{product.sku}] ZIP img {pos} ({name}) FAILED")
+
+                    product.image_count = processed_count
+                    await db.commit()
+                except zipfile.BadZipFile as zf_err:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  {product.sku}: invalid ZIP from Sunsky: {zf_err}")
+
+            # ── Process from URLs (stage 1 or 2) ──
             for pos, url in enumerate(image_urls):
                 processed_path = None
                 img_error = None
 
-                # Retry loop for image download/processing
                 for attempt in range(1, 4):
                     try:
                         processed_path = await processor.process(url, product.sku, pos)

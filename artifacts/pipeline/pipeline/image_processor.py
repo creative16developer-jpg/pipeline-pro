@@ -39,6 +39,27 @@ class ImageProcessor:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
 
+    async def process_from_bytes(self, image_bytes: bytes, sku: str, position: int = 0, ext: str = "jpg") -> Optional[str]:
+        """
+        Process an image supplied as raw bytes (e.g. extracted from a ZIP archive).
+        Returns the saved WebP file path, or None on failure.
+        """
+        try:
+            safe_sku = sku.replace("/", "_").replace("\\", "_")
+            if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+                ext = "jpg"
+            raw_filename = f"{safe_sku}_{position}.{ext}"
+            raw_path = self.raw_dir / raw_filename
+            raw_path.write_bytes(image_bytes)
+
+            processed_path = await asyncio.get_event_loop().run_in_executor(
+                None, self._process_sync, raw_path, sku, position
+            )
+            return processed_path
+        except Exception as e:
+            print(f"[ImageProcessor] Error processing bytes for {sku} pos {position}: {e}")
+            return None
+
     async def process(self, url: str, sku: str, position: int = 0) -> Optional[str]:
         """
         Download, process, and save an image. Returns the saved file path.
