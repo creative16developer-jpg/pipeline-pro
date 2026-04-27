@@ -45,11 +45,21 @@ async def _post(endpoint: str, params: dict) -> dict:
                 resp = await client.post(f"{SUNSKY_BASE}/{endpoint.lstrip('/')}", data=params)
                 resp.raise_for_status()
                 data = resp.json()
+
+                # Check for business-logic error (no retry needed)
+                result_field = str(data.get("result", "")).lower()
+                if result_field == "error":
+                    msgs = data.get("messages", data.get("message", data.get("msg", "")))
+                    raise ValueError(f"Sunsky API error for {endpoint}: {msgs}")
+
                 code = data.get("code", 0)
                 if code not in (0, 200, None):
                     msg = data.get("message", data.get("msg", str(data)))
                     raise ValueError(f"Sunsky API error (code={code}): {msg}")
                 return data
+        except ValueError:
+            # Business-logic errors — don't retry
+            raise
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             last_error = exc
             if attempt < MAX_RETRIES:
@@ -212,7 +222,14 @@ async def get_all_products(
 async def get_product_detail(product_id: str) -> Optional[dict]:
     data = await _post("product!getDetail.do", {"id": product_id})
     raw = data.get("data", data.get("result", {}))
-    if not raw:
+    # Handle nested: {"data": {"result": {...}}}
+    if isinstance(raw, dict) and not raw.get("id") and not raw.get("itemNo"):
+        for candidate_key in ("result", "data", "product", "item"):
+            candidate = raw.get(candidate_key)
+            if isinstance(candidate, dict) and (candidate.get("id") or candidate.get("itemNo")):
+                raw = candidate
+                break
+    if not raw or not isinstance(raw, dict):
         return None
     return _normalise_product(raw)
 

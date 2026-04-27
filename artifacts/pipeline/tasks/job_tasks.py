@@ -279,6 +279,32 @@ async def _run_process(db, job):
                 u for u in image_urls if isinstance(u, str) and u.startswith("http")
             ][:5]
 
+            # Sunsky product search does NOT include images — fetch from detail API
+            if not image_urls and product.sunsky_id:
+                await _log(db, job.id, LogLevel.info,
+                           f"  {product.sku}: no images in raw_data, fetching from Sunsky detail API…")
+                try:
+                    from pipeline import sunsky_client
+                    detail = await sunsky_client.get_product_detail(product.sunsky_id)
+                    if detail:
+                        image_urls = [
+                            u for u in detail.get("images", [])
+                            if isinstance(u, str) and u.startswith("http")
+                        ][:5]
+                        if image_urls:
+                            updated_raw = {**(product.raw_data or {}), "images": image_urls}
+                            product.raw_data = updated_raw
+                            product.image_count = len(image_urls)
+                            await db.commit()
+                            await _log(db, job.id, LogLevel.info,
+                                       f"  {product.sku}: got {len(image_urls)} image(s) from detail API")
+                        else:
+                            await _log(db, job.id, LogLevel.warn,
+                                       f"  {product.sku}: detail API returned no images either")
+                except Exception as detail_err:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  {product.sku}: detail API error: {detail_err}")
+
             await _log(db, job.id, LogLevel.info,
                        f"Processing {product.sku}: {len(image_urls)} image(s)")
 
@@ -427,7 +453,33 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
     if fallback:
         await _log(db, job.id, LogLevel.warn,
                    f"  {product.sku}: no processed images — using {len(fallback)} raw Sunsky URL(s)")
-    return fallback
+        return fallback
+
+    # Last resort: try Sunsky detail API to get fresh image URLs
+    if product.sunsky_id:
+        try:
+            from pipeline import sunsky_client
+            detail = await sunsky_client.get_product_detail(product.sunsky_id)
+            if detail:
+                api_imgs = [
+                    u for u in detail.get("images", [])
+                    if isinstance(u, str) and u.startswith("http")
+                ][:5]
+                if api_imgs:
+                    # Cache into raw_data for future runs
+                    updated_raw = {**(product.raw_data or {}), "images": api_imgs}
+                    product.raw_data = updated_raw
+                    product.image_count = len(api_imgs)
+                    await db.commit()
+                    await _log(db, job.id, LogLevel.info,
+                               f"  {product.sku}: got {len(api_imgs)} image(s) from Sunsky detail API")
+                    return api_imgs
+        except Exception as detail_err:
+            await _log(db, job.id, LogLevel.warn,
+                       f"  {product.sku}: detail API unavailable: {detail_err}")
+
+    await _log(db, job.id, LogLevel.warn, f"  {product.sku}: no images available from any source")
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +512,7 @@ async def _run_upload(db, job):
         )
 
     cfg = job.config or {}
-    skip_images = cfg.get("skip_images", True)
+    skip_images = cfg.get("skip_images", False)
     limit = cfg.get("limit", 200)
 
     # ── Resolve which products to upload, scoped by source job
