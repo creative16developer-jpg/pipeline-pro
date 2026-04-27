@@ -810,6 +810,29 @@ async def _run_sync(db, job):
         await _log(db, job.id, LogLevel.error, f"Store #{store_id} not found")
         return
 
+    # ── Resolve the fetch_job_id from the source upload job (if any) ──
+    # source_job_id is an Upload job.  Upload jobs themselves may have a
+    # source_job_id pointing to a Fetch job.  We need the Fetch job ID so
+    # we can filter products by fetch_job_id.
+    resolved_fetch_job_id: Optional[int] = None
+    if source_job_id:
+        from models.models import Job as JobModel, JobType as JobTypeEnum
+        upload_job = await db.get(JobModel, int(source_job_id))
+        if upload_job:
+            if upload_job.source_job_id:
+                # Upload job was scoped to a specific fetch job
+                resolved_fetch_job_id = upload_job.source_job_id
+                await _log(db, job.id, LogLevel.info,
+                           f"Scoped to upload job #{source_job_id} → fetch job #{resolved_fetch_job_id}")
+            else:
+                await _log(db, job.id, LogLevel.info,
+                           f"Scoped to upload job #{source_job_id} (no fetch-job filter — covers all uploaded products)")
+        else:
+            await _log(db, job.id, LogLevel.warn,
+                       f"Upload job #{source_job_id} not found — syncing ALL uploaded products")
+    else:
+        await _log(db, job.id, LogLevel.info, "No source job — syncing ALL uploaded products")
+
     await _log(db, job.id, LogLevel.info,
                f"Starting sync → store: {store.name} | categories={do_categories} | attributes={do_attributes}")
 
@@ -817,8 +840,30 @@ async def _run_sync(db, job):
     attrs_synced = attrs_created = terms_created = 0
     products_updated = 0
 
+    # ── Helper: build the product query scoped to the resolved job ──
+    def _scoped_product_q(extra_filters=None):
+        q = select(Product).where(
+            Product.woo_product_id.isnot(None),
+            Product.status == ProductStatus.uploaded,
+        )
+        if resolved_fetch_job_id:
+            q = q.where(Product.fetch_job_id == resolved_fetch_job_id)
+        if extra_filters:
+            for f in extra_filters:
+                q = q.where(f)
+        return q.limit(limit)
+
+    # ── Helper: extract Sunsky category_id from a product row ──
+    def _get_sunsky_cat_id(prod) -> str:
+        raw = prod.raw_data or {}
+        return (
+            str(raw.get("categoryId") or "").strip()
+            or str(raw.get("category_id") or "").strip()
+            or str(prod.category_id or "").strip()
+        )
+
     # ─────────────────────────────────────────────────────────────────────────
-    # STEP A: Sync Sunsky categories → WooCommerce
+    # STEP A: Sync only the categories actually used by the target products
     # ─────────────────────────────────────────────────────────────────────────
     # sunsky_cat_id → woo_cat_id mapping (used later for product category update)
     sunsky_to_woo_cat: dict[str, int] = {}
@@ -826,121 +871,152 @@ async def _run_sync(db, job):
     if do_categories:
         await _log(db, job.id, LogLevel.info, "── Step A: Syncing categories ──")
 
-        # Load all existing WooCommerce categories into a lookup: (name_lower, parent_woo_id) → woo_id
-        existing_woo_cats = await woo_client.get_all_woo_categories(store)
-        woo_cat_lookup: dict[tuple, int] = {
-            (c["name"].lower(), int(c.get("parent") or 0)): c["id"]
-            for c in existing_woo_cats
-        }
-        await _log(db, job.id, LogLevel.info, f"  {len(existing_woo_cats)} existing WooCommerce categories loaded")
-
-        # Fetch Sunsky parent categories
-        try:
-            parents = await sunsky_client.get_categories("0")
-        except Exception as e:
-            await _log(db, job.id, LogLevel.error, f"  Failed to fetch Sunsky parent categories: {e}")
-            parents = []
-
-        job.total_items = (job.total_items or 0) + len(parents)
+        # 1. Collect the unique Sunsky category IDs from the target products
+        target_products = (await db.execute(_scoped_product_q())).scalars().all()
+        job.total_items = len(target_products)
         await db.commit()
 
-        for parent in parents:
-            parent_woo_id = woo_cat_lookup.get((parent["name"].lower(), 0))
-            if not parent_woo_id:
+        needed_cat_ids: set[str] = set()
+        for prod in target_products:
+            cid = _get_sunsky_cat_id(prod)
+            if cid:
+                needed_cat_ids.add(cid)
+
+        if not needed_cat_ids:
+            await _log(db, job.id, LogLevel.warn,
+                       "  No Sunsky category IDs found on target products — skipping category sync")
+        else:
+            await _log(db, job.id, LogLevel.info,
+                       f"  {len(target_products)} product(s) use {len(needed_cat_ids)} unique category ID(s): "
+                       f"{', '.join(sorted(needed_cat_ids))}")
+
+            # 2. Load existing WooCommerce categories: (name_lower, parent_woo_id) → woo_id
+            existing_woo_cats = await woo_client.get_all_woo_categories(store)
+            woo_cat_lookup: dict[tuple, int] = {
+                (c["name"].lower(), int(c.get("parent") or 0)): c["id"]
+                for c in existing_woo_cats
+            }
+            await _log(db, job.id, LogLevel.info,
+                       f"  {len(existing_woo_cats)} existing WooCommerce categories loaded")
+
+            # 3. Traverse Sunsky category tree — only create/find categories we actually need
+            try:
+                parents = await sunsky_client.get_categories("0")
+            except Exception as e:
+                await _log(db, job.id, LogLevel.error, f"  Failed to fetch Sunsky parent categories: {e}")
+                parents = []
+
+            remaining = set(needed_cat_ids)  # track which ones we haven't found yet
+
+            for parent in parents:
+                parent_ids = {parent["id"]} | ({parent["alias_id"]} if parent.get("alias_id") else set())
+
+                # Fetch this parent's children to check if any are needed
+                fetch_parent_id = parent["id"] or parent.get("alias_id", "")
                 try:
-                    created = await woo_client.create_woo_category(store, parent["name"], 0)
-                    parent_woo_id = created["id"]
-                    woo_cat_lookup[(parent["name"].lower(), 0)] = parent_woo_id
-                    cats_created += 1
-                    await _log(db, job.id, LogLevel.debug,
-                               f"  Created WooCommerce category: {parent['name']} (id={parent_woo_id})")
+                    children = await sunsky_client.get_categories(fetch_parent_id)
                 except Exception as e:
                     await _log(db, job.id, LogLevel.warn,
-                               f"  Could not create category {parent['name']!r}: {e}")
-                    continue
-            else:
-                cats_synced += 1
+                               f"  Could not fetch children of {parent['name']}: {e}")
+                    children = []
 
-            sunsky_to_woo_cat[parent["id"]] = parent_woo_id
-            if parent.get("alias_id"):
-                sunsky_to_woo_cat[parent["alias_id"]] = parent_woo_id
+                child_ids_needed = {
+                    c["id"] for c in children
+                    if ({c["id"]} | ({c.get("alias_id")} if c.get("alias_id") else set())) & needed_cat_ids
+                }
+                parent_needed = bool(parent_ids & needed_cat_ids) or bool(child_ids_needed)
 
-            # Fetch children of this parent — use raw primary ID for API call
-            fetch_parent_id = parent["id"] or parent.get("alias_id", "")
-            try:
-                children = await sunsky_client.get_categories(fetch_parent_id)
-            except Exception as e:
-                await _log(db, job.id, LogLevel.warn, f"  Could not fetch children of {parent['name']}: {e}")
-                children = []
+                if not parent_needed:
+                    continue  # skip this entire branch
 
-            for child in children:
-                child_woo_id = woo_cat_lookup.get((child["name"].lower(), parent_woo_id))
-                if not child_woo_id:
+                # Ensure parent category exists in WooCommerce
+                parent_woo_id = woo_cat_lookup.get((parent["name"].lower(), 0))
+                if not parent_woo_id:
                     try:
-                        created = await woo_client.create_woo_category(store, child["name"], parent_woo_id)
-                        child_woo_id = created["id"]
-                        woo_cat_lookup[(child["name"].lower(), parent_woo_id)] = child_woo_id
+                        created = await woo_client.create_woo_category(store, parent["name"], 0)
+                        parent_woo_id = created["id"]
+                        woo_cat_lookup[(parent["name"].lower(), 0)] = parent_woo_id
                         cats_created += 1
-                        await _log(db, job.id, LogLevel.debug,
-                                   f"    Created sub-category: {child['name']} (id={child_woo_id})")
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  Created parent category: {parent['name']} → WooCommerce #{parent_woo_id}")
                     except Exception as e:
                         await _log(db, job.id, LogLevel.warn,
-                                   f"    Could not create sub-category {child['name']!r}: {e}")
+                                   f"  Could not create parent category {parent['name']!r}: {e}")
                         continue
                 else:
                     cats_synced += 1
+                    await _log(db, job.id, LogLevel.debug,
+                               f"  Parent category exists: {parent['name']} → WooCommerce #{parent_woo_id}")
 
-                sunsky_to_woo_cat[child["id"]] = child_woo_id
-                if child.get("alias_id"):
-                    sunsky_to_woo_cat[child["alias_id"]] = child_woo_id
+                for pid in parent_ids:
+                    sunsky_to_woo_cat[pid] = parent_woo_id
+                remaining -= parent_ids
 
-        await _log(db, job.id, LogLevel.info,
-                   f"  Categories done: {cats_created} created, {cats_synced} already existed "
-                   f"({len(sunsky_to_woo_cat)} total mapped)")
+                # Process only children that are actually needed
+                for child in children:
+                    child_ids = {child["id"]} | ({child["alias_id"]} if child.get("alias_id") else set())
+                    if not (child_ids & needed_cat_ids):
+                        continue  # this sub-category not needed by any product
 
-        # Update WooCommerce products with the correct category
-        await _log(db, job.id, LogLevel.info, "  Updating product categories in WooCommerce…")
-        cat_q = select(Product).where(
-            Product.woo_product_id.isnot(None),
-            Product.status == ProductStatus.uploaded,
-        )
-        if source_job_id:
-            cat_q = cat_q.where(Product.fetch_job_id == source_job_id)
-        cat_q = cat_q.limit(limit)
-        cat_products = (await db.execute(cat_q)).scalars().all()
+                    child_woo_id = woo_cat_lookup.get((child["name"].lower(), parent_woo_id))
+                    if not child_woo_id:
+                        try:
+                            created = await woo_client.create_woo_category(
+                                store, child["name"], parent_woo_id
+                            )
+                            child_woo_id = created["id"]
+                            woo_cat_lookup[(child["name"].lower(), parent_woo_id)] = child_woo_id
+                            cats_created += 1
+                            await _log(db, job.id, LogLevel.info,
+                                       f"    Created sub-category: {child['name']} → WooCommerce #{child_woo_id}")
+                        except Exception as e:
+                            await _log(db, job.id, LogLevel.warn,
+                                       f"    Could not create sub-category {child['name']!r}: {e}")
+                            continue
+                    else:
+                        cats_synced += 1
+                        await _log(db, job.id, LogLevel.debug,
+                                   f"    Sub-category exists: {child['name']} → WooCommerce #{child_woo_id}")
 
-        cat_ok = cat_miss = 0
-        for prod in cat_products:
-            raw = prod.raw_data or {}
-            # Try multiple sources for the Sunsky category ID
-            sunsky_cat_id = (
-                str(raw.get("categoryId") or "").strip()          # from raw Sunsky search data
-                or str(raw.get("category_id") or "").strip()      # normalized field stored in raw_data
-                or str(prod.category_id or "").strip()            # Product model column
-            )
-            woo_cat_id = sunsky_to_woo_cat.get(sunsky_cat_id)
-            if woo_cat_id and prod.woo_product_id:
-                try:
-                    await woo_client.set_product_categories(store, prod.woo_product_id, [woo_cat_id])
-                    products_updated += 1
-                    cat_ok += 1
-                except Exception as e:
-                    await _log(db, job.id, LogLevel.warn,
-                               f"  Could not update category for product {prod.sku}: {e}")
-            elif not woo_cat_id and sunsky_cat_id:
-                cat_miss += 1
-                await _log(db, job.id, LogLevel.debug,
-                           f"  {prod.sku}: Sunsky cat_id={sunsky_cat_id!r} not in mapping (skipped)")
-            elif not sunsky_cat_id:
-                await _log(db, job.id, LogLevel.debug,
-                           f"  {prod.sku}: no category_id found on product (skipped)")
-        if cat_miss:
-            await _log(db, job.id, LogLevel.warn,
-                       f"  {cat_miss} product(s) had a category_id not found in the Sunsky→WooCommerce map "
-                       f"(they may belong to a sub-category not returned by the top-2-level tree)")
+                    for cid in child_ids:
+                        sunsky_to_woo_cat[cid] = child_woo_id
+                    remaining -= child_ids
 
-        await _log(db, job.id, LogLevel.info,
-                   f"  Category update done: {products_updated} product(s) updated")
+            if remaining:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Could not find Sunsky categories for IDs: {', '.join(sorted(remaining))} "
+                           f"(may be >2 levels deep or not in Sunsky API)")
+
+            await _log(db, job.id, LogLevel.info,
+                       f"  Categories: {cats_created} created, {cats_synced} already existed "
+                       f"({len(sunsky_to_woo_cat)} total mapped)")
+
+            # 4. Assign the correct WooCommerce category to each product
+            await _log(db, job.id, LogLevel.info, "  Assigning categories to WooCommerce products…")
+            cat_ok = cat_miss = 0
+            for prod in target_products:
+                sunsky_cat_id = _get_sunsky_cat_id(prod)
+                woo_cat_id = sunsky_to_woo_cat.get(sunsky_cat_id)
+                if woo_cat_id and prod.woo_product_id:
+                    try:
+                        await woo_client.set_product_categories(store, prod.woo_product_id, [woo_cat_id])
+                        products_updated += 1
+                        cat_ok += 1
+                        await _log(db, job.id, LogLevel.debug,
+                                   f"  {prod.sku} → category assigned (woo_cat={woo_cat_id})")
+                    except Exception as e:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  Could not set category for {prod.sku}: {e}")
+                elif not sunsky_cat_id:
+                    await _log(db, job.id, LogLevel.debug,
+                               f"  {prod.sku}: no category_id on product — skipped")
+                else:
+                    cat_miss += 1
+                    await _log(db, job.id, LogLevel.debug,
+                               f"  {prod.sku}: category {sunsky_cat_id!r} not mapped — skipped")
+
+            await _log(db, job.id, LogLevel.info,
+                       f"  Category assignment: {cat_ok} product(s) updated, {cat_miss} skipped (unmapped)")
 
     # ─────────────────────────────────────────────────────────────────────────
     # STEP B: Sync product attributes → WooCommerce
@@ -990,12 +1066,8 @@ async def _run_sync(db, job):
                            f"  Could not create term {term_name!r} for attr {attr_id}: {e}")
                 return None
 
-        # Query uploaded products with a woo_product_id
-        attr_q = select(Product).where(Product.woo_product_id.isnot(None))
-        if source_job_id:
-            attr_q = attr_q.where(Product.fetch_job_id == source_job_id)
-        attr_q = attr_q.limit(limit)
-        attr_products = (await db.execute(attr_q)).scalars().all()
+        # Query the same scoped product set used for categories
+        attr_products = (await db.execute(_scoped_product_q())).scalars().all()
 
         job.total_items = (job.total_items or 0) + len(attr_products)
         await db.commit()
