@@ -839,8 +839,13 @@ async def _run_upload(db, job):
                    f"{len(woo_global_attrs)} global attributes loaded | "
                    f"Sunsky cache: {len(p2_cat_cache)} entries")
 
-        # ── Helper: recursively ensure a category exists in WooCommerce ──
+        # ── Helper: ensure one category node exists in WooCommerce ──────
         async def _p2_ensure_cat(sunsky_id: str, _g: int = 0) -> Optional[int]:
+            """
+            Get-or-create the WooCommerce category for a single Sunsky ID.
+            Creates parent categories first (recursive, max depth 8).
+            Returns the WooCommerce category ID, or None on failure.
+            """
             if _g > 8 or not sunsky_id or sunsky_id == "0":
                 return None
             if sunsky_id in p2_woo_id_cache:
@@ -851,7 +856,7 @@ async def _run_upload(db, job):
             name = (meta.get("name") or "").strip()
             if not name:
                 return None
-            parent_sid = meta.get("sunsky_parent_id", "0")
+            parent_sid = (meta.get("sunsky_parent_id") or "0").strip()
             woo_parent = 0
             if parent_sid and parent_sid != "0":
                 woo_parent = await _p2_ensure_cat(parent_sid, _g + 1) or 0
@@ -866,7 +871,8 @@ async def _run_upload(db, job):
                     p2_cat_by_key[(name.lower(), woo_parent)] = woo_id
                     p2_cat_by_name[name.lower()] = woo_id
                     await _log(db, job.id, LogLevel.info,
-                               f"  {'  ' * _g}↳ Created category: {name} → WooCommerce #{woo_id}")
+                               f"  {'  ' * _g}↳ Created WooCommerce category: "
+                               f"{name!r} (parent woo_id={woo_parent}) → #{woo_id}")
                 except Exception as _ce:
                     await _log(db, job.id, LogLevel.warn,
                                f"  Cannot create WooCommerce category {name!r}: {_ce}")
@@ -876,6 +882,40 @@ async def _run_upload(db, job):
                 p2_woo_id_cache[alias] = woo_id
             p2_woo_id_cache[sunsky_id] = woo_id
             return woo_id
+
+        # ── Helper: collect full category hierarchy (root → leaf) ────────
+        async def _p2_collect_hierarchy(
+            sunsky_id: str,
+        ) -> tuple[list[int], list[str]]:
+            """
+            Walk the cached Sunsky parent chain from root to leaf.
+            Returns:
+              woo_ids  — WooCommerce category IDs for every level
+              names    — human-readable names, same order (for logging)
+            Only disk-cache data is used — no Sunsky API calls.
+            Example result: ([12, 47, 203], ["Electronics", "Mobile Accessories", "Chargers"])
+            """
+            # Build the chain leaf → root, then reverse to root → leaf
+            chain: list[str] = []
+            cur = sunsky_id
+            visited: set[str] = set()
+            while cur and cur != "0" and cur not in visited:
+                visited.add(cur)
+                chain.append(cur)
+                meta = p2_cat_cache.get(cur)
+                if not meta:
+                    break
+                cur = (meta.get("sunsky_parent_id") or "0").strip()
+            chain.reverse()  # root → leaf
+
+            woo_ids: list[int] = []
+            names: list[str] = []
+            for sid in chain:
+                wid = await _p2_ensure_cat(sid)
+                if wid:
+                    woo_ids.append(wid)
+                    names.append((p2_cat_cache.get(sid) or {}).get("name", sid))
+            return woo_ids, names
 
         # ── Helper: get-or-create a global WooCommerce attribute ─────────
         async def _p2_get_or_create_attr(name: str) -> Optional[dict]:
@@ -930,13 +970,14 @@ async def _run_upload(db, job):
                     cat_name_direct = _v.strip()
                     break
 
-            woo_cat_id: Optional[int] = None
+            # Primary: resolve via disk cache → full hierarchy root → leaf
+            cat_woo_ids: list[int] = []
+            cat_names:   list[str] = []
             if sunsky_cat_id:
-                # Primary: resolve via disk cache (full ancestor chain)
-                woo_cat_id = await _p2_ensure_cat(sunsky_cat_id)
+                cat_woo_ids, cat_names = await _p2_collect_hierarchy(sunsky_cat_id)
 
-            if not woo_cat_id and cat_name_direct:
-                # Fallback: use Sunsky's own catName field
+            # Fallback: if cache miss but raw_data has a plain category name
+            if not cat_woo_ids and cat_name_direct:
                 woo_cat_id = p2_cat_by_name.get(cat_name_direct.lower())
                 if not woo_cat_id:
                     try:
@@ -946,20 +987,27 @@ async def _run_upload(db, job):
                         woo_cat_id = resp["id"]
                         p2_cat_by_name[cat_name_direct.lower()] = woo_cat_id
                         await _log(db, job.id, LogLevel.info,
-                                   f"  Created category (from raw catName): "
-                                   f"{cat_name_direct} → #{woo_cat_id}")
+                                   f"  Created WooCommerce category (from catName field): "
+                                   f"{cat_name_direct!r} → #{woo_cat_id}")
                     except Exception as _ce:
-                        pass
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  Cannot create fallback category {cat_name_direct!r}: {_ce}")
+                if woo_cat_id:
+                    cat_woo_ids = [woo_cat_id]
+                    cat_names   = [cat_name_direct]
 
-            cat_payload = [woo_cat_id] if woo_cat_id else []
+            # Set the full category hierarchy on the product
             try:
                 await woo_client.set_product_categories(
-                    store, prod.woo_product_id, cat_payload
+                    store, prod.woo_product_id, cat_woo_ids
                 )
-                if woo_cat_id:
+                if cat_woo_ids:
                     p2_cat_ok += 1
+                    path_str = " → ".join(cat_names) or str(cat_woo_ids)
                     await _log(db, job.id, LogLevel.info,
-                               f"  ✓ {prod.sku} → category #{woo_cat_id}")
+                               f"  ✓ {prod.sku} → {len(cat_woo_ids)}-level hierarchy: "
+                               f"{path_str} "
+                               f"(woo ids: {cat_woo_ids})")
                 else:
                     p2_cat_miss += 1
                     await _log(db, job.id, LogLevel.warn,
@@ -971,7 +1019,9 @@ async def _run_upload(db, job):
 
             # ── Attributes (entirely from raw_data — no Sunsky API calls) ─
             woo_attrs: list[dict] = []
+            seen_attr_ids: set[int] = set()   # deduplication guard
 
+            # Variant attribute: modelLabel (name) + optionList (values)
             model_label = str(raw.get("modelLabel") or "").strip()
             option_list = raw.get("optionList") or {}
             if isinstance(option_list, str):
@@ -991,24 +1041,29 @@ async def _run_upload(db, job):
 
             if model_label and option_values:
                 attr = await _p2_get_or_create_attr(model_label)
-                if attr:
+                if attr and attr["id"] not in seen_attr_ids:
+                    seen_attr_ids.add(attr["id"])
                     for val in option_values:
                         await _p2_get_or_create_term(attr["id"], val)
                     woo_attrs.append({
                         "id": attr["id"],
                         "name": attr["name"],
-                        "options": option_values[:10],
+                        "options": option_values,
                         "visible": True,
                         "variation": True,
                     })
 
+            # Spec attributes: paramsTable key→value pairs
             params_html = str(raw.get("paramsTable") or "")
             if params_html:
-                for spec_key, spec_val in list(_parse_params_table(params_html).items())[:15]:
-                    if len(spec_key) > 60 or len(spec_val) > 100:
+                for spec_key, spec_val in _parse_params_table(params_html).items():
+                    if not spec_key or not spec_val:
+                        continue
+                    if len(spec_key) > 60 or len(spec_val) > 200:
                         continue
                     attr = await _p2_get_or_create_attr(spec_key)
-                    if attr:
+                    if attr and attr["id"] not in seen_attr_ids:
+                        seen_attr_ids.add(attr["id"])
                         await _p2_get_or_create_term(attr["id"], spec_val)
                         woo_attrs.append({
                             "id": attr["id"],
