@@ -810,23 +810,44 @@ async def _run_sync(db, job):
         await _log(db, job.id, LogLevel.error, f"Store #{store_id} not found")
         return
 
-    # ── Resolve the fetch_job_id from the source upload job (if any) ──
-    # source_job_id is an Upload job.  Upload jobs themselves may have a
-    # source_job_id pointing to a Fetch job.  We need the Fetch job ID so
-    # we can filter products by fetch_job_id.
+    # ── Resolve the fetch_job_id that products were stamped with ──────────
+    #
+    # The sync's source_job_id points at an UPLOAD job.
+    # Products are stamped with fetch_job_id (not upload_job_id or process_job_id).
+    # So we must follow the same two-hop chain the upload job used:
+    #
+    #   sync.source_job_id  →  upload job
+    #   upload.source_job_id  →  may be a PROCESS job or a FETCH job
+    #       if PROCESS: upload.source_job_id.source_job_id  →  the FETCH job
+    #       if FETCH:   upload.source_job_id                →  the FETCH job
+    #
+    # This mirrors _run_upload's resolution logic exactly.
+    from models.models import Job as JobModel, JobType as JobTypeEnum
+
     resolved_fetch_job_id: Optional[int] = None
     if source_job_id:
-        from models.models import Job as JobModel, JobType as JobTypeEnum
         upload_job = await db.get(JobModel, int(source_job_id))
-        if upload_job:
-            if upload_job.source_job_id:
-                # Upload job was scoped to a specific fetch job
-                resolved_fetch_job_id = upload_job.source_job_id
-                await _log(db, job.id, LogLevel.info,
-                           f"Scoped to upload job #{source_job_id} → fetch job #{resolved_fetch_job_id}")
+        if upload_job and upload_job.source_job_id:
+            mid_job = await db.get(JobModel, upload_job.source_job_id)
+            if mid_job:
+                if mid_job.type == JobTypeEnum.process and mid_job.source_job_id:
+                    # upload → process → fetch  (two hops)
+                    resolved_fetch_job_id = mid_job.source_job_id
+                    await _log(db, job.id, LogLevel.info,
+                               f"Scoped: upload #{source_job_id} → process #{mid_job.id} "
+                               f"→ fetch #{resolved_fetch_job_id}")
+                else:
+                    # upload → fetch  (one hop)
+                    resolved_fetch_job_id = mid_job.id
+                    await _log(db, job.id, LogLevel.info,
+                               f"Scoped: upload #{source_job_id} → fetch #{resolved_fetch_job_id}")
             else:
-                await _log(db, job.id, LogLevel.info,
-                           f"Scoped to upload job #{source_job_id} (no fetch-job filter — covers all uploaded products)")
+                await _log(db, job.id, LogLevel.warn,
+                           f"Upload job #{source_job_id} source job not found "
+                           f"— syncing ALL uploaded products")
+        elif upload_job:
+            await _log(db, job.id, LogLevel.info,
+                       f"Upload job #{source_job_id} has no source — syncing ALL uploaded products")
         else:
             await _log(db, job.id, LogLevel.warn,
                        f"Upload job #{source_job_id} not found — syncing ALL uploaded products")
