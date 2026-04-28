@@ -1566,7 +1566,11 @@ async def _run_sync(db, job):
         # Query the same scoped product set used for categories
         attr_products = (await db.execute(_scoped_product_q())).scalars().all()
 
-        job.total_items = (job.total_items or 0) + len(attr_products)
+        # Only set total_items here if the category phase didn't already set it.
+        # This avoids the double-count (4 products → total_items=8) that made
+        # the dashboard show "4/8" instead of "4/4".
+        if not do_categories or not job.total_items:
+            job.total_items = len(attr_products)
         await db.commit()
 
         await _log(db, job.id, LogLevel.info,
