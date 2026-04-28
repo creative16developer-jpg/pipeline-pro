@@ -787,6 +787,259 @@ async def _run_upload(db, job):
         job.progress_percent = round((i + 1) / len(products) * 100, 1)
         await db.commit()
 
+    # ═══════════════════════════════════════════════════════════════════════
+    # PHASE 2 — Assign categories + attributes from stored Sunsky data
+    # No Sunsky API calls are made here.  All data comes from:
+    #   • product.raw_data  (stored during fetch/process steps)
+    #   • disk category cache (built by sync jobs, reused here)
+    # ═══════════════════════════════════════════════════════════════════════
+    # Only process products that were successfully uploaded this run
+    uploaded_products = [p for p in products if p.woo_product_id]
+    if not uploaded_products:
+        await _log(db, job.id, LogLevel.info,
+                   "  Phase 2: no products with WooCommerce IDs — skipping category/attribute assignment")
+    else:
+        await _log(db, job.id, LogLevel.info,
+                   f"── Phase 2: Assigning categories + attributes to "
+                   f"{len(uploaded_products)} product(s) ──")
+
+        # ── Pre-load WooCommerce categories ──────────────────────────────
+        try:
+            woo_cats = await woo_client.get_all_woo_categories(store)
+        except Exception as _e:
+            woo_cats = []
+            await _log(db, job.id, LogLevel.warn,
+                       f"  Could not load WooCommerce categories: {_e}")
+        p2_cat_by_key:  dict[tuple, int] = {
+            (c["name"].lower(), int(c.get("parent") or 0)): c["id"]
+            for c in woo_cats
+        }
+        p2_cat_by_name: dict[str, int] = {
+            c["name"].lower(): c["id"] for c in woo_cats
+        }
+
+        # ── Load Sunsky category disk cache ───────────────────────────────
+        p2_cat_cache = _load_cat_cache()   # sunsky_id → {name, sunsky_parent_id, …}
+        p2_woo_id_cache: dict[str, int] = {}   # sunsky_id → woo_cat_id (this run)
+
+        # ── Pre-load WooCommerce global attributes ────────────────────────
+        try:
+            woo_global_attrs = await woo_client.get_all_woo_attributes(store)
+        except Exception as _e:
+            woo_global_attrs = []
+            await _log(db, job.id, LogLevel.warn,
+                       f"  Could not load WooCommerce attributes: {_e}")
+        p2_attr_lookup: dict[str, dict] = {
+            a["name"].lower(): a for a in woo_global_attrs
+        }
+        p2_term_cache: dict[int, dict[str, int]] = {}
+
+        await _log(db, job.id, LogLevel.info,
+                   f"  WooCommerce: {len(woo_cats)} categories, "
+                   f"{len(woo_global_attrs)} global attributes loaded | "
+                   f"Sunsky cache: {len(p2_cat_cache)} entries")
+
+        # ── Helper: recursively ensure a category exists in WooCommerce ──
+        async def _p2_ensure_cat(sunsky_id: str, _g: int = 0) -> Optional[int]:
+            if _g > 8 or not sunsky_id or sunsky_id == "0":
+                return None
+            if sunsky_id in p2_woo_id_cache:
+                return p2_woo_id_cache[sunsky_id]
+            meta = p2_cat_cache.get(sunsky_id)
+            if not meta:
+                return None
+            name = (meta.get("name") or "").strip()
+            if not name:
+                return None
+            parent_sid = meta.get("sunsky_parent_id", "0")
+            woo_parent = 0
+            if parent_sid and parent_sid != "0":
+                woo_parent = await _p2_ensure_cat(parent_sid, _g + 1) or 0
+            woo_id = (
+                p2_cat_by_key.get((name.lower(), woo_parent))
+                or (p2_cat_by_name.get(name.lower()) if woo_parent == 0 else None)
+            )
+            if not woo_id:
+                try:
+                    resp = await woo_client.create_woo_category(store, name, woo_parent)
+                    woo_id = resp["id"]
+                    p2_cat_by_key[(name.lower(), woo_parent)] = woo_id
+                    p2_cat_by_name[name.lower()] = woo_id
+                    await _log(db, job.id, LogLevel.info,
+                               f"  {'  ' * _g}↳ Created category: {name} → WooCommerce #{woo_id}")
+                except Exception as _ce:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  Cannot create WooCommerce category {name!r}: {_ce}")
+                    return None
+            alias = meta.get("alias_id")
+            if alias:
+                p2_woo_id_cache[alias] = woo_id
+            p2_woo_id_cache[sunsky_id] = woo_id
+            return woo_id
+
+        # ── Helper: get-or-create a global WooCommerce attribute ─────────
+        async def _p2_get_or_create_attr(name: str) -> Optional[dict]:
+            key = name.lower()
+            if key in p2_attr_lookup:
+                return p2_attr_lookup[key]
+            try:
+                created = await woo_client.create_woo_attribute(store, name)
+                p2_attr_lookup[key] = created
+                return created
+            except Exception as _ae:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Cannot create attribute {name!r}: {_ae}")
+                return None
+
+        # ── Helper: get-or-create an attribute term ───────────────────────
+        async def _p2_get_or_create_term(attr_id: int, term_name: str) -> Optional[int]:
+            if attr_id not in p2_term_cache:
+                try:
+                    existing = await woo_client.get_attribute_terms(store, attr_id)
+                    p2_term_cache[attr_id] = {t["name"].lower(): t["id"] for t in existing}
+                except Exception:
+                    p2_term_cache[attr_id] = {}
+            key = term_name.lower()
+            if key in p2_term_cache[attr_id]:
+                return p2_term_cache[attr_id][key]
+            try:
+                created = await woo_client.create_attribute_term(store, attr_id, term_name)
+                p2_term_cache[attr_id][key] = created["id"]
+                return created["id"]
+            except Exception:
+                return None
+
+        # ── Per-product assignment ─────────────────────────────────────────
+        p2_cat_ok = p2_cat_miss = p2_attr_ok = p2_attr_miss = 0
+
+        for prod in uploaded_products:
+            raw = prod.raw_data or {}
+
+            # ── Category ─────────────────────────────────────────────────
+            sunsky_cat_id = (
+                str(raw.get("categoryId") or "").strip()
+                or str(raw.get("category_id") or "").strip()
+                or str(prod.category_id or "").strip()
+            )
+
+            # Fast path: try known name fields that Sunsky search API may include
+            cat_name_direct = None
+            for _f in ("catName", "categoryName", "category_name", "cat_name"):
+                _v = raw.get(_f)
+                if _v and isinstance(_v, str) and _v.strip():
+                    cat_name_direct = _v.strip()
+                    break
+
+            woo_cat_id: Optional[int] = None
+            if sunsky_cat_id:
+                # Primary: resolve via disk cache (full ancestor chain)
+                woo_cat_id = await _p2_ensure_cat(sunsky_cat_id)
+
+            if not woo_cat_id and cat_name_direct:
+                # Fallback: use Sunsky's own catName field
+                woo_cat_id = p2_cat_by_name.get(cat_name_direct.lower())
+                if not woo_cat_id:
+                    try:
+                        resp = await woo_client.create_woo_category(
+                            store, cat_name_direct, 0
+                        )
+                        woo_cat_id = resp["id"]
+                        p2_cat_by_name[cat_name_direct.lower()] = woo_cat_id
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  Created category (from raw catName): "
+                                   f"{cat_name_direct} → #{woo_cat_id}")
+                    except Exception as _ce:
+                        pass
+
+            cat_payload = [woo_cat_id] if woo_cat_id else []
+            try:
+                await woo_client.set_product_categories(
+                    store, prod.woo_product_id, cat_payload
+                )
+                if woo_cat_id:
+                    p2_cat_ok += 1
+                    await _log(db, job.id, LogLevel.info,
+                               f"  ✓ {prod.sku} → category #{woo_cat_id}")
+                else:
+                    p2_cat_miss += 1
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  ✗ {prod.sku}: category {sunsky_cat_id!r} not in cache "
+                               f"— run a Sync job once to build the category cache")
+            except Exception as _ce:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  ✗ {prod.sku}: set_categories failed — {_ce}")
+
+            # ── Attributes (entirely from raw_data — no Sunsky API calls) ─
+            woo_attrs: list[dict] = []
+
+            model_label = str(raw.get("modelLabel") or "").strip()
+            option_list = raw.get("optionList") or {}
+            if isinstance(option_list, str):
+                try:
+                    option_list = json.loads(option_list)
+                except Exception:
+                    option_list = {}
+            option_items = (
+                option_list.get("items", []) if isinstance(option_list, dict) else []
+            )
+            option_values = [
+                str(item.get("keywords") or item.get("value") or "").strip()
+                for item in option_items
+                if isinstance(item, dict)
+            ]
+            option_values = [v for v in option_values if v]
+
+            if model_label and option_values:
+                attr = await _p2_get_or_create_attr(model_label)
+                if attr:
+                    for val in option_values:
+                        await _p2_get_or_create_term(attr["id"], val)
+                    woo_attrs.append({
+                        "id": attr["id"],
+                        "name": attr["name"],
+                        "options": option_values[:10],
+                        "visible": True,
+                        "variation": True,
+                    })
+
+            params_html = str(raw.get("paramsTable") or "")
+            if params_html:
+                for spec_key, spec_val in list(_parse_params_table(params_html).items())[:15]:
+                    if len(spec_key) > 60 or len(spec_val) > 100:
+                        continue
+                    attr = await _p2_get_or_create_attr(spec_key)
+                    if attr:
+                        await _p2_get_or_create_term(attr["id"], spec_val)
+                        woo_attrs.append({
+                            "id": attr["id"],
+                            "name": attr["name"],
+                            "options": [spec_val],
+                            "visible": True,
+                            "variation": False,
+                        })
+
+            try:
+                await woo_client.set_product_attributes(
+                    store, prod.woo_product_id, woo_attrs
+                )
+                if woo_attrs:
+                    p2_attr_ok += 1
+                    await _log(db, job.id, LogLevel.info,
+                               f"  ✓ {prod.sku} → {len(woo_attrs)} attribute(s): "
+                               f"{', '.join(a['name'] for a in woo_attrs)}")
+                else:
+                    p2_attr_miss += 1
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  ✗ {prod.sku}: no spec data in raw_data "
+                               f"(run Process job to fetch detail from Sunsky)")
+            except Exception as _ae:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  ✗ {prod.sku}: set_attributes failed — {_ae}")
+
+        await _log(db, job.id, LogLevel.info,
+                   f"  Phase 2 done — categories: {p2_cat_ok} ✓ / {p2_cat_miss} ✗  |  "
+                   f"attributes: {p2_attr_ok} ✓ / {p2_attr_miss} ✗")
+
     # ── Job Summary
     await _log(db, job.id, LogLevel.info,
                f"\n{'='*50}\n"
