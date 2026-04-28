@@ -3,12 +3,55 @@ WooCommerce REST API v3 client.
 Uses HTTP Basic Auth: consumer_key:consumer_secret (Base64) over HTTPS.
 """
 
+import re
 import httpx
 import base64
 import mimetypes
 from pathlib import Path
 from typing import Optional
 from models.models import Store
+
+
+def _make_woo_slug(name: str, suffix: str = "") -> str:
+    """
+    Generate a WooCommerce-safe slug from a category or attribute name.
+
+    Rules applied:
+      - Decode common HTML entities (&amp; → and, etc.)
+      - Lower-case everything
+      - Replace every run of non-alphanumeric characters with a single hyphen
+      - Strip leading / trailing hyphens
+      - Truncate to 190 chars (WooCommerce limit is 200, we leave room for suffix)
+      - Append suffix when provided (used to scope child-category slugs to their
+        parent_woo_id so sibling categories with the same name are unique)
+
+    Examples:
+      "DIY Parts & Components"          → "diy-parts-components"
+      "Mobile Accessories" (parent=12)  → "mobile-accessories-12"
+      "AC/DC Adapters"                  → "ac-dc-adapters"
+    """
+    # Decode a handful of common HTML entities before slugifying
+    entity_map = {
+        "&amp;": "and", "&": "and",
+        "/": "-", "\\": "-",
+        "&lt;": "", "&gt;": "",
+        "&quot;": "", "&#39;": "",
+    }
+    slug = name
+    for entity, replacement in entity_map.items():
+        slug = slug.replace(entity, f" {replacement} ")
+
+    slug = slug.lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", slug)
+    slug = slug.strip("-")
+    slug = slug[:190]
+
+    if suffix:
+        slug = f"{slug}-{suffix}"
+
+    # Final safety: collapse any double-hyphens introduced by substitution
+    slug = re.sub(r"-{2,}", "-", slug)
+    return slug or "category"
 
 
 def _auth_header(store: Store) -> dict:
@@ -297,16 +340,93 @@ async def get_all_woo_categories(store: Store) -> list[dict]:
 
 
 async def create_woo_category(store: Store, name: str, parent_woo_id: int = 0) -> dict:
-    """Create a WooCommerce category and return the created dict."""
-    payload: dict = {"name": name}
+    """
+    Get-or-create a WooCommerce product category, handling all edge cases:
+
+    • Special characters (&, /, accents, HTML entities) — cleaned slug sent
+      explicitly so WooCommerce never tries to auto-generate one.
+    • Duplicate / already-existing category — WooCommerce returns
+      code=term_exists (400).  We recover by fetching the existing category
+      and returning it as-is (idempotent, no error raised).
+    • Slug collision between siblings — when two categories at the same level
+      share a clean slug (e.g. two "Others"), the parent_woo_id is appended to
+      make the slug unique, e.g. "others-47".
+    • Invalid / too-long names — truncated at 190 chars in the slug layer.
+
+    Always returns a dict with at least {"id": int, "name": str, "parent": int}.
+    """
+    # --- Build an explicit, WooCommerce-safe slug -------------------------
+    # Child categories include the parent ID in the slug so that siblings with
+    # the same name (e.g. "Others" under many parents) never collide.
+    suffix = str(parent_woo_id) if parent_woo_id else ""
+    slug = _make_woo_slug(name, suffix=suffix)
+
+    payload: dict = {"name": name, "slug": slug}
     if parent_woo_id:
         payload["parent"] = parent_woo_id
+
     async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-        resp = await client.post(
-            f"{_base_url(store)}/products/categories",
-            headers=_auth_header(store),
-            json=payload,
-        )
+        url = f"{_base_url(store)}/products/categories"
+        auth = _auth_header(store)
+
+        resp = await client.post(url, headers=auth, json=payload)
+
+        # ── Success ───────────────────────────────────────────────────────
+        if resp.is_success:
+            return resp.json()
+
+        # ── Parse the error body ──────────────────────────────────────────
+        try:
+            err = resp.json()
+        except Exception:
+            err = {}
+        wc_code  = err.get("code", "")
+        wc_data  = err.get("data") or {}
+
+        # ── term_exists: category already present — return the existing one ─
+        if wc_code in ("term_exists", "woocommerce_rest_term_exists"):
+            # WooCommerce sometimes embeds the existing term's ID in data
+            existing_id = wc_data.get("resource_id") if isinstance(wc_data, dict) else None
+            if existing_id:
+                r2 = await client.get(f"{url}/{existing_id}", headers=auth)
+                if r2.is_success:
+                    return r2.json()
+
+            # Fallback: search by exact name + parent
+            r2 = await client.get(url, headers=auth,
+                                  params={"search": name, "per_page": 20,
+                                          "parent": parent_woo_id})
+            if r2.is_success:
+                for cat in r2.json():
+                    if (cat.get("name", "").lower() == name.lower()
+                            and int(cat.get("parent") or 0) == parent_woo_id):
+                        return cat
+                # Also accept any match by name if parent doesn't matter
+                for cat in r2.json():
+                    if cat.get("name", "").lower() == name.lower():
+                        return cat
+
+            # Last resort: search by slug
+            r3 = await client.get(url, headers=auth, params={"slug": slug, "per_page": 5})
+            if r3.is_success and r3.json():
+                return r3.json()[0]
+
+        # ── Slug collision (not term_exists): retry with a unique fallback slug
+        if resp.status_code in (400, 422) and wc_code != "term_exists":
+            # Append a short hash of name+parent to guarantee uniqueness
+            import hashlib
+            uid = hashlib.md5(f"{name}{parent_woo_id}".encode()).hexdigest()[:6]
+            payload2 = {**payload, "slug": f"{slug[:180]}-{uid}"}
+            r2 = await client.post(url, headers=auth, json=payload2)
+            if r2.is_success:
+                return r2.json()
+            # If still failing, raise with the original error body for clarity
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code} creating category {name!r}: {err}",
+                request=resp.request, response=resp,
+            )
+
+        # ── All other errors ──────────────────────────────────────────────
         resp.raise_for_status()
         return resp.json()
 
@@ -328,14 +448,62 @@ async def get_all_woo_attributes(store: Store) -> list[dict]:
 
 
 async def create_woo_attribute(store: Store, name: str) -> dict:
-    """Create a WooCommerce global product attribute."""
-    payload = {"name": name, "type": "select", "order_by": "menu_order", "has_archives": False}
+    """
+    Get-or-create a WooCommerce global product attribute.
+
+    Handles special characters in name via explicit clean slug, and recovers
+    gracefully from duplicate-slug / term_exists 400 errors by returning the
+    existing attribute rather than raising.
+    """
+    slug = _make_woo_slug(name)
+    payload = {
+        "name": name,
+        "slug": slug,
+        "type": "select",
+        "order_by": "menu_order",
+        "has_archives": False,
+    }
     async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
-        resp = await client.post(
-            f"{_base_url(store)}/products/attributes",
-            headers=_auth_header(store),
-            json=payload,
-        )
+        url = f"{_base_url(store)}/products/attributes"
+        auth = _auth_header(store)
+
+        resp = await client.post(url, headers=auth, json=payload)
+
+        if resp.is_success:
+            return resp.json()
+
+        try:
+            err = resp.json()
+        except Exception:
+            err = {}
+        wc_code = err.get("code", "")
+        wc_data = err.get("data") or {}
+
+        # Attribute already exists — return it
+        if wc_code in ("term_exists", "woocommerce_rest_term_exists",
+                        "invalid_attribute_slug"):
+            existing_id = wc_data.get("resource_id") if isinstance(wc_data, dict) else None
+            if existing_id:
+                r2 = await client.get(f"{url}/{existing_id}", headers=auth)
+                if r2.is_success:
+                    return r2.json()
+
+            # Search all attributes for a name match
+            r2 = await client.get(url, headers=auth, params={"per_page": 100})
+            if r2.is_success:
+                for attr in r2.json():
+                    if attr.get("name", "").lower() == name.lower():
+                        return attr
+
+        # Slug collision: retry with a unique hash suffix
+        if resp.status_code in (400, 422):
+            import hashlib
+            uid = hashlib.md5(name.encode()).hexdigest()[:6]
+            payload2 = {**payload, "slug": f"{slug[:183]}-{uid}"}
+            r2 = await client.post(url, headers=auth, json=payload2)
+            if r2.is_success:
+                return r2.json()
+
         resp.raise_for_status()
         return resp.json()
 
