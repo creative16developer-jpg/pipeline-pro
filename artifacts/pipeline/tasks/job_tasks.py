@@ -10,9 +10,52 @@ if _pkg_dir not in sys.path:
     sys.path.insert(0, _pkg_dir)
 
 import asyncio
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from celery_app import celery_app
+
+# ── Sunsky category tree cache ─────────────────────────────────────────────
+# The BFS through the Sunsky tree easily hits Sunsky's per-minute API call
+# limit.  We persist discovered categories to a JSON file and reuse them on
+# subsequent syncs.  Entries that are older than CACHE_TTL_DAYS are evicted.
+_CAT_CACHE_FILE = Path(__file__).parent.parent / "cache" / "sunsky_cat_cache.json"
+_CACHE_TTL_DAYS = 7
+
+
+def _load_cat_cache() -> dict[str, dict]:
+    """Load persisted category entries. Returns {} if file missing or all expired."""
+    try:
+        if not _CAT_CACHE_FILE.exists():
+            return {}
+        raw = json.loads(_CAT_CACHE_FILE.read_text(encoding="utf-8"))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=_CACHE_TTL_DAYS)
+        return {
+            k: v for k, v in raw.items()
+            if datetime.fromisoformat(v.get("_cached_at", "2000-01-01T00:00:00+00:00")) > cutoff
+        }
+    except Exception:
+        return {}
+
+
+def _save_cat_cache(entries: dict[str, dict]) -> None:
+    """Merge new entries into the persisted cache file."""
+    try:
+        _CAT_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        existing: dict[str, dict] = {}
+        if _CAT_CACHE_FILE.exists():
+            try:
+                existing = json.loads(_CAT_CACHE_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        existing.update(entries)
+        _CAT_CACHE_FILE.write_text(
+            json.dumps(existing, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        print(f"[cat_cache] Could not save: {e}")
 
 
 def _run(coro):
@@ -926,86 +969,128 @@ async def _run_sync(db, job):
             await _log(db, job.id, LogLevel.info,
                        f"  {len(existing_woo_cats)} existing WooCommerce categories loaded")
 
-            # ── 3. BFS through the Sunsky category tree ───────────────────────
-            #   We go level-by-level with BATCHED fetching (5 at a time) to
-            #   avoid hitting Sunsky rate limits.  We stop as soon as all
-            #   needed IDs have been found in the tree.
+            # ── 3. Find needed category IDs in the Sunsky tree ───────────────
             #
-            #   bfs_meta[sunsky_id] = {id, alias_id, name, sunsky_parent_id}
+            # Strategy (fastest-first):
+            #   a) Load the on-disk category cache  →  instant for known IDs
+            #   b) BFS the Sunsky tree for any IDs NOT in cache, using rate-
+            #      limit-aware batching (BATCH_SIZE=3, 1.5 s between batches,
+            #      auto 62-s pause on UP_TO_API_CALL_LIMIT_IN_MINUTE)
+            #   c) Merge newly discovered entries back into the cache
+            #
+            # bfs_meta[sunsky_id] = {id, alias_id, name, sunsky_parent_id}
             # ─────────────────────────────────────────────────────────────────
 
-            BATCH_SIZE = 5   # max parallel Sunsky requests
-            MAX_DEPTH  = 6   # safeguard against infinite trees
+            BATCH_SIZE   = 3    # concurrent Sunsky requests per batch
+            BATCH_DELAY  = 1.5  # seconds between batches (≈ 2 req/s → ~120/min, usually safe)
+            MAX_DEPTH    = 6
+            RATE_LIMIT_PAUSE = 62  # seconds to wait after hitting the per-minute cap
 
-            bfs_meta: dict[str, dict] = {}   # sunsky_id → cat metadata + parent ref
-            remaining  = set(needed_cat_ids)
-            seen_fetch: set[str] = {"0"}     # parent IDs we have already fetched children for
+            # ── a) Seed bfs_meta from disk cache ──────────────────────────────
+            bfs_meta: dict[str, dict] = {}
+            cat_cache = _load_cat_cache()
+            cached_now = datetime.now(timezone.utc).isoformat()
+            for cid, entry in cat_cache.items():
+                bfs_meta[cid] = entry
 
-            # seed: fetch root-level categories
-            try:
-                root_cats = await sunsky_client.get_categories("0")
-            except Exception as e:
-                await _log(db, job.id, LogLevel.error, f"  Cannot fetch Sunsky root categories: {e}")
-                root_cats = []
+            remaining = needed_cat_ids - set(bfs_meta.keys())
+            cache_hits = len(needed_cat_ids) - len(remaining)
+            await _log(db, job.id, LogLevel.info,
+                       f"  Category cache: {len(cat_cache)} entries loaded "
+                       f"({cache_hits}/{len(needed_cat_ids)} needed IDs already cached"
+                       + (f", {len(remaining)} need BFS)" if remaining else ", all found ✓)"))
 
-            # current_level: list of (sunsky_parent_id, [child_cat, …])
-            current_level: list[tuple[str, list]] = [("0", root_cats)]
-
-            for depth in range(1, MAX_DEPTH + 1):
-                if not current_level or not remaining:
-                    break
-
-                # ── record every cat at this level into bfs_meta ──────────────
-                next_fetch_ids: list[str] = []
-                for parent_sid, cats in current_level:
-                    for cat in cats:
-                        all_ids = {cat["id"]}
-                        if cat.get("alias_id"):
-                            all_ids.add(cat["alias_id"])
-                        for cid in all_ids:
-                            if cid not in bfs_meta:
-                                bfs_meta[cid] = {**cat, "sunsky_parent_id": parent_sid}
-                        remaining -= all_ids
-
-                        # queue for next-level fetch
-                        if cat["id"] not in seen_fetch:
-                            seen_fetch.add(cat["id"])
-                            next_fetch_ids.append(cat["id"])
-
-                if not remaining:
-                    await _log(db, job.id, LogLevel.info,
-                               f"  All category IDs located at BFS depth {depth}")
-                    break
-
-                if not next_fetch_ids:
-                    break
-
-                await _log(db, job.id, LogLevel.info,
-                           f"  BFS depth {depth}: searching {len(next_fetch_ids)} branches "
-                           f"for {len(remaining)} remaining ID(s)…")
-
-                # ── fetch next level in batches of BATCH_SIZE ─────────────────
-                next_level: list[tuple[str, list]] = []
-                for i in range(0, len(next_fetch_ids), BATCH_SIZE):
-                    batch = next_fetch_ids[i : i + BATCH_SIZE]
-                    batch_results = await asyncio.gather(
-                        *[sunsky_client.get_categories(pid) for pid in batch],
-                        return_exceptions=True,
-                    )
-                    for pid, result in zip(batch, batch_results):
-                        if isinstance(result, Exception):
-                            await _log(db, job.id, LogLevel.debug,
-                                       f"  Could not fetch children of {pid}: {result}")
-                            continue
-                        if result:
-                            next_level.append((pid, result))
-
-                current_level = next_level
-
+            # ── b) BFS for IDs not in cache ───────────────────────────────────
             if remaining:
-                await _log(db, job.id, LogLevel.warn,
-                           f"  Sunsky IDs not found after {depth} levels: "
-                           f"{', '.join(sorted(remaining))} — skipping those categories")
+                seen_fetch: set[str] = {"0"}
+
+                async def _fetch_safe(pid: str) -> tuple[str, list]:
+                    """Fetch with automatic retry on rate-limit (waits 62 s)."""
+                    for attempt in range(3):
+                        try:
+                            kids = await sunsky_client.get_categories(pid)
+                            return (pid, kids)
+                        except ValueError as exc:
+                            if "CALL_LIMIT" in str(exc):
+                                await _log(db, job.id, LogLevel.warn,
+                                           f"  Sunsky rate limit hit — waiting {RATE_LIMIT_PAUSE}s…")
+                                await asyncio.sleep(RATE_LIMIT_PAUSE)
+                                continue
+                            return (pid, [])
+                        except Exception:
+                            return (pid, [])
+                    return (pid, [])
+
+                try:
+                    root_cats = (await _fetch_safe("0"))[1]
+                except Exception as e:
+                    await _log(db, job.id, LogLevel.error, f"  Cannot fetch root categories: {e}")
+                    root_cats = []
+
+                current_level: list[tuple[str, list]] = [("0", root_cats)]
+                newly_found: dict[str, dict] = {}  # entries discovered this run
+
+                for depth in range(1, MAX_DEPTH + 1):
+                    if not current_level or not remaining:
+                        break
+
+                    # record this level's categories
+                    next_fetch_ids: list[str] = []
+                    for parent_sid, cats in current_level:
+                        for cat in cats:
+                            all_ids = {cat["id"]}
+                            if cat.get("alias_id"):
+                                all_ids.add(cat["alias_id"])
+                            entry = {**cat, "sunsky_parent_id": parent_sid,
+                                     "_cached_at": cached_now}
+                            for cid in all_ids:
+                                if cid not in bfs_meta:
+                                    bfs_meta[cid] = entry
+                                    newly_found[cid] = entry
+                            remaining -= all_ids
+
+                            if cat["id"] not in seen_fetch:
+                                seen_fetch.add(cat["id"])
+                                next_fetch_ids.append(cat["id"])
+
+                    if not remaining:
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  All remaining IDs found at BFS depth {depth} ✓")
+                        break
+
+                    if not next_fetch_ids:
+                        break
+
+                    await _log(db, job.id, LogLevel.info,
+                               f"  BFS depth {depth}: fetching {len(next_fetch_ids)} branches "
+                               f"({len(remaining)} ID(s) still needed)…")
+
+                    # batched fetch with delay and rate-limit retry
+                    next_level: list[tuple[str, list]] = []
+                    for i in range(0, len(next_fetch_ids), BATCH_SIZE):
+                        batch = next_fetch_ids[i : i + BATCH_SIZE]
+                        results = await asyncio.gather(*[_fetch_safe(pid) for pid in batch])
+                        for pid, kids in results:
+                            if kids:
+                                next_level.append((pid, kids))
+                        # early exit if we've already found all needed IDs in this batch
+                        if not remaining:
+                            break
+                        if i + BATCH_SIZE < len(next_fetch_ids):
+                            await asyncio.sleep(BATCH_DELAY)
+
+                    current_level = next_level
+
+                if remaining:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  Could not find in Sunsky tree: {', '.join(sorted(remaining))} "
+                               f"— those products will have categories cleared")
+
+                # ── c) Save newly discovered entries to disk cache ─────────────
+                if newly_found:
+                    _save_cat_cache(newly_found)
+                    await _log(db, job.id, LogLevel.info,
+                               f"  Cached {len(newly_found)} new category entries for future syncs")
 
             # ── 4. Ensure every needed category (+ its ancestors) exists in WooCommerce ──
             # We resolve the ancestor chain top-down so parents are always created first.
