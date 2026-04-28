@@ -1078,37 +1078,49 @@ async def _run_sync(db, job):
                        f"  Categories: {cats_created} created, {cats_synced} already existed "
                        f"— {len(sunsky_to_woo_cat)} ready to assign")
 
-            # ── 5. Assign the WooCommerce category to each product ────────────
+            # ── 5. Assign WooCommerce categories — strictly from Sunsky data ─
+            # Rule: each product gets ONLY its Sunsky leaf category.
+            #   • Mapped    → PUT categories=[{id: woo_cat_id}]   (replaces all)
+            #   • Not found → PUT categories=[]                    (clears unrelated cats)
+            #   • No woo_id → skip (product not in WooCommerce yet)
             await _log(db, job.id, LogLevel.info, "  Assigning categories to products in WooCommerce…")
             cat_ok = cat_miss = 0
             for prod in target_products:
+                if not prod.woo_product_id:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  ✗ {prod.sku}: not uploaded to WooCommerce yet — skipped")
+                    continue
+
                 sunsky_cat_id = _get_sunsky_cat_id(prod)
-                woo_cat_id = sunsky_to_woo_cat.get(sunsky_cat_id)
-                if woo_cat_id and prod.woo_product_id:
-                    try:
-                        await woo_client.set_product_categories(
-                            store, prod.woo_product_id, [woo_cat_id]
-                        )
+                woo_cat_id = sunsky_to_woo_cat.get(sunsky_cat_id) if sunsky_cat_id else None
+                cat_payload = [woo_cat_id] if woo_cat_id else []
+
+                try:
+                    await woo_client.set_product_categories(
+                        store, prod.woo_product_id, cat_payload
+                    )
+                    if woo_cat_id:
                         products_updated += 1
                         cat_ok += 1
                         await _log(db, job.id, LogLevel.info,
                                    f"  ✓ {prod.sku} (woo #{prod.woo_product_id}) "
-                                   f"→ category #{woo_cat_id} assigned")
-                    except Exception as e:
+                                   f"→ category #{woo_cat_id} (Sunsky {sunsky_cat_id})")
+                    else:
+                        cat_miss += 1
+                        reason = (
+                            "no categoryId in Sunsky data"
+                            if not sunsky_cat_id
+                            else f"Sunsky ID {sunsky_cat_id!r} not found in tree"
+                        )
                         await _log(db, job.id, LogLevel.warn,
-                                   f"  ✗ {prod.sku}: set_category failed — {e}")
-                elif not sunsky_cat_id:
+                                   f"  ✗ {prod.sku} (woo #{prod.woo_product_id}): {reason} "
+                                   f"— categories cleared")
+                except Exception as e:
                     await _log(db, job.id, LogLevel.warn,
-                               f"  ✗ {prod.sku}: no category_id stored on this product")
-                else:
-                    cat_miss += 1
-                    await _log(db, job.id, LogLevel.warn,
-                               f"  ✗ {prod.sku}: Sunsky cat {sunsky_cat_id!r} "
-                               f"not found in Sunsky tree — cannot assign")
+                               f"  ✗ {prod.sku}: set_categories failed — {e}")
 
             await _log(db, job.id, LogLevel.info,
-                       f"  Category assignment complete: "
-                       f"{cat_ok} product(s) ✓  |  {cat_miss} skipped (category not found in Sunsky)")
+                       f"  Category assignment: {cat_ok} assigned ✓  |  {cat_miss} cleared (no mapping)")
 
     # ─────────────────────────────────────────────────────────────────────────
     # STEP B: Sync product attributes → WooCommerce
@@ -1243,19 +1255,30 @@ async def _run_sync(db, job):
                         })
                         attrs_synced += 1
 
-            if woo_attrs and prod.woo_product_id:
+            # Always push to WooCommerce — even an empty list clears any
+            # previously-set unrelated attributes (strict Sunsky-only rule).
+            if prod.woo_product_id:
                 try:
                     await woo_client.set_product_attributes(store, prod.woo_product_id, woo_attrs)
-                    products_updated += 1
                     job.processed_items = (job.processed_items or 0) + 1
                     await db.commit()
+                    if woo_attrs:
+                        attr_names = ", ".join(a["name"] for a in woo_attrs)
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  ✓ {prod.sku} (woo #{prod.woo_product_id}) "
+                                   f"→ {len(woo_attrs)} attribute(s): {attr_names}")
+                        products_updated += 1
+                    else:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  ✗ {prod.sku} (woo #{prod.woo_product_id}): "
+                                   f"no Sunsky spec data — attributes cleared")
                 except Exception as e:
                     await _log(db, job.id, LogLevel.warn,
-                               f"  Failed to set attributes on product {prod.sku} "
-                               f"(woo_id={prod.woo_product_id}): {e}")
-            elif not woo_attrs:
-                await _log(db, job.id, LogLevel.debug,
-                           f"  {prod.sku}: no attributes extracted, skipping")
+                               f"  Failed to set attributes on {prod.sku} "
+                               f"(woo #{prod.woo_product_id}): {e}")
+            else:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  {prod.sku}: not in WooCommerce yet — skipped")
 
         await _log(db, job.id, LogLevel.info,
                    f"  Attributes done: {attrs_created} new attributes, "
