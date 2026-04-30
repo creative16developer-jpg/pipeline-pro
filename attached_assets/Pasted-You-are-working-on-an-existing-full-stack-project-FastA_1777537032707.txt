@@ -1,0 +1,207 @@
+You are working on an existing full-stack project (FastAPI backend + Celery + React frontend).
+
+The backend pipeline (generation engine, DAG, field processing) is already implemented and MUST NOT be rewritten. Only extend it if needed.
+
+Your task is to implement a **Content Generation Settings UI + integration with backend pipeline**, based on the following requirements.
+
+---
+
+## GOAL
+
+Create a settings-driven generation system where:
+
+UI → JSON config → backend pipeline → field execution → results
+
+The UI must allow users to:
+
+1. Select which fields to generate
+2. Configure each field (mode, options)
+3. Preview generated content per field
+4. Run full generation in a single flow
+5. View job status and results
+
+---
+
+## FRONTEND REQUIREMENTS (React)
+
+Create a new page:
+
+SettingsPage.jsx
+
+Component structure:
+
+* SettingsPage
+
+  * GlobalSettings
+  * FieldTable
+  * FieldConfigPanel (side panel / modal)
+  * PreviewPanel
+  * ActionBar
+
+---
+
+## STATE STRUCTURE (IMPORTANT)
+
+Implement a centralized state (useState or context):
+
+const config = {
+globalSettings: {
+ai_enabled: true,
+max_calls_per_product: 3,
+keyword_strategy: "auto",
+fallback_strategy: "safe"
+},
+fields: {
+description: {
+enabled: true,
+mode: "hybrid",
+options: {
+structure: ["intro", "features", "benefits", "compatibility"],
+keyword_source: "auto"
+}
+},
+slug: {
+enabled: true,
+mode: "logic",
+options: {
+transliterate: true,
+ensure_unique: true
+}
+}
+},
+overrides: {}
+};
+
+---
+
+## FIELD LIST (RENDER DYNAMICALLY)
+
+Fields:
+
+[
+"description",
+"short_description",
+"slug",
+"meta_title",
+"meta_description",
+"tags",
+"image_alt",
+"image_names"
+]
+
+Each row must have:
+
+* Enable checkbox
+* Mode selector (logic / ai / hybrid)
+* Settings button (opens panel)
+
+---
+
+## FIELD CONFIG PANEL
+
+When clicking ⚙, open panel with field-specific controls:
+
+Example: Description
+
+* Mode selector
+* Structure checkboxes
+* Keyword source dropdown
+* Preview button
+
+Example: Slug
+
+* Pattern radio
+* Transliterate toggle
+* Ensure unique toggle
+* Preview
+
+---
+
+## PREVIEW SYSTEM (IMPORTANT)
+
+Add API call:
+
+POST /preview
+
+Payload:
+{
+"product": sample_product,
+"template": config,
+"field": "description"
+}
+
+Display:
+
+* Generated text
+* Source (ai / logic)
+* Status
+
+Allow:
+
+* Manual edit
+* Save override
+
+---
+
+## RUN GENERATION
+
+On click “Run Generation”:
+
+POST /generate
+
+Payload:
+{
+"product": selected_product,
+"template": config
+}
+
+Store returned task_id
+
+---
+
+## JOB STATUS SYSTEM
+
+Poll backend:
+
+GET /job/{task_id}
+
+Display:
+
+* Field status (done / failed)
+* Source (ai / logic / fallback)
+* Errors
+
+---
+
+## BACKEND CHANGES (ONLY IF MISSING)
+
+1. Add /preview endpoint:
+
+   * Runs pipeline for single field only
+
+2. Ensure /generate accepts dynamic template config
+
+3. Filter only enabled fields before execution
+
+---
+
+## IMPORTANT RULES
+
+* DO NOT rewrite existing pipeline engine
+* DO NOT hardcode field logic in frontend
+* EVERYTHING must be driven by config JSON
+* UI must be simple (like AI tools)
+* Default values must be pre-filled
+
+---
+
+## OUTPUT EXPECTATION
+
+1. Create React components
+2. Connect UI to backend APIs
+3. Implement preview + job polling
+4. Keep code clean and modular
+
+---
+
+Now analyze the current codebase and implement this without breaking existing functionality.
