@@ -12,6 +12,7 @@ import Jobs from "./pages/Jobs";
 import Stores from "./pages/Stores";
 import Sunsky from "./pages/Sunsky";
 import Sync from "./pages/Sync";
+import ContentGeneration from "./pages/ContentGeneration";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,6 +33,7 @@ function Router() {
         <Route path="/stores" component={Stores} />
         <Route path="/sunsky" component={Sunsky} />
         <Route path="/sync" component={Sync} />
+        <Route path="/content" component={ContentGeneration} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
