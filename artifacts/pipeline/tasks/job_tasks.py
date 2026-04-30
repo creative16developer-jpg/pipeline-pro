@@ -114,6 +114,28 @@ async def _execute_job(job_id: int):
 
             job.completed_at = datetime.now(timezone.utc)
             await db.commit()
+
+            # ── Auto-advance pipeline chain ────────────────────────────────
+            # If another pending job declares this job as its source, trigger
+            # it automatically so the full pipeline runs without manual steps.
+            if job.status == JobStatus.completed:
+                from sqlalchemy import select as _sa_select
+                next_job = (
+                    await db.execute(
+                        _sa_select(Job).where(
+                            Job.source_job_id == job.id,
+                            Job.status == JobStatus.pending,
+                        ).limit(1)
+                    )
+                ).scalar_one_or_none()
+                if next_job:
+                    await _log(
+                        db, next_job.id, LogLevel.info,
+                        f"[pipeline] Auto-starting job #{next_job.id} "
+                        f"({next_job.type.value}) after job #{job.id} completed",
+                    )
+                    await db.commit()
+                    run_job.delay(next_job.id)
     finally:
         await celery_engine.dispose()
 
@@ -274,8 +296,22 @@ async def _run_process(db, job):
 
     cfg = job.config or {}
     limit = cfg.get("limit", 200)
+    force_rerun = cfg.get("force_rerun", False)
 
-    base_q = select(Product).where(Product.status == ProductStatus.pending)
+    # With force_rerun include already-processed products so they are re-processed
+    # in place rather than creating new DB rows.
+    from sqlalchemy import or_ as _or
+    if force_rerun:
+        eligible_status = _or(
+            Product.status == ProductStatus.pending,
+            Product.status == ProductStatus.processed,
+        )
+        await _log(db, job.id, LogLevel.info,
+                   "force_rerun=True — including already-processed products")
+    else:
+        eligible_status = Product.status == ProductStatus.pending
+
+    base_q = select(Product).where(eligible_status)
 
     if job.source_job_id:
         stamped_q = base_q.where(Product.fetch_job_id == job.source_job_id).limit(limit)
@@ -288,16 +324,23 @@ async def _run_process(db, job):
         else:
             await _log(db, job.id, LogLevel.warn,
                        f"No products stamped with fetch_job_id={job.source_job_id} — "
-                       f"falling back to un-linked pending products")
+                       f"falling back to un-linked eligible products")
             fallback_q = base_q.where(Product.fetch_job_id.is_(None)).limit(limit)
             products = (await db.execute(fallback_q)).scalars().all()
             if products:
                 await _log(db, job.id, LogLevel.info,
-                           f"Found {len(products)} un-linked pending product(s) to process")
+                           f"Found {len(products)} un-linked eligible product(s) to process")
     else:
         await _log(db, job.id, LogLevel.info,
-                   "No source job selected — processing ALL pending products")
+                   "No source job selected — processing ALL eligible products")
         products = (await db.execute(base_q.limit(limit))).scalars().all()
+
+    # Reset already-processed products so image pipeline runs again
+    if force_rerun:
+        for p in products:
+            if p.status == ProductStatus.processed:
+                p.status = ProductStatus.pending
+        await db.commit()
 
     if not products:
         await _log(db, job.id, LogLevel.info, "No pending products to process")
@@ -662,17 +705,36 @@ async def _run_upload(db, job):
         await _log(db, job.id, LogLevel.info,
                    "No source job selected — uploading ALL eligible products")
 
-    # ── Include ALL non-uploaded statuses (pending/processed/failed/processing)
-    # to prevent the "5 fetched → 3 uploaded" bug caused by processing status gaps.
-    base_filter = [
-        or_(
-            Product.status == ProductStatus.processed,
-            Product.status == ProductStatus.pending,
-            Product.status == ProductStatus.failed,
-            Product.status == ProductStatus.processing,
-        ),
-        Product.woo_product_id.is_(None),
-    ]
+    force_rerun = cfg.get("force_rerun", False)
+
+    # With force_rerun: include already-uploaded products so they are updated
+    # in WooCommerce in-place rather than creating duplicate rows.
+    # The existing_woo branch in the loop handles update vs. skip automatically.
+    if force_rerun:
+        base_filter = [
+            or_(
+                Product.status == ProductStatus.uploaded,
+                Product.status == ProductStatus.processed,
+                Product.status == ProductStatus.pending,
+                Product.status == ProductStatus.failed,
+                Product.status == ProductStatus.processing,
+            ),
+            # No woo_product_id filter — re-check everything
+        ]
+        await _log(db, job.id, LogLevel.info,
+                   "force_rerun=True — including already-uploaded products for update check")
+    else:
+        # ── Include ALL non-uploaded statuses (pending/processed/failed/processing)
+        # to prevent the "5 fetched → 3 uploaded" bug caused by processing status gaps.
+        base_filter = [
+            or_(
+                Product.status == ProductStatus.processed,
+                Product.status == ProductStatus.pending,
+                Product.status == ProductStatus.failed,
+                Product.status == ProductStatus.processing,
+            ),
+            Product.woo_product_id.is_(None),
+        ]
 
     if fetch_job_id:
         stamped_filter = base_filter + [Product.fetch_job_id == fetch_job_id]

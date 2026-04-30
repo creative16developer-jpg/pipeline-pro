@@ -8,6 +8,7 @@ import {
   CloudDownload,
   ArrowRightLeft,
   Sparkles,
+  Zap,
   Settings,
   Bell
 } from "lucide-react";
@@ -15,6 +16,7 @@ import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/pipeline", label: "Pipeline Runner", icon: Zap },
   { href: "/products", label: "Products", icon: PackageSearch },
   { href: "/jobs", label: "Import Jobs", icon: Activity },
   { href: "/stores", label: "Stores", icon: Store },
