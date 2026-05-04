@@ -828,14 +828,33 @@ async def _run_upload(db, job):
                 # Create new product in WooCommerce
                 await _log(db, job.id, LogLevel.info,
                            f"  {product.sku} → creating in WooCommerce…")
-                result = await wc.create_product(store, payload)
-                product.woo_product_id = result.get("id")
-                product.status = ProductStatus.uploaded
-                product.error_message = None
-                action = "created"
-                created_count += 1
-                await _log(db, job.id, LogLevel.info,
-                           f"  {product.sku} → CREATED woo_id={product.woo_product_id}")
+                try:
+                    result = await wc.create_product(store, payload)
+                    product.woo_product_id = result.get("id")
+                    product.status = ProductStatus.uploaded
+                    product.error_message = None
+                    action = "created"
+                    created_count += 1
+                    await _log(db, job.id, LogLevel.info,
+                               f"  {product.sku} → CREATED woo_id={product.woo_product_id}")
+                except Exception as create_err:
+                    err_text = str(create_err)
+                    if "woocommerce_rest_product_not_created" in err_text and "already present in the lookup table" in err_text:
+                        existing_woo = await wc.get_product_by_sku(store, product.sku)
+                        if existing_woo:
+                            woo_id = existing_woo["id"]
+                            await wc.update_product(store, woo_id, payload)
+                            product.woo_product_id = woo_id
+                            product.status = ProductStatus.uploaded
+                            product.error_message = None
+                            action = "updated"
+                            updated_count += 1
+                            await _log(db, job.id, LogLevel.warn,
+                                       f"  {product.sku} → existing SKU found, UPDATED woo_id={woo_id} instead of creating")
+                        else:
+                            raise
+                    else:
+                        raise
 
         except Exception as e:
             product.status = ProductStatus.failed
