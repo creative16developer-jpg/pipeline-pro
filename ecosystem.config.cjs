@@ -10,6 +10,10 @@
 const path = require("path");
 const PIPELINE_DIR = path.join(__dirname, "artifacts", "pipeline");
 
+// Python inside the venv — created by:
+//   cd artifacts/pipeline && python3 -m venv venv && venv/bin/pip install -r requirements.txt
+const PYTHON = path.join(PIPELINE_DIR, "venv", "bin", "python3");
+
 module.exports = {
   apps: [
     // ─────────────────────────────────────────────────────────────
@@ -18,7 +22,7 @@ module.exports = {
     {
       name: "pipeline-api",
       cwd: PIPELINE_DIR,
-      script: "python3",
+      script: PYTHON,
       args: "main.py",
       interpreter: "none",
       env: {
@@ -37,7 +41,7 @@ module.exports = {
     {
       name: "celery-worker",
       cwd: PIPELINE_DIR,
-      script: "python3",
+      script: PYTHON,
       args: "-m celery -A celery_app.celery_app worker --loglevel=info",
       interpreter: "none",
       watch: false,
