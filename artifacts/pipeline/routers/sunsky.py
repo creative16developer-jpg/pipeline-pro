@@ -40,6 +40,7 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
     job = Job(
         type=JobType.fetch,
         status=JobStatus.running,
+        store_id=body.store_id,
         started_at=datetime.now(timezone.utc),
         config={
             "category_id": body.category_id,

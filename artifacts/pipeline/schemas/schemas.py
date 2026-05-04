@@ -166,6 +166,7 @@ class SunskyFetchRequest(BaseModel):
     keyword: Optional[str] = None
     page: int = 1
     limit: int = 50
+    store_id: Optional[int] = None
 
 
 class SunskyFetchResult(BaseModel):

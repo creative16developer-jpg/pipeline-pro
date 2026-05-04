@@ -32,10 +32,19 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 settings = get_settings()
 
 
+async def _run_migrations(conn):
+    """Run any pending SQL migrations idempotently on startup."""
+    import sqlalchemy as sa
+    migration_sql = Path(__file__).parent / "migrations" / "migrate_pipeline_jobs.sql"
+    if migration_sql.exists():
+        await conn.execute(sa.text(migration_sql.read_text()))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _run_migrations(conn)
     yield
 
 
