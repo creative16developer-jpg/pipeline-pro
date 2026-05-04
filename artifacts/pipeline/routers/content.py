@@ -15,13 +15,21 @@ from __future__ import annotations
 
 import re
 import uuid
+import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/generate", tags=["content"])
+
+# ---------------------------------------------------------------------------
+# Saved config path  (persists to disk so pipelines always have a config)
+# ---------------------------------------------------------------------------
+_CONFIG_DIR = Path(__file__).parent.parent / "config_store"
+_SAVED_CONFIG_PATH = _CONFIG_DIR / "content_gen_config.json"
 
 # ---------------------------------------------------------------------------
 # In-memory job store  (process-local; fine for this use case)
@@ -295,6 +303,25 @@ def _run_field(field: str, product: dict, template: GenerateConfig) -> dict:
 async def get_default_config():
     """Return the default generation config (field list + defaults)."""
     return {"fields": FIELD_LIST, "defaultConfig": DEFAULT_CONFIG}
+
+
+@router.get("/saved-config")
+async def get_saved_config():
+    """Return the saved generation config, or DEFAULT_CONFIG if none saved yet."""
+    if _SAVED_CONFIG_PATH.exists():
+        try:
+            return json.loads(_SAVED_CONFIG_PATH.read_text())
+        except Exception:
+            pass
+    return DEFAULT_CONFIG
+
+
+@router.post("/saved-config")
+async def save_config(config: GenerateConfig):
+    """Persist the generation config to disk so pipelines can load it automatically."""
+    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _SAVED_CONFIG_PATH.write_text(json.dumps(config.model_dump(), indent=2))
+    return {"saved": True}
 
 
 @router.post("/preview")

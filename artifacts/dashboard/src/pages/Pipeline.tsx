@@ -123,6 +123,15 @@ export default function Pipeline() {
 
     setRunning(true);
     try {
+      // If content generation is enabled, load the saved config to embed in the pipeline
+      let contentGenConfig = {};
+      if (includeGenerate) {
+        try {
+          const r = await fetch("/api/generate/saved-config");
+          if (r.ok) contentGenConfig = await r.json();
+        } catch (_) {}
+      }
+
       const body = {
         store_id: parseInt(storeId),
         fetch_job_id: parseInt(fetchJobId),
@@ -135,6 +144,7 @@ export default function Pipeline() {
           sync_categories: syncCategories,
           sync_attributes: syncAttributes,
         },
+        content_gen_config: contentGenConfig,
       };
 
       const r = await fetch("/api/pipelines", {

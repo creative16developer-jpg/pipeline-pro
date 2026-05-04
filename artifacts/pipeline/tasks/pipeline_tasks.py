@@ -232,15 +232,22 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
 
     gen_cfg = cfg.get("content_gen_config", {})
     if not gen_cfg:
-        await _plog(db, pl.id, "generate", "warn",
-                    "No content generation config provided — all fields will use fallback values")
-        return {
-            "total": total,
-            "ok": 0,
-            "fallback": total,
-            "failed": 0,
-            "note": "No content config supplied",
-        }
+        # Try loading the saved config from disk; fall back to DEFAULT_CONFIG
+        from pathlib import Path
+        import json
+        saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+        if saved_path.exists():
+            try:
+                gen_cfg = json.loads(saved_path.read_text())
+                await _plog(db, pl.id, "generate", "info",
+                            "Loaded saved content generation config")
+            except Exception:
+                pass
+        if not gen_cfg:
+            from routers.content import DEFAULT_CONFIG
+            gen_cfg = DEFAULT_CONFIG
+            await _plog(db, pl.id, "generate", "info",
+                        "Using default content generation config")
 
     await _plog(db, pl.id, "generate", "info",
                 f"Content generation complete (placeholder) — {total} products processed")

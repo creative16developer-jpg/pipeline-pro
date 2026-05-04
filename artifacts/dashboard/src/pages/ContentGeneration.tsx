@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Sparkles, Settings2, Play, Eye, ChevronRight, CheckCircle2,
-  XCircle, Loader2, RotateCcw, Save, Copy, X, Info, Zap
+  XCircle, Loader2, RotateCcw, Save, Copy, X, Info, Zap, CheckCheck
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -514,6 +514,13 @@ export default function ContentGeneration() {
 
   // Config state
   const [config, setConfig] = useState<GenerateConfig>(DEFAULT_CONFIG);
+  const [savedConfig, setSavedConfig] = useState<GenerateConfig | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
+  const justSavedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const hasUnsavedChanges = savedConfig !== null &&
+    JSON.stringify(config) !== JSON.stringify(savedConfig);
 
   // Product picker
   const [products, setProducts] = useState<any[]>([]);
@@ -532,6 +539,41 @@ export default function ContentGeneration() {
   // Generation
   const [running, setRunning] = useState(false);
   const [job, setJob] = useState<GenerationJob | null>(null);
+
+  // ── Load saved config from server on mount ───────────────────────────────
+  useEffect(() => {
+    fetch("/api/generate/saved-config")
+      .then((r) => r.json())
+      .then((data) => {
+        setConfig(data);
+        setSavedConfig(data);
+      })
+      .catch(() => {
+        setSavedConfig(DEFAULT_CONFIG);
+      });
+  }, []);
+
+  // ── Save config to server ────────────────────────────────────────────────
+  const handleSaveConfig = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch("/api/generate/saved-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      setSavedConfig({ ...config });
+      setJustSaved(true);
+      if (justSavedTimer.current) clearTimeout(justSavedTimer.current);
+      justSavedTimer.current = setTimeout(() => setJustSaved(false), 2500);
+      toast({ title: "Config saved", description: "Pipelines will use this config for content generation." });
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // ── Load products for picker ─────────────────────────────────────────────
   useEffect(() => {
@@ -649,18 +691,47 @@ export default function ContentGeneration() {
             Configure and generate product content fields from your Sunsky data.
           </p>
         </div>
-        <button
-          onClick={handleRun}
-          disabled={running || !selectedProduct}
-          className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-medium transition-all shadow-[0_0_20px_rgba(99,102,241,0.2)] hover:shadow-[0_0_25px_rgba(99,102,241,0.4)] hover:-translate-y-0.5 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
-        >
-          {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
-          Test on Sample Product
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSaveConfig}
+            disabled={saving || (!hasUnsavedChanges && !justSaved)}
+            className={cn(
+              "px-4 py-2.5 rounded-xl font-medium text-sm transition-all flex items-center gap-2",
+              justSaved
+                ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400"
+                : hasUnsavedChanges
+                  ? "bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25"
+                  : "bg-secondary border border-border/50 text-muted-foreground opacity-50 cursor-not-allowed"
+            )}
+          >
+            {saving ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : justSaved ? (
+              <CheckCheck className="w-4 h-4" />
+            ) : (
+              <Save className="w-4 h-4" />
+            )}
+            {justSaved ? "Saved" : hasUnsavedChanges ? "Save Config" : "Saved"}
+          </button>
+          <button
+            onClick={handleRun}
+            disabled={running || !selectedProduct}
+            className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-medium transition-all shadow-[0_0_20px_rgba(99,102,241,0.2)] hover:shadow-[0_0_25px_rgba(99,102,241,0.4)] hover:-translate-y-0.5 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
+          >
+            {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
+            Test on Sample Product
+          </button>
+        </div>
       </div>
+      {hasUnsavedChanges && (
+        <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/8 border border-amber-500/15 text-xs text-amber-400/80">
+          <Info className="w-3.5 h-3.5 shrink-0" />
+          You have unsaved changes — save to use these settings in pipelines
+        </div>
+      )}
       <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/8 border border-amber-500/15 text-xs text-amber-400/80 italic">
         <Info className="w-3.5 h-3.5 shrink-0" />
-        Results shown in preview only — not saved
+        Preview results shown here only — save config to apply settings to new pipeline runs
       </div>
 
       {/* Product Selector */}
