@@ -70,6 +70,7 @@ class Store(Base):
 
     jobs = relationship("Job", back_populates="store")
     categories = relationship("WooCategory", back_populates="store", cascade="all, delete-orphan")
+    pipeline_jobs = relationship("PipelineJob", back_populates="store", cascade="all, delete-orphan")
 
 
 class Product(Base):
@@ -89,7 +90,6 @@ class Product(Base):
     error_message = Column(Text, nullable=True)
     raw_data = Column(JSON, nullable=True)
 
-    # Which fetch job created this product — used to scope process/upload jobs
     fetch_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -113,10 +113,15 @@ class Job(Base):
     error_message = Column(Text, nullable=True)
     config = Column(JSON, nullable=True)
 
-    # Links this job to a preceding job in the pipeline:
-    #   process job → source is a fetch job
-    #   upload job  → source is a process or fetch job
     source_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Which pipeline run owns this step job (nullable for standalone jobs)
+    pipeline_job_id = Column(
+        Integer,
+        ForeignKey("pipeline_jobs.id", ondelete="SET NULL", use_alter=True, name="fk_jobs_pipeline_job_id"),
+        nullable=True,
+        index=True,
+    )
 
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -125,6 +130,55 @@ class Job(Base):
     store = relationship("Store", back_populates="jobs")
     logs = relationship("JobLog", back_populates="job", cascade="all, delete-orphan")
     source_job = relationship("Job", foreign_keys=[source_job_id], remote_side="Job.id")
+
+
+class PipelineJob(Base):
+    """
+    Represents one full pipeline run:
+    Process → Generate (opt) → Review (pause) → Upload → Sync
+
+    The `fetch_job_id` points to the fetch job whose products this pipeline
+    will process.  Multiple pipelines can share the same store but only ONE
+    may be in status='running' or 'review' per store at a time — others are
+    queued and auto-started when the current one finishes.
+    """
+    __tablename__ = "pipeline_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    fetch_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Status: queued | running | review | completed | failed | cancelled
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    # Current execution step: process | generate | review | upload | sync
+    current_step = Column(String(30), nullable=True)
+
+    config = Column(JSON, nullable=True)
+    # Content-gen review stats: {total, ok, fallback, failed}
+    stats_json = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    store = relationship("Store", back_populates="pipeline_jobs")
+    fetch_job = relationship("Job", foreign_keys=[fetch_job_id])
+    logs = relationship("PipelineLog", back_populates="pipeline_job",
+                        cascade="all, delete-orphan", order_by="PipelineLog.created_at")
+
+
+class PipelineLog(Base):
+    __tablename__ = "pipeline_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pipeline_job_id = Column(Integer, ForeignKey("pipeline_jobs.id", ondelete="CASCADE"),
+                             nullable=False, index=True)
+    step = Column(String(50), nullable=True)
+    level = Column(String(20), nullable=False, default="info")
+    message = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    pipeline_job = relationship("PipelineJob", back_populates="logs")
 
 
 class Image(Base):

@@ -14,6 +14,7 @@ import Sunsky from "./pages/Sunsky";
 import Sync from "./pages/Sync";
 import ContentGeneration from "./pages/ContentGeneration";
 import Pipeline from "./pages/Pipeline";
+import Pipelines from "./pages/Pipelines";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -36,6 +37,7 @@ function Router() {
         <Route path="/sync" component={Sync} />
         <Route path="/content" component={ContentGeneration} />
         <Route path="/pipeline" component={Pipeline} />
+        <Route path="/pipelines" component={Pipelines} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

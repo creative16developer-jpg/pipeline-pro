@@ -77,25 +77,51 @@ client-preview/
 
 ## Python Backend Endpoints
 
-All mounted under `/api/`:
+All mounted under `/api/`. Node.js api-server (port 8080) proxies `/api/pipelines/*` to Python (port 8000); all other `/api/*` routes are handled natively by the Node.js layer.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/healthz` | Health check — `{"status":"ok","runtime":"python"}` |
+| GET | `/api/healthz` | Health check |
 | GET | `/api/dashboard/stats` | Aggregate counts + recent jobs |
-| GET | `/api/stores` | List WooCommerce stores (credentials masked) |
+| GET | `/api/stores` | List WooCommerce stores |
 | POST | `/api/stores` | Add a new store |
 | GET/PUT/DELETE | `/api/stores/{id}` | Get/update/delete a store |
 | POST | `/api/stores/{id}/test` | Test WooCommerce connection |
 | GET/POST | `/api/stores/{id}/categories` | List / sync WooCommerce categories |
-| GET | `/api/products` | List products (pagination, search, status filter) |
-| GET | `/api/products/{id}` | Product detail |
+| GET | `/api/products` | List products |
 | GET | `/api/jobs` | List jobs |
-| POST | `/api/jobs` | Create & start a job (fetch/process/upload/sync) |
-| GET | `/api/jobs/{id}` | Job detail |
-| POST | `/api/jobs/{id}/cancel` | Cancel a running job |
-| POST | `/api/sunsky/fetch` | Fetch products from Sunsky into DB |
-| GET | `/api/sunsky/categories` | Get Sunsky category tree |
+| POST | `/api/jobs` | Create & start a job |
+| POST | `/api/jobs/{id}/cancel` | Cancel a job |
+| GET | `/api/pipelines` | List all pipeline runs |
+| POST | `/api/pipelines` | Create a new pipeline run (queue if store busy) |
+| GET | `/api/pipelines/{id}` | Pipeline detail + step jobs |
+| POST | `/api/pipelines/{id}/resume` | Resume pipeline from review state |
+| POST | `/api/pipelines/{id}/cancel` | Cancel pipeline |
+| POST | `/api/pipelines/{id}/retry` | Retry failed/cancelled pipeline |
+| GET | `/api/pipelines/{id}/logs` | Get pipeline logs |
+
+## Pipeline System
+
+### DB Tables (added via migration)
+- `pipeline_jobs` — one row per pipeline run; status: queued/running/review/completed/failed/cancelled
+- `pipeline_logs` — step-level log lines per pipeline
+- `jobs.pipeline_job_id` — FK linking each step job back to its pipeline
+
+### Execution Flow
+Process → Generate (optional) → **Review pause** → Upload → Sync
+
+### Queue Rule
+Only ONE pipeline may be running/in-review per store at a time. Extras are auto-queued and auto-started when the current one finishes.
+
+### Key Files
+- `artifacts/pipeline/tasks/pipeline_tasks.py` — Celery orchestration engine
+- `artifacts/pipeline/routers/pipeline.py` — REST API for pipelines
+- `artifacts/pipeline/models/models.py` — PipelineJob + PipelineLog models
+- `artifacts/pipeline/migrations/migrate_pipeline_jobs.sql` — DB migration
+- `artifacts/api-server/src/routes/pipelines.ts` — Node.js proxy to Python
+- `artifacts/dashboard/src/pages/Pipelines.tsx` — Monitoring page
+- `artifacts/dashboard/src/pages/Pipeline.tsx` — New pipeline runner
+- `artifacts/dashboard/src/lib/store-colors.ts` — Deterministic store color utility
 
 ## Sunsky Auth
 

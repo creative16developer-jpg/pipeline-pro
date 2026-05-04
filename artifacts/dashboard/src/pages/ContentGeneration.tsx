@@ -655,8 +655,12 @@ export default function ContentGeneration() {
           className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground font-medium transition-all shadow-[0_0_20px_rgba(99,102,241,0.2)] hover:shadow-[0_0_25px_rgba(99,102,241,0.4)] hover:-translate-y-0.5 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0"
         >
           {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4 fill-current" />}
-          Run Generation
+          Test on Sample Product
         </button>
+      </div>
+      <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/8 border border-amber-500/15 text-xs text-amber-400/80 italic">
+        <Info className="w-3.5 h-3.5 shrink-0" />
+        Results shown in preview only — not saved
       </div>
 
       {/* Product Selector */}

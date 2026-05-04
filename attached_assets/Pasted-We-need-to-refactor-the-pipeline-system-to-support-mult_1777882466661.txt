@@ -1,0 +1,250 @@
+We need to refactor the pipeline system to support multiple pipeline runs per store, queueing, review flow, and a proper monitoring UI.
+
+---
+
+## 1. CORE ARCHITECTURE
+
+- Each Fetch Job belongs to a store (store_id required)
+- Each Fetch Job = ONE pipeline run
+- Each pipeline run is stored as PipelineJob
+
+Example:
+Store 1:
+- Fetch Job 1 → Pipeline PL-001
+- Fetch Job 2 → Pipeline PL-002
+- Fetch Job 3 → Pipeline PL-003
+
+So:
+- Multiple pipelines per store ✅
+- Full history maintained ✅
+
+---
+
+## 2. PIPELINE RUNNER PAGE (/pipeline)
+
+This page is ONLY for starting a pipeline.
+
+Flow:
+1. Select Store
+2. Select Fetch Job (filtered by store)
+3. Click "Run Pipeline"
+
+Validation:
+- Cannot run without store + fetch job
+
+On Run:
+- Create new PipelineJob
+- Status = running OR queued (see queue logic below)
+
+---
+
+## 3. PIPELINE LISTING PAGE (/pipelines)
+
+This is MONITORING PAGE (not for starting jobs)
+
+Table columns:
+- Pipeline ID
+- Store (with color badge)
+- Fetch Job ID
+- Status
+- Current Step
+- Created At
+- Actions
+
+Top button:
+- "+ New Pipeline" → redirects to /pipeline (runner page)
+
+---
+
+## 4. STORE COLOR CODING (IMPORTANT UX)
+
+- Store 1 → Purple
+- Store 2 → Green
+
+This must be consistent across:
+- Pipeline listing
+- Import jobs
+- Everywhere store appears
+
+---
+
+## 5. PIPELINE FLOW
+
+Fetch → Process → Generate Content (optional) → REVIEW → Upload → Sync
+
+---
+
+## 6. CONTENT GENERATION
+
+- /content page = SETTINGS ONLY
+- Rename button:
+  "Run Generation" → "Test on Sample Product"
+- Add note:
+  "Results shown in preview only — not saved"
+
+Pipeline:
+- Uses settings from this page
+- Runs automatically if step enabled
+
+---
+
+## 7. REVIEW STEP (CRITICAL)
+
+After content generation:
+
+- Pipeline status = REVIEW
+- Pipeline pauses automatically
+
+Show stats:
+- Total
+- OK
+- Fallback
+- Failed
+
+Example:
+52 total | 47 OK | 3 fallback | 2 failed
+
+User actions:
+- "Resume" → continues to Upload
+- "Cancel" → stops pipeline
+
+---
+
+## 8. QUEUE SYSTEM (VERY IMPORTANT)
+
+Rule:
+- Only ONE pipeline can RUN per store at a time
+
+If user starts another:
+- Status = QUEUED
+
+Behavior:
+- Auto-start when running pipeline finishes
+- NO manual action required
+
+UI:
+- Show text under status:
+  "auto-starts when running finishes" (italic)
+
+- Show banner:
+  "2 pipelines queued for Store 2 — waiting for PL-012 to finish"
+
+User can:
+- Cancel queued pipeline
+
+---
+
+## 9. STATUS TYPES
+
+- running
+- queued
+- review
+- completed
+- failed
+- cancelled
+
+---
+
+## 10. CONTEXTUAL ACTION BUTTONS (VERY IMPORTANT UX)
+
+Actions depend on status:
+
+RUNNING:
+- Logs
+- Cancel
+
+QUEUED:
+- Logs
+- Cancel
+
+REVIEW:
+- Logs
+- Resume
+- Cancel
+
+FAILED:
+- Logs
+- Retry
+
+COMPLETED:
+- Logs only
+
+DO NOT show invalid actions.
+
+---
+
+## 11. INLINE LOG SYSTEM (NOT MODAL)
+
+- Logs open INLINE below row (expandable)
+- Multiple logs can be open at same time
+- Do NOT use modal
+
+Each log shows:
+- timestamp
+- level (info, ok, warn, error)
+- message
+
+---
+
+## 12. DATABASE STRUCTURE
+
+FetchJob:
+- id
+- store_id
+- category_data
+
+PipelineJob:
+- id (PL-XXX format)
+- store_id
+- fetch_job_id
+- status
+- current_step
+- stats_json
+- created_at
+
+PipelineLogs:
+- id
+- pipeline_job_id
+- step
+- message
+- level
+- timestamp
+
+---
+
+## 13. EXECUTION ENGINE
+
+- Pipelines run step-by-step
+- When REVIEW reached → pause
+- When Resume → continue
+
+Queue logic:
+- When running completes:
+  - Auto-start next queued pipeline for same store
+
+---
+
+## 14. EDGE CASES
+
+- Prevent duplicate running pipeline per store
+- Handle API failures gracefully
+- Retry should create new run OR restart existing cleanly
+- Cancel should stop execution immediately
+
+---
+
+## 15. GOAL
+
+System should:
+- Handle multiple categories via fetch jobs
+- Support multiple pipelines per store
+- Provide full visibility (logs + status)
+- Prevent overload/confusion
+- Be safe (review before upload)
+- Be scalable
+
+---
+
+IMPORTANT:
+Refactor existing code — do NOT rebuild from scratch.
+Preserve current integrations (Sunsky, WooCommerce, etc).

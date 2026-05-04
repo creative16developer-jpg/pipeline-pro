@@ -16,7 +16,8 @@ import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/pipeline", label: "Pipeline Runner", icon: Zap },
+  { href: "/pipelines", label: "Pipelines", icon: Activity },
+  { href: "/pipeline", label: "New Pipeline", icon: Zap },
   { href: "/products", label: "Products", icon: PackageSearch },
   { href: "/jobs", label: "Import Jobs", icon: Activity },
   { href: "/stores", label: "Stores", icon: Store },
