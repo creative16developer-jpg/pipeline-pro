@@ -6,7 +6,6 @@ import { Modal } from "@/components/Modal";
 import { Activity, Play, XCircle, ChevronRight, Link2, ArrowRightLeft } from "lucide-react";
 import { format } from "date-fns";
 import { CreateJobInputType, Job } from "@workspace/api-client-react";
-import pm2Shot from "@assets/image_1777893133131.png";
 
 export default function Jobs() {
   const [page, setPage] = useState(1);
@@ -16,10 +15,6 @@ export default function Jobs() {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border border-border/50 overflow-hidden bg-card shadow-lg shadow-black/5">
-        <img src={pm2Shot} alt="PM2 process list" className="w-full h-auto block" />
-      </div>
-
       <div className="flex flex-col sm:flex-row justify-between gap-4 items-start sm:items-center">
         <div>
           <h1 className="text-3xl font-display font-bold text-foreground">Import Jobs</h1>

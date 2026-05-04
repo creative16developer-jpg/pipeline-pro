@@ -37,8 +37,8 @@ module.exports = {
     {
       name: "celery-worker",
       cwd: PIPELINE_DIR,
-      script: "celery",
-      args: "-A celery_app.celery_app worker --loglevel=info",
+      script: "python3",
+      args: "-m celery -A celery_app.celery_app worker --loglevel=info",
       interpreter: "none",
       watch: false,
       autorestart: true,

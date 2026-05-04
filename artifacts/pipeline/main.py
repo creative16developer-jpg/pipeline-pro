@@ -36,8 +36,17 @@ async def _run_migrations(conn):
     """Run any pending SQL migrations idempotently on startup."""
     import sqlalchemy as sa
     migration_sql = Path(__file__).parent / "migrations" / "migrate_pipeline_jobs.sql"
-    if migration_sql.exists():
-        await conn.execute(sa.text(migration_sql.read_text()))
+    if not migration_sql.exists():
+        return
+    raw = migration_sql.read_text()
+    # asyncpg requires one statement per execute call — split on ";" and skip blanks/comments
+    for stmt in raw.split(";"):
+        stmt = "\n".join(
+            line for line in stmt.splitlines()
+            if line.strip() and not line.strip().startswith("--")
+        ).strip()
+        if stmt:
+            await conn.execute(sa.text(stmt))
 
 
 @asynccontextmanager
