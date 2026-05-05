@@ -691,17 +691,17 @@ export default function ContentGeneration() {
             Configure and generate product content fields from your Sunsky data.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <button
             onClick={handleSaveConfig}
-            disabled={saving || (!hasUnsavedChanges && !justSaved)}
+            disabled={saving}
             className={cn(
-              "px-4 py-2.5 rounded-xl font-medium text-sm transition-all flex items-center gap-2",
+              "px-4 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 border shadow-sm",
               justSaved
-                ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-400"
+                ? "bg-emerald-500 text-white border-emerald-400"
                 : hasUnsavedChanges
-                  ? "bg-amber-500/15 border border-amber-500/30 text-amber-400 hover:bg-amber-500/25"
-                  : "bg-secondary border border-border/50 text-muted-foreground opacity-50 cursor-not-allowed"
+                  ? "bg-amber-400 text-black border-amber-300 hover:bg-amber-300"
+                  : "bg-slate-700 text-white border-slate-500 hover:bg-slate-600"
             )}
           >
             {saving ? (
@@ -711,7 +711,7 @@ export default function ContentGeneration() {
             ) : (
               <Save className="w-4 h-4" />
             )}
-            {justSaved ? "Saved" : hasUnsavedChanges ? "Save Config" : "Saved"}
+            {justSaved ? "Saved" : "Save Config"}
           </button>
           <button
             onClick={handleRun}
