@@ -13,3 +13,6 @@ python-multipart
 woocommerce
 celery[redis]
 redis
+openai
+anthropic
+google-generativeai

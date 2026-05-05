@@ -13,6 +13,7 @@ hard-coded per field.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 import json
@@ -54,6 +55,8 @@ FIELD_LIST = [
 DEFAULT_CONFIG: dict = {
     "globalSettings": {
         "ai_enabled": False,
+        "ai_provider": "openai",
+        "ai_model": "",
         "max_calls_per_product": 3,
         "keyword_strategy": "auto",
         "fallback_strategy": "safe",
@@ -274,7 +277,7 @@ _GENERATORS: dict[str, Any] = {
 # Core generation helper
 # ---------------------------------------------------------------------------
 
-def _run_field(field: str, product: dict, template: GenerateConfig) -> dict:
+async def _run_field(field: str, product: dict, template: GenerateConfig) -> dict:
     override = (template.overrides or {}).get(field)
     if override is not None:
         return {"field": field, "value": str(override), "source": "override", "status": "ok"}
@@ -283,15 +286,46 @@ def _run_field(field: str, product: dict, template: GenerateConfig) -> dict:
     options = field_cfg.get("options", {})
     mode = field_cfg.get("mode", "logic")
 
+    gs = template.globalSettings or {}
+    ai_enabled = gs.get("ai_enabled", False)
+    ai_provider = gs.get("ai_provider", "openai") or "openai"
+    ai_model = gs.get("ai_model", "") or None
+    fallback_strategy = gs.get("fallback_strategy", "safe")
+
+    # ── AI modes ────────────────────────────────────────────────────────────
+    if mode in ("ai", "hybrid") and ai_enabled:
+        try:
+            from pipeline.ai_generator import generate_with_ai
+            value = await generate_with_ai(
+                field=field,
+                product=product,
+                provider=ai_provider,
+                model=ai_model,
+                options=options,
+            )
+            return {"field": field, "value": value, "source": f"ai:{ai_provider}", "status": "ok"}
+        except Exception as ai_err:
+            ai_error_msg = str(ai_err)
+            if mode == "ai":
+                if fallback_strategy == "skip":
+                    return {"field": field, "value": "", "source": "none", "status": "skipped",
+                            "error": ai_error_msg}
+                if fallback_strategy == "empty":
+                    return {"field": field, "value": "", "source": "ai:failed", "status": "ok",
+                            "error": ai_error_msg}
+                # "safe" — fall through to logic generator below
+
+    # ── Logic generation ────────────────────────────────────────────────────
     gen = _GENERATORS.get(field)
     if not gen:
         return {"field": field, "value": "", "source": "none", "status": "skipped",
                 "error": f"No generator for field '{field}'"}
     try:
         value = gen(product, options)
-        return {"field": field, "value": value, "source": mode, "status": "ok"}
+        source = "logic" if mode != "ai" else "logic:fallback"
+        return {"field": field, "value": value, "source": source, "status": "ok"}
     except Exception as exc:
-        return {"field": field, "value": "", "source": mode, "status": "failed",
+        return {"field": field, "value": "", "source": "logic", "status": "failed",
                 "error": str(exc)}
 
 
@@ -324,6 +358,13 @@ async def save_config(config: GenerateConfig):
     return {"saved": True}
 
 
+@router.get("/providers")
+async def get_providers():
+    """Return which AI providers are configured (have API keys set)."""
+    from pipeline.ai_generator import get_provider_status
+    return get_provider_status()
+
+
 @router.post("/preview")
 async def preview_field(req: PreviewRequest):
     """
@@ -332,14 +373,14 @@ async def preview_field(req: PreviewRequest):
     """
     if req.field not in FIELD_LIST:
         raise HTTPException(status_code=400, detail=f"Unknown field: {req.field}")
-    return _run_field(req.field, req.product, req.template)
+    return await _run_field(req.field, req.product, req.template)
 
 
 @router.post("/run")
 async def run_generation(req: GenerateRequest):
     """
     Run generation for all enabled fields and return results immediately.
-    Also stores result under a task_id for polling.
+    Fields are generated in parallel for speed.
     """
     task_id = str(uuid.uuid4())
     started = datetime.utcnow().isoformat()
@@ -349,9 +390,11 @@ async def run_generation(req: GenerateRequest):
         if (req.template.fields or {}).get(f, {}).get("enabled", True)
     ]
 
-    field_results: dict[str, dict] = {}
-    for field in enabled_fields:
-        field_results[field] = _run_field(field, req.product, req.template)
+    results = await asyncio.gather(
+        *[_run_field(f, req.product, req.template) for f in enabled_fields],
+        return_exceptions=False,
+    )
+    field_results: dict[str, dict] = {r["field"]: r for r in results}
 
     job = {
         "taskId": task_id,

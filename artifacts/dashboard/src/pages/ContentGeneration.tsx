@@ -62,9 +62,18 @@ interface FieldConfig {
 
 interface GlobalSettings {
   ai_enabled: boolean;
+  ai_provider: string;
+  ai_model: string;
   max_calls_per_product: number;
   keyword_strategy: string;
   fallback_strategy: string;
+}
+
+interface ProviderInfo {
+  configured: boolean;
+  label: string;
+  default_model: string;
+  models: string[];
 }
 
 interface GenerateConfig {
@@ -93,9 +102,29 @@ interface GenerationJob {
 // Default config
 // ─────────────────────────────────────────────────────────────────────────────
 
+const AI_PROVIDERS: Record<string, { label: string; models: string[]; defaultModel: string }> = {
+  openai: {
+    label: "OpenAI",
+    models: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
+    defaultModel: "gpt-4o-mini",
+  },
+  anthropic: {
+    label: "Anthropic (Claude)",
+    models: ["claude-3-haiku-20240307", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
+    defaultModel: "claude-3-haiku-20240307",
+  },
+  gemini: {
+    label: "Google Gemini",
+    models: ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
+    defaultModel: "gemini-1.5-flash",
+  },
+};
+
 const DEFAULT_CONFIG: GenerateConfig = {
   globalSettings: {
     ai_enabled: false,
+    ai_provider: "openai",
+    ai_model: "",
     max_calls_per_product: 3,
     keyword_strategy: "auto",
     fallback_strategy: "safe",
@@ -519,6 +548,9 @@ export default function ContentGeneration() {
   const [justSaved, setJustSaved] = useState(false);
   const justSavedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // AI provider status
+  const [providerStatus, setProviderStatus] = useState<Record<string, ProviderInfo>>({});
+
   const hasUnsavedChanges = savedConfig !== null &&
     JSON.stringify(config) !== JSON.stringify(savedConfig);
 
@@ -540,17 +572,17 @@ export default function ContentGeneration() {
   const [running, setRunning] = useState(false);
   const [job, setJob] = useState<GenerationJob | null>(null);
 
-  // ── Load saved config from server on mount ───────────────────────────────
+  // ── Load saved config + provider status on mount ─────────────────────────
   useEffect(() => {
     fetch("/api/generate/saved-config")
       .then((r) => r.json())
-      .then((data) => {
-        setConfig(data);
-        setSavedConfig(data);
-      })
-      .catch(() => {
-        setSavedConfig(DEFAULT_CONFIG);
-      });
+      .then((data) => { setConfig(data); setSavedConfig(data); })
+      .catch(() => { setSavedConfig(DEFAULT_CONFIG); });
+
+    fetch("/api/generate/providers")
+      .then((r) => r.json())
+      .then((data) => setProviderStatus(data))
+      .catch(() => {});
   }, []);
 
   // ── Save config to server ────────────────────────────────────────────────
@@ -819,6 +851,76 @@ export default function ContentGeneration() {
                 </select>
               </div>
             </div>
+
+            {/* AI Provider + Model — shown when AI is enabled */}
+            {config.globalSettings.ai_enabled && (
+              <div className="mt-4 pt-4 border-t border-border/40 space-y-3">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-3 h-3 text-violet-400" /> AI Provider Settings
+                </p>
+
+                {/* Provider cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {Object.entries(AI_PROVIDERS).map(([id, info]) => {
+                    const status = providerStatus[id];
+                    const isSelected = config.globalSettings.ai_provider === id;
+                    const isConfigured = status?.configured ?? false;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => patchGlobal({ ai_provider: id, ai_model: "" })}
+                        className={cn(
+                          "flex items-center gap-2.5 p-3 rounded-xl border text-left transition-all",
+                          isSelected
+                            ? "border-primary bg-primary/10 text-foreground"
+                            : "border-border/40 bg-secondary/30 text-muted-foreground hover:border-border hover:text-foreground"
+                        )}
+                      >
+                        <span className={cn(
+                          "w-2 h-2 rounded-full shrink-0",
+                          isConfigured ? "bg-emerald-400" : "bg-red-400"
+                        )} />
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium truncate">{info.label}</p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {isConfigured ? "API key set" : "No API key"}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Warning if selected provider has no key */}
+                {providerStatus[config.globalSettings.ai_provider] &&
+                  !providerStatus[config.globalSettings.ai_provider].configured && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400">
+                    <Info className="w-3.5 h-3.5 shrink-0" />
+                    Set <strong className="mx-1">
+                      {config.globalSettings.ai_provider.toUpperCase()}_API_KEY
+                    </strong> in your <code className="mx-1 px-1 bg-red-500/10 rounded">.env</code> file, then restart the server.
+                  </div>
+                )}
+
+                {/* Model selector */}
+                <div className="p-3 rounded-xl bg-secondary/30 border border-border/40">
+                  <label className="text-xs text-muted-foreground">Model</label>
+                  <select
+                    value={config.globalSettings.ai_model || ""}
+                    onChange={(e) => patchGlobal({ ai_model: e.target.value })}
+                    className="w-full mt-1 bg-background border border-border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-primary"
+                  >
+                    <option value="">
+                      Default ({AI_PROVIDERS[config.globalSettings.ai_provider]?.defaultModel ?? "auto"})
+                    </option>
+                    {(AI_PROVIDERS[config.globalSettings.ai_provider]?.models ?? []).map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Field Table */}
