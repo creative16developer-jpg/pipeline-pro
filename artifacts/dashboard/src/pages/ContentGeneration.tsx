@@ -695,23 +695,10 @@ export default function ContentGeneration() {
           <button
             onClick={handleSaveConfig}
             disabled={saving}
-            className={cn(
-              "px-4 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 border shadow-sm",
-              justSaved
-                ? "bg-emerald-500 text-white border-emerald-400"
-                : hasUnsavedChanges
-                  ? "bg-amber-400 text-black border-amber-300 hover:bg-amber-300"
-                  : "bg-slate-700 text-white border-slate-500 hover:bg-slate-600"
-            )}
+            className="px-4 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 border shadow-sm bg-amber-400 text-black border-amber-300 hover:bg-amber-300"
           >
-            {saving ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : justSaved ? (
-              <CheckCheck className="w-4 h-4" />
-            ) : (
-              <Save className="w-4 h-4" />
-            )}
-            {justSaved ? "Saved" : "Save Config"}
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            Save Config
           </button>
           <button
             onClick={handleRun}
