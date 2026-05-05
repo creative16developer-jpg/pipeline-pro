@@ -871,19 +871,8 @@ export default function ContentGeneration() {
 
                     const handleToggleEnabled = (e: React.MouseEvent) => {
                       e.stopPropagation();
-                      const next = !isEnabled;
-                      const newEnabled = { ...(config.globalSettings.ai_providers_enabled ?? {}), [id]: next };
-                      // If disabling the currently active provider, switch to first remaining enabled one
-                      let newProvider = config.globalSettings.ai_provider;
-                      if (!next && config.globalSettings.ai_provider === id) {
-                        const fallback = Object.entries(newEnabled).find(([k, v]) => v && k !== id);
-                        newProvider = fallback ? fallback[0] : id;
-                      }
-                      // If enabling, auto-select it if no other enabled provider is selected
-                      if (next && !newEnabled[config.globalSettings.ai_provider]) {
-                        newProvider = id;
-                      }
-                      patchGlobal({ ai_providers_enabled: newEnabled, ai_provider: newProvider, ai_model: "" });
+                      const newEnabled = { ...(config.globalSettings.ai_providers_enabled ?? {}), [id]: !isEnabled };
+                      patchGlobal({ ai_providers_enabled: newEnabled });
                     };
 
                     return (
