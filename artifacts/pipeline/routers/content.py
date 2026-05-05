@@ -57,6 +57,7 @@ DEFAULT_CONFIG: dict = {
         "ai_enabled": False,
         "ai_provider": "openai",
         "ai_model": "",
+        "ai_providers_enabled": {"openai": True, "anthropic": True, "gemini": True},
         "max_calls_per_product": 3,
         "keyword_strategy": "auto",
         "fallback_strategy": "safe",

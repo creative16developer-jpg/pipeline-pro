@@ -64,6 +64,7 @@ interface GlobalSettings {
   ai_enabled: boolean;
   ai_provider: string;
   ai_model: string;
+  ai_providers_enabled: Record<string, boolean>;
   max_calls_per_product: number;
   keyword_strategy: string;
   fallback_strategy: string;
@@ -125,6 +126,7 @@ const DEFAULT_CONFIG: GenerateConfig = {
     ai_enabled: false,
     ai_provider: "openai",
     ai_model: "",
+    ai_providers_enabled: { openai: true, anthropic: true, gemini: true },
     max_calls_per_product: 3,
     keyword_strategy: "auto",
     fallback_strategy: "safe",
@@ -859,41 +861,96 @@ export default function ContentGeneration() {
                   <Sparkles className="w-3 h-3 text-violet-400" /> AI Provider Settings
                 </p>
 
-                {/* Provider cards */}
+                {/* Provider cards with enable/disable toggles */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {Object.entries(AI_PROVIDERS).map(([id, info]) => {
                     const status = providerStatus[id];
-                    const isSelected = config.globalSettings.ai_provider === id;
+                    const isEnabled = config.globalSettings.ai_providers_enabled?.[id] ?? true;
+                    const isSelected = config.globalSettings.ai_provider === id && isEnabled;
                     const isConfigured = status?.configured ?? false;
+
+                    const handleToggleEnabled = (e: React.MouseEvent) => {
+                      e.stopPropagation();
+                      const next = !isEnabled;
+                      const newEnabled = { ...(config.globalSettings.ai_providers_enabled ?? {}), [id]: next };
+                      // If disabling the currently active provider, switch to first remaining enabled one
+                      let newProvider = config.globalSettings.ai_provider;
+                      if (!next && config.globalSettings.ai_provider === id) {
+                        const fallback = Object.entries(newEnabled).find(([k, v]) => v && k !== id);
+                        newProvider = fallback ? fallback[0] : id;
+                      }
+                      // If enabling, auto-select it if no other enabled provider is selected
+                      if (next && !newEnabled[config.globalSettings.ai_provider]) {
+                        newProvider = id;
+                      }
+                      patchGlobal({ ai_providers_enabled: newEnabled, ai_provider: newProvider, ai_model: "" });
+                    };
+
                     return (
-                      <button
+                      <div
                         key={id}
-                        type="button"
-                        onClick={() => patchGlobal({ ai_provider: id, ai_model: "" })}
                         className={cn(
-                          "flex items-center gap-2.5 p-3 rounded-xl border text-left transition-all",
+                          "rounded-xl border transition-all",
                           isSelected
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border/40 bg-secondary/30 text-muted-foreground hover:border-border hover:text-foreground"
+                            ? "border-primary bg-primary/10"
+                            : isEnabled
+                              ? "border-border/40 bg-secondary/30"
+                              : "border-border/20 bg-secondary/10 opacity-50"
                         )}
                       >
-                        <span className={cn(
-                          "w-2 h-2 rounded-full shrink-0",
-                          isConfigured ? "bg-emerald-400" : "bg-red-400"
-                        )} />
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium truncate">{info.label}</p>
+                        {/* Top row: label + enable toggle */}
+                        <div className="flex items-center justify-between px-3 pt-3 pb-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className={cn(
+                              "w-2 h-2 rounded-full shrink-0",
+                              isConfigured ? "bg-emerald-400" : "bg-red-400"
+                            )} />
+                            <p className="text-xs font-medium truncate">{info.label}</p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={handleToggleEnabled}
+                            title={isEnabled ? "Disable provider" : "Enable provider"}
+                            className={cn(
+                              "relative inline-flex h-4 w-7 cursor-pointer rounded-full border-2 border-transparent transition-colors shrink-0",
+                              isEnabled ? "bg-primary" : "bg-secondary"
+                            )}
+                          >
+                            <span className={cn(
+                              "pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow transition duration-200",
+                              isEnabled ? "translate-x-3" : "translate-x-0"
+                            )} />
+                          </button>
+                        </div>
+                        {/* Bottom row: status + select button */}
+                        <div className="flex items-center justify-between px-3 pb-3 pt-1">
                           <p className="text-[10px] text-muted-foreground">
                             {isConfigured ? "API key set" : "No API key"}
                           </p>
+                          {isEnabled && (
+                            <button
+                              type="button"
+                              disabled={!isEnabled}
+                              onClick={() => patchGlobal({ ai_provider: id, ai_model: "" })}
+                              className={cn(
+                                "text-[10px] px-2 py-0.5 rounded-md font-medium transition-all",
+                                isSelected
+                                  ? "bg-primary text-primary-foreground"
+                                  : "bg-secondary text-muted-foreground hover:text-foreground hover:bg-secondary/80"
+                              )}
+                            >
+                              {isSelected ? "Active" : "Use this"}
+                            </button>
+                          )}
                         </div>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
 
-                {/* Warning if selected provider has no key */}
-                {providerStatus[config.globalSettings.ai_provider] &&
+                {/* Warning if selected provider has no API key */}
+                {config.globalSettings.ai_provider &&
+                  providerStatus[config.globalSettings.ai_provider] &&
                   !providerStatus[config.globalSettings.ai_provider].configured && (
                   <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-400">
                     <Info className="w-3.5 h-3.5 shrink-0" />
