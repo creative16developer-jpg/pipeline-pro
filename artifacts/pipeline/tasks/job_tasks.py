@@ -774,12 +774,17 @@ async def _run_upload(db, job):
             raw = product.raw_data or {}
 
             payload = {
-                "name":           product.name,
-                "sku":            product.sku,
-                "price":          product.price or "0",
-                "description":    product.description or "",
+                "name":              product.name,
+                "sku":               product.sku,
+                "price":             product.price or "0",
+                "description":       product.description or "",
                 "short_description": product.short_description or "",
-                "stock_quantity": 10 if product.stock_status == "in_stock" else 0,
+                "slug":              product.slug or "",
+                "meta_title":        product.meta_title or "",
+                "meta_description":  product.meta_description or "",
+                "tags":              product.tags or "",
+                "image_alt":         product.image_alt or "",
+                "stock_quantity":    10 if product.stock_status == "in_stock" else 0,
             }
 
             if not skip_images:

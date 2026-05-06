@@ -212,50 +212,134 @@ async def _execute_pipeline(pipeline_job_id: int):
 
 async def _run_generate(db, pl, cfg: dict) -> dict:
     """
-    Content generation step.
-    Currently a structured placeholder that counts products and logs.
+    Content generation step — runs AI/logic generators for every enabled field
+    and saves results back to each Product row so the upload step uses them.
     Returns stats dict: {total, ok, fallback, failed}.
     """
     from models.models import Product
     from sqlalchemy import select, func as sqlfunc
+    import json
+    from pathlib import Path
 
-    total = (
-        await db.execute(
-            select(sqlfunc.count())
-            .select_from(Product)
-            .where(Product.fetch_job_id == pl.fetch_job_id)
-        )
-    ).scalar_one()
-
-    await _plog(db, pl.id, "generate", "info",
-                f"Content generation: {total} products in batch")
-
+    # ── Load generation config ────────────────────────────────────────────────
     gen_cfg = cfg.get("content_gen_config", {})
     if not gen_cfg:
-        # Try loading the saved config from disk; fall back to DEFAULT_CONFIG
-        from pathlib import Path
-        import json
         saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
         if saved_path.exists():
             try:
                 gen_cfg = json.loads(saved_path.read_text())
-                await _plog(db, pl.id, "generate", "info",
-                            "Loaded saved content generation config")
+                await _plog(db, pl.id, "generate", "info", "Loaded saved content generation config")
             except Exception:
                 pass
         if not gen_cfg:
             from routers.content import DEFAULT_CONFIG
             gen_cfg = DEFAULT_CONFIG
-            await _plog(db, pl.id, "generate", "info",
-                        "Using default content generation config")
+            await _plog(db, pl.id, "generate", "info", "Using default content generation config")
+
+    # Build a GenerateConfig object the content router understands
+    from routers.content import GenerateConfig, _run_field, FIELD_LIST
+    try:
+        template = GenerateConfig(**gen_cfg)
+    except Exception as e:
+        await _plog(db, pl.id, "generate", "warn", f"Invalid gen config, using defaults: {e}")
+        from routers.content import DEFAULT_CONFIG
+        template = GenerateConfig(**DEFAULT_CONFIG)
+
+    gs = template.globalSettings or {}
+    ai_enabled = gs.get("ai_enabled", False)
+    ai_provider = gs.get("ai_provider", "openai")
+
+    # ── Load products ─────────────────────────────────────────────────────────
+    products = (
+        await db.execute(
+            select(Product).where(Product.fetch_job_id == pl.fetch_job_id)
+        )
+    ).scalars().all()
+
+    total = len(products)
+    await _plog(db, pl.id, "generate", "info",
+                f"Content generation: {total} products | AI={'on (' + ai_provider + ')' if ai_enabled else 'off (logic only)'}")
+
+    ok_count = fallback_count = failed_count = 0
+
+    # ── Field → Product attribute mapping ─────────────────────────────────────
+    FIELD_ATTR = {
+        "description":       "description",
+        "short_description": "short_description",
+        "slug":              "slug",
+        "meta_title":        "meta_title",
+        "meta_description":  "meta_description",
+        "tags":              "tags",
+        "image_alt":         "image_alt",
+        "image_names":       "image_names",
+    }
+
+    for product in products:
+        try:
+            # Build a product dict the generators understand
+            raw = product.raw_data or {}
+            prod_dict = {
+                "name":        product.name or "",
+                "sku":         product.sku or "",
+                "description": product.description or "",
+                "price":       product.price or "0",
+                **raw,
+            }
+
+            sources: dict = product.content_source or {}
+            prod_failed = False
+
+            # Run all enabled fields
+            import asyncio as _aio
+            results = await _aio.gather(*[
+                _run_field(field, prod_dict, template)
+                for field in FIELD_LIST
+                if (template.fields or {}).get(field, {}).get("enabled", True)
+            ], return_exceptions=True)
+
+            for field, result in zip(
+                [f for f in FIELD_LIST if (template.fields or {}).get(f, {}).get("enabled", True)],
+                results
+            ):
+                attr = FIELD_ATTR.get(field)
+                if not attr:
+                    continue
+                if isinstance(result, Exception):
+                    await _plog(db, pl.id, "generate", "warn",
+                                f"  {product.sku} [{field}]: exception — {result}")
+                    prod_failed = True
+                    continue
+                value = result.get("value", "")
+                source = result.get("source", "logic")
+                if value:
+                    setattr(product, attr, value)
+                    sources[field] = source
+
+            product.content_source = sources
+
+            if prod_failed:
+                fallback_count += 1
+            else:
+                ok_count += 1
+
+        except Exception as e:
+            await _plog(db, pl.id, "generate", "error",
+                        f"  {product.sku}: generation failed — {e}")
+            failed_count += 1
+
+        # Commit every 10 products to avoid long transactions
+        if (ok_count + fallback_count + failed_count) % 10 == 0:
+            await db.commit()
+
+    await db.commit()
 
     await _plog(db, pl.id, "generate", "info",
-                f"Content generation complete (placeholder) — {total} products processed")
+                f"Content generation complete — {ok_count} ok | {fallback_count} partial | {failed_count} failed")
     return {
         "total": total,
-        "ok": total,
-        "fallback": 0,
-        "failed": 0,
+        "ok": ok_count,
+        "fallback": fallback_count,
+        "failed": failed_count,
     }
 
 

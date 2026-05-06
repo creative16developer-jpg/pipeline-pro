@@ -215,6 +215,32 @@ async def create_product(store: Store, product_data: dict) -> dict:
     if sku:
         payload["sku"] = sku
 
+    slug = (product_data.get("slug", "") or "").strip()
+    if slug:
+        payload["slug"] = slug
+
+    # Tags: comma-separated string → WooCommerce tag objects
+    tags_raw = (product_data.get("tags", "") or "").strip()
+    if tags_raw:
+        payload["tags"] = [{"name": t.strip()} for t in tags_raw.split(",") if t.strip()]
+
+    # SEO meta via Yoast/RankMath (stored in meta_data array)
+    meta_entries = []
+    meta_title = (product_data.get("meta_title", "") or "").strip()
+    meta_desc = (product_data.get("meta_description", "") or "").strip()
+    if meta_title:
+        meta_entries += [
+            {"key": "_yoast_wpseo_title", "value": meta_title},
+            {"key": "rank_math_title", "value": meta_title},
+        ]
+    if meta_desc:
+        meta_entries += [
+            {"key": "_yoast_wpseo_metadesc", "value": meta_desc},
+            {"key": "rank_math_description", "value": meta_desc},
+        ]
+    if meta_entries:
+        payload["meta_data"] = meta_entries
+
     if images:
         payload["images"] = images
 
@@ -284,6 +310,31 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
         payload["stock_quantity"] = int(product_data["stock_quantity"] or 0)
     if "sku" in product_data and product_data["sku"]:
         payload["sku"] = product_data["sku"].strip()
+
+    slug = (product_data.get("slug", "") or "").strip()
+    if slug:
+        payload["slug"] = slug
+
+    tags_raw = (product_data.get("tags", "") or "").strip()
+    if tags_raw:
+        payload["tags"] = [{"name": t.strip()} for t in tags_raw.split(",") if t.strip()]
+
+    meta_entries = []
+    meta_title = (product_data.get("meta_title", "") or "").strip()
+    meta_desc = (product_data.get("meta_description", "") or "").strip()
+    if meta_title:
+        meta_entries += [
+            {"key": "_yoast_wpseo_title", "value": meta_title},
+            {"key": "rank_math_title", "value": meta_title},
+        ]
+    if meta_desc:
+        meta_entries += [
+            {"key": "_yoast_wpseo_metadesc", "value": meta_desc},
+            {"key": "rank_math_description", "value": meta_desc},
+        ]
+    if meta_entries:
+        payload["meta_data"] = meta_entries
+
     if images:
         payload["images"] = images
     if categories:

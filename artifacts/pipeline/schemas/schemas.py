@@ -80,6 +80,14 @@ class ProductOut(BaseModel):
     sku: str
     name: str
     description: Optional[str] = None
+    short_description: Optional[str] = None
+    slug: Optional[str] = None
+    meta_title: Optional[str] = None
+    meta_description: Optional[str] = None
+    tags: Optional[str] = None
+    image_alt: Optional[str] = None
+    image_names: Optional[str] = None
+    content_source: Optional[Any] = None
     price: Optional[str] = None
     stock_status: Optional[str] = None
     status: str
