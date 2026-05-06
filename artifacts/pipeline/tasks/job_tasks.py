@@ -790,7 +790,8 @@ async def _run_upload(db, job):
             if not skip_images:
                 image_urls = await _resolve_product_images(db, job, product, raw, wc, store)
                 if image_urls:
-                    payload["images"] = image_urls
+                    alt_text = product.image_alt or product.name or ""
+                    payload["images"] = [{"src": url, "alt": alt_text} for url in image_urls]
 
             # ── Check if SKU already exists in WooCommerce (prevents duplicates)
             existing_woo = await wc.get_product_by_sku(store, product.sku)

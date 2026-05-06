@@ -193,10 +193,17 @@ async def create_product(store: Store, product_data: dict) -> dict:
                        images (list of URLs), categories, stock_quantity, manage_stock
     """
     raw_images = product_data.get("images", [])
-    images = [
-        {"src": url} for url in raw_images
-        if isinstance(url, str) and url.startswith("http")
-    ]
+    images = []
+    for img in raw_images:
+        if isinstance(img, dict):
+            src = img.get("src") or img.get("url", "")
+            if src.startswith("http"):
+                obj: dict = {"src": src}
+                if img.get("alt"):
+                    obj["alt"] = img["alt"]
+                images.append(obj)
+        elif isinstance(img, str) and img.startswith("http"):
+            images.append({"src": img})
 
     raw_cats = product_data.get("category_ids", [])
     categories = [{"id": int(cid)} for cid in raw_cats if cid]
@@ -288,10 +295,17 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
     Update an existing WooCommerce product (full payload).
     """
     raw_images = product_data.get("images", [])
-    images = [
-        {"src": url} for url in raw_images
-        if isinstance(url, str) and url.startswith("http")
-    ]
+    images = []
+    for img in raw_images:
+        if isinstance(img, dict):
+            src = img.get("src") or img.get("url", "")
+            if src.startswith("http"):
+                obj: dict = {"src": src}
+                if img.get("alt"):
+                    obj["alt"] = img["alt"]
+                images.append(obj)
+        elif isinstance(img, str) and img.startswith("http"):
+            images.append({"src": img})
 
     raw_cats = product_data.get("category_ids", [])
     categories = [{"id": int(cid)} for cid in raw_cats if cid]

@@ -333,6 +333,12 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
               </div>
 
               <FieldRow
+                label="Title"
+                value={(product as any).name}
+                source={src?.title || "sunsky"}
+                sunskyValue={(product as any).name}
+              />
+              <FieldRow
                 label="Description"
                 value={(product as any).description}
                 source={src?.description || "sunsky"}

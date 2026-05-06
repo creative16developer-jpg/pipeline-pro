@@ -264,6 +264,7 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
 
     # ── Field → Product attribute mapping ─────────────────────────────────────
     FIELD_ATTR = {
+        "title":             "name",
         "description":       "description",
         "short_description": "short_description",
         "slug":              "slug",

@@ -60,6 +60,14 @@ def _build_product_context(product: dict) -> str:
 def _build_prompt(field: str, product: dict, options: dict) -> str:
     ctx = _build_product_context(product)
 
+    if field == "title":
+        max_chars = options.get("max_chars", 120)
+        return (
+            f"Write a concise, SEO-friendly product title for a WooCommerce store.\n"
+            f"Max {max_chars} characters. Plain text only. Include key product feature and type.\n\n"
+            f"{ctx}\n\nReturn ONLY the title text."
+        )
+
     if field == "description":
         structure = options.get("structure", ["intro", "features", "benefits", "compatibility"])
         return (

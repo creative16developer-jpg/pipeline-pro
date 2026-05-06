@@ -41,6 +41,7 @@ _jobs: dict[str, dict] = {}
 # Field catalogue
 # ---------------------------------------------------------------------------
 FIELD_LIST = [
+    "title",
     "description",
     "short_description",
     "slug",
@@ -63,6 +64,11 @@ DEFAULT_CONFIG: dict = {
         "fallback_strategy": "safe",
     },
     "fields": {
+        "title": {
+            "enabled": True,
+            "mode": "logic",
+            "options": {"max_chars": 120},
+        },
         "description": {
             "enabled": True,
             "mode": "hybrid",
@@ -166,6 +172,12 @@ def _slugify(text: str) -> str:
 # Per-field generators
 # ---------------------------------------------------------------------------
 
+def _gen_title(product: dict, options: dict) -> str:
+    name = product.get("name", "")
+    max_chars = int(options.get("max_chars", 120))
+    return (name[:max_chars - 3] + "...") if len(name) > max_chars else name
+
+
 def _gen_description(product: dict, options: dict) -> str:
     name = product.get("name", "Product")
     desc = product.get("description", "")
@@ -264,6 +276,7 @@ def _gen_image_names(product: dict, options: dict) -> str:
 
 
 _GENERATORS: dict[str, Any] = {
+    "title": _gen_title,
     "description": _gen_description,
     "short_description": _gen_short_description,
     "slug": _gen_slug,
