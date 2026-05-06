@@ -205,6 +205,7 @@ async def create_product(store: Store, product_data: dict) -> dict:
         "name": product_data.get("name", "") or "Unnamed Product",
         "regular_price": str(product_data.get("price", "0") or "0"),
         "description": product_data.get("description", "") or "",
+        "short_description": product_data.get("short_description", "") or "",
         "status": "draft",
         "manage_stock": True,
         "stock_quantity": int(product_data.get("stock_quantity", 0) or 0),
@@ -276,6 +277,8 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
         payload["regular_price"] = str(product_data["price"] or "0")
     if "description" in product_data:
         payload["description"] = product_data["description"] or ""
+    if "short_description" in product_data:
+        payload["short_description"] = product_data["short_description"] or ""
     if "stock_quantity" in product_data:
         payload["manage_stock"] = True
         payload["stock_quantity"] = int(product_data["stock_quantity"] or 0)

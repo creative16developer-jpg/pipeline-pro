@@ -778,6 +778,7 @@ async def _run_upload(db, job):
                 "sku":            product.sku,
                 "price":          product.price or "0",
                 "description":    product.description or "",
+                "short_description": product.short_description or "",
                 "stock_quantity": 10 if product.stock_status == "in_stock" else 0,
             }
 
