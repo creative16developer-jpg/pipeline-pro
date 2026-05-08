@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const FIELD_LIST = [
+  "title",
   "description",
   "short_description",
   "slug",
@@ -22,6 +23,7 @@ const FIELD_LIST = [
 ];
 
 const FIELD_LABELS: Record<string, string> = {
+  title: "Product Title",
   description: "Description",
   short_description: "Short Description",
   slug: "URL Slug",
@@ -138,7 +140,9 @@ const DEFAULT_CONFIG: GenerateConfig = {
         enabled: true,
         mode: "logic" as Mode,
         options:
-          f === "description"
+          f === "title"
+            ? { max_chars: 120 }
+            : f === "description"
             ? { structure: ["intro", "features", "benefits", "compatibility"], keyword_source: "auto" }
             : f === "slug"
             ? { transliterate: true, ensure_unique: true }
@@ -317,6 +321,20 @@ function FieldConfigPanel({
                 <Toggle checked={!!opt.ensure_unique} onChange={(v) => setOpt({ ensure_unique: v })} />
               </div>
             </>
+          )}
+
+          {field === "title" && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Characters</label>
+              <input
+                type="number"
+                value={opt.max_chars ?? 120}
+                min={20}
+                max={300}
+                onChange={(e) => setOpt({ max_chars: Number(e.target.value) })}
+                className={cn(inputCls, "mt-2")}
+              />
+            </div>
           )}
 
           {(field === "meta_title" || field === "meta_description") && (
