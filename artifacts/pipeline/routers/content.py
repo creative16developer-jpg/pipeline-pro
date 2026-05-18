@@ -144,21 +144,46 @@ async def get_default_config():
     }
 
 
+def _migrate_config(raw: dict) -> dict:
+    """
+    Forward-migrate a saved config to the current schema:
+    - "hybrid" mode → "derive"
+    - Missing fields filled from DEFAULT_CONFIG
+    - Missing options dict filled with {}
+    """
+    fields: dict = {}
+    for field in FIELD_LIST:
+        saved_field = raw.get("fields", {}).get(field)
+        default_field = DEFAULT_CONFIG["fields"].get(field, {
+            "enabled": True,
+            "mode": FIELD_DEFAULT_MODE.get(field, "logic"),
+            "options": {},
+        })
+        if not saved_field:
+            fields[field] = default_field
+        else:
+            mode = saved_field.get("mode", default_field.get("mode", "logic"))
+            if mode == "hybrid":
+                mode = "derive"
+            fields[field] = {
+                "enabled": saved_field.get("enabled", True),
+                "mode": mode,
+                "options": saved_field.get("options") or default_field.get("options", {}),
+            }
+    return {
+        "globalSettings": {**DEFAULT_CONFIG["globalSettings"], **raw.get("globalSettings", {})},
+        "fields": fields,
+        "overrides": raw.get("overrides", {}),
+    }
+
+
 @router.get("/saved-config")
 async def get_saved_config():
-    """Return the persisted generation config, or DEFAULT_CONFIG if none saved yet."""
+    """Return the persisted generation config, migrated to current schema."""
     if _SAVED_CONFIG_PATH.exists():
         try:
-            saved = json.loads(_SAVED_CONFIG_PATH.read_text())
-            # Ensure all current fields are present (backward compat with older saves)
-            for field in FIELD_LIST:
-                if field not in saved.get("fields", {}):
-                    saved.setdefault("fields", {})[field] = DEFAULT_CONFIG["fields"].get(field, {
-                        "enabled": True,
-                        "mode": FIELD_DEFAULT_MODE.get(field, "logic"),
-                        "options": {},
-                    })
-            return saved
+            raw = json.loads(_SAVED_CONFIG_PATH.read_text())
+            return _migrate_config(raw)
         except Exception:
             pass
     return DEFAULT_CONFIG

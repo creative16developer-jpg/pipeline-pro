@@ -919,6 +919,38 @@ export default function ContentGeneration() {
           You have unsaved changes — save to use these settings in pipelines
         </div>
       )}
+
+      {/* ── AI enabled but no API key configured ─── */}
+      {(() => {
+        const gs = config.globalSettings;
+        const provider = gs.ai_provider;
+        const aiFieldCount = FIELD_LIST.filter((f) => config.fields[f]?.mode === "ai").length;
+        const keyMissing = gs.ai_enabled && aiFieldCount > 0 && provider &&
+          providerStatus[provider] && !providerStatus[provider].configured;
+        if (!keyMissing) return null;
+        const envVar = provider === "openai" ? "OPENAI_API_KEY"
+          : provider === "anthropic" ? "ANTHROPIC_API_KEY"
+          : "GEMINI_API_KEY";
+        return (
+          <div className="flex items-start gap-3 px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/25 text-sm text-red-300">
+            <XCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
+            <div>
+              <p className="font-semibold text-red-400">
+                AI is enabled but <code className="font-mono px-1 bg-red-500/15 rounded">{envVar}</code> is not set
+              </p>
+              <p className="text-xs text-red-300/80 mt-1">
+                Every field set to <strong>ai</strong> mode will fall back to logic — this is why you see
+                "logic fallback (AI failed)" in your pipeline logs.
+                Add the key in <strong>Settings → Environment variables</strong>, then restart the Python API.
+                Alternatively, switch those {aiFieldCount} field{aiFieldCount !== 1 ? "s" : ""} to{" "}
+                <strong>logic</strong> or <strong>derive</strong> mode, or click{" "}
+                <strong>Reset Defaults</strong> above.
+              </p>
+            </div>
+          </div>
+        );
+      })()}
+
       <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/8 border border-amber-500/15 text-xs text-amber-400/80 italic">
         <Info className="w-3.5 h-3.5 shrink-0" />
         Preview results shown here only — save config to apply settings to new pipeline runs

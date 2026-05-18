@@ -312,8 +312,9 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
                     setattr(product, attr, value)
                     sources[field] = source
                     if source.startswith("logic:fallback"):
+                        err_detail = result.get("error") or "AI call failed"
                         await _plog(db, pl.id, "generate", "warn",
-                                    f"  {product.sku} [{field}]: used logic fallback (AI failed)")
+                                    f"  {product.sku} [{field}]: logic fallback — {err_detail}")
 
             product.content_source = sources
 
