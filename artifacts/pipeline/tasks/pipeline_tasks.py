@@ -212,12 +212,12 @@ async def _execute_pipeline(pipeline_job_id: int):
 
 async def _run_generate(db, pl, cfg: dict) -> dict:
     """
-    Content generation step — runs AI/logic generators for every enabled field
-    and saves results back to each Product row so the upload step uses them.
+    Content generation step — DAG-aware field generation via services.content_service.
+    Saves results back to each Product row so the upload step uses them.
     Returns stats dict: {total, ok, fallback, failed}.
     """
-    from models.models import Product
-    from sqlalchemy import select, func as sqlfunc
+    from models.models import Product, CsvMapping
+    from sqlalchemy import select
     import json
     from pathlib import Path
 
@@ -236,18 +236,22 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
             gen_cfg = DEFAULT_CONFIG
             await _plog(db, pl.id, "generate", "info", "Using default content generation config")
 
-    # Build a GenerateConfig object the content router understands
-    from routers.content import GenerateConfig, _run_field, FIELD_LIST
-    try:
-        template = GenerateConfig(**gen_cfg)
-    except Exception as e:
-        await _plog(db, pl.id, "generate", "warn", f"Invalid gen config, using defaults: {e}")
-        from routers.content import DEFAULT_CONFIG
-        template = GenerateConfig(**DEFAULT_CONFIG)
-
-    gs = template.globalSettings or {}
+    # Validate/normalise the config
+    template: dict = gen_cfg if isinstance(gen_cfg, dict) else {}
+    gs = (template.get("globalSettings") or {})
     ai_enabled = gs.get("ai_enabled", False)
     ai_provider = gs.get("ai_provider", "openai")
+
+    # ── Import service (no circular dep — service never imports from routers) ──
+    from services.content_service import generate_product, FIELD_ATTR
+
+    # ── Build CSV mapping lookup dict ─────────────────────────────────────────
+    csv_q = await db.execute(select(CsvMapping))
+    csv_entries = csv_q.scalars().all()
+    csv_lookup: dict[str, CsvMapping] = {e.sunsky_sku: e for e in csv_entries}
+    if csv_lookup:
+        await _plog(db, pl.id, "generate", "info",
+                    f"CSV mappings loaded: {len(csv_lookup)} entries")
 
     # ── Load products ─────────────────────────────────────────────────────────
     products = (
@@ -258,56 +262,48 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
 
     total = len(products)
     await _plog(db, pl.id, "generate", "info",
-                f"Content generation: {total} products | AI={'on (' + ai_provider + ')' if ai_enabled else 'off (logic only)'}")
+                f"Content generation: {total} products | "
+                f"AI={'on (' + ai_provider + ')' if ai_enabled else 'off (logic only)'}")
 
     ok_count = fallback_count = failed_count = 0
 
-    # ── Field → Product attribute mapping ─────────────────────────────────────
-    FIELD_ATTR = {
-        "title":             "name",
-        "description":       "description",
-        "short_description": "short_description",
-        "slug":              "slug",
-        "meta_title":        "meta_title",
-        "meta_description":  "meta_description",
-        "tags":              "tags",
-        "image_alt":         "image_alt",
-        "image_names":       "image_names",
-    }
-
     for product in products:
         try:
-            # Build a product dict the generators understand
             raw = product.raw_data or {}
+
+            # Apply CSV mapping if available
+            csv_entry = csv_lookup.get(product.sku)
+            csv_title = ""
+            site_sku = ""
+            if csv_entry:
+                csv_title = csv_entry.csv_title or ""
+                site_sku = csv_entry.site_sku or ""
+                if site_sku:
+                    product.site_sku = site_sku
+
             prod_dict = {
                 "name":        product.name or "",
                 "sku":         product.sku or "",
                 "description": product.description or "",
                 "price":       product.price or "0",
+                "csv_title":   csv_title,
+                "site_sku":    site_sku,
                 **raw,
             }
 
             sources: dict = product.content_source or {}
             prod_failed = False
 
-            # Run all enabled fields
-            import asyncio as _aio
-            results = await _aio.gather(*[
-                _run_field(field, prod_dict, template)
-                for field in FIELD_LIST
-                if (template.fields or {}).get(field, {}).get("enabled", True)
-            ], return_exceptions=True)
+            # Run all enabled fields via DAG engine
+            results = await generate_product(prod_dict, template)
 
-            for field, result in zip(
-                [f for f in FIELD_LIST if (template.fields or {}).get(f, {}).get("enabled", True)],
-                results
-            ):
+            for field, result in results.items():
                 attr = FIELD_ATTR.get(field)
                 if not attr:
                     continue
-                if isinstance(result, Exception):
+                if result.get("status") == "failed":
                     await _plog(db, pl.id, "generate", "warn",
-                                f"  {product.sku} [{field}]: exception — {result}")
+                                f"  {product.sku} [{field}]: {result.get('error', 'failed')}")
                     prod_failed = True
                     continue
                 value = result.get("value", "")
@@ -315,6 +311,9 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
                 if value:
                     setattr(product, attr, value)
                     sources[field] = source
+                    if source.startswith("logic:fallback"):
+                        await _plog(db, pl.id, "generate", "warn",
+                                    f"  {product.sku} [{field}]: used logic fallback (AI failed)")
 
             product.content_source = sources
 
@@ -328,14 +327,14 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
                         f"  {product.sku}: generation failed — {e}")
             failed_count += 1
 
-        # Commit every 10 products to avoid long transactions
         if (ok_count + fallback_count + failed_count) % 10 == 0:
             await db.commit()
 
     await db.commit()
 
     await _plog(db, pl.id, "generate", "info",
-                f"Content generation complete — {ok_count} ok | {fallback_count} partial | {failed_count} failed")
+                f"Content generation complete — "
+                f"{ok_count} ok | {fallback_count} partial | {failed_count} failed")
     return {
         "total": total,
         "ok": ok_count,

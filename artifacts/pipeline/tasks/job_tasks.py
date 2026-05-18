@@ -775,7 +775,7 @@ async def _run_upload(db, job):
 
             payload = {
                 "name":              product.name,
-                "sku":               product.sku,
+                "sku":               product.site_sku or product.sku,
                 "price":             product.price or "0",
                 "description":       product.description or "",
                 "short_description": product.short_description or "",

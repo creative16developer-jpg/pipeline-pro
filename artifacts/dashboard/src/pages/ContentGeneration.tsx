@@ -24,17 +24,38 @@ const FIELD_LIST = [
 
 const FIELD_LABELS: Record<string, string> = {
   title: "Product Title",
-  description: "Description",
-  short_description: "Short Description",
-  slug: "URL Slug",
-  meta_title: "Meta Title",
-  meta_description: "Meta Description",
   tags: "Tags",
+  description: "Description",
+  slug: "URL Slug",
   image_alt: "Image Alt Text",
+  meta_title: "Meta Title",
   image_names: "Image File Names",
+  short_description: "Short Description",
+  meta_description: "Meta Description",
 };
 
-const MODE_OPTIONS = ["logic", "ai", "hybrid"] as const;
+const FIELD_DEPS: Record<string, string[]> = {
+  slug: ["title"],
+  image_alt: ["title"],
+  meta_title: ["title"],
+  image_names: ["slug"],
+  short_description: ["description"],
+  meta_description: ["description"],
+};
+
+const FIELD_DEFAULT_MODE: Record<string, string> = {
+  title: "logic",
+  tags: "logic",
+  description: "ai",
+  slug: "derive",
+  image_alt: "derive",
+  meta_title: "derive",
+  image_names: "derive",
+  short_description: "derive",
+  meta_description: "derive",
+};
+
+const MODE_OPTIONS = ["logic", "ai", "derive"] as const;
 type Mode = (typeof MODE_OPTIONS)[number];
 
 const STRUCTURE_OPTIONS = ["intro", "features", "benefits", "compatibility"];
@@ -138,26 +159,26 @@ const DEFAULT_CONFIG: GenerateConfig = {
       f,
       {
         enabled: true,
-        mode: "logic" as Mode,
+        mode: (FIELD_DEFAULT_MODE[f] ?? "logic") as Mode,
         options:
           f === "title"
             ? { max_chars: 120 }
             : f === "description"
-            ? { structure: ["intro", "features", "benefits", "compatibility"], keyword_source: "auto" }
+            ? { structure: ["intro", "features", "benefits", "compatibility", "closing"], keyword_source: "auto" }
             : f === "slug"
-            ? { transliterate: true, ensure_unique: true }
+            ? { max_chars: 70, ensure_unique: true }
             : f === "meta_title"
             ? { max_chars: 60 }
             : f === "meta_description"
-            ? { max_chars: 155 }
+            ? { max_chars: 160 }
             : f === "tags"
-            ? { max_tags: 8, include_specs: true }
+            ? { max_tags: 3, include_specs: true }
             : f === "image_alt"
-            ? { include_sku: true }
+            ? { max_chars: 125, include_sku: true }
             : f === "image_names"
-            ? { pattern: "{sku}-{name}" }
+            ? { max_chars: 70 }
             : f === "short_description"
-            ? { max_words: 30 }
+            ? { max_chars: 400 }
             : {},
       },
     ])
@@ -323,6 +344,18 @@ function FieldConfigPanel({
             </>
           )}
 
+          {config.mode === "derive" && (
+            <div className="p-3 rounded-xl bg-primary/5 border border-primary/20">
+              <p className="text-xs text-primary font-medium mb-1">Derive Mode</p>
+              <p className="text-xs text-muted-foreground">
+                This field is automatically computed from:{" "}
+                <span className="font-mono text-foreground">
+                  {(FIELD_DEPS[field] ?? []).join(", ") || "product data"}
+                </span>
+              </p>
+            </div>
+          )}
+
           {field === "title" && (
             <div>
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Characters</label>
@@ -337,16 +370,16 @@ function FieldConfigPanel({
             </div>
           )}
 
-          {(field === "meta_title" || field === "meta_description") && (
+          {(field === "meta_title" || field === "meta_description" || field === "slug" || field === "image_alt" || field === "short_description" || field === "image_names") && (
             <div>
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
                 Max Characters
               </label>
               <input
                 type="number"
-                value={opt.max_chars ?? (field === "meta_title" ? 60 : 155)}
+                value={opt.max_chars ?? (field === "meta_title" ? 60 : field === "meta_description" ? 160 : field === "slug" ? 70 : field === "image_alt" ? 125 : field === "short_description" ? 400 : 70)}
                 min={20}
-                max={300}
+                max={500}
                 onChange={(e) => setOpt({ max_chars: Number(e.target.value) })}
                 className={cn(inputCls, "mt-2")}
               />
@@ -824,7 +857,7 @@ export default function ContentGeneration() {
               <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-border/40">
                 <div>
                   <p className="text-sm font-medium">AI Enabled</p>
-                  <p className="text-xs text-muted-foreground">Use AI for 'ai' and 'hybrid' modes</p>
+                  <p className="text-xs text-muted-foreground">Use AI for fields set to 'ai' mode</p>
                 </div>
                 <Toggle
                   checked={config.globalSettings.ai_enabled}

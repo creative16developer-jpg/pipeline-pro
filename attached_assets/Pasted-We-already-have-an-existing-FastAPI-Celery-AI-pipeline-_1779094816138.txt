@@ -1,0 +1,569 @@
+We already have an existing FastAPI + Celery + AI pipeline project.
+
+Repository:
+https://github.com/creative16developer-jpg/pipeline-pro
+
+Your task is to UPGRADE and REFACTOR the current system into a production-grade AI Product Generation Engine and implement all client feedback and latest architectural requirements.
+
+IMPORTANT:
+
+* DO NOT rebuild from scratch
+* DO NOT break existing APIs
+* DO NOT remove existing functionality
+* Extend incrementally
+* Keep backward compatibility
+* Use scalable production-safe architecture
+* Follow clean architecture principles
+* Avoid hardcoded field logic
+* Keep all logic modular and registry-driven
+
+==================================================
+CRITICAL ARCHITECTURE UPDATE
+============================
+
+The latest field specification changes the architecture:
+
+1. REMOVE "hybrid" mode completely
+
+2. ADD new "derive" mode
+   A derive field depends on another field output.
+
+3. New execution order:
+
+logic -> parallel independent fields
+ai -> AI fields
+derive -> dependent fields
+validate -> per field
+persist -> results + tracking
+
+4. _run_field must be moved:
+   FROM:
+   routers/content.py
+
+TO:
+services/content_service.py
+
+Routers should only call services.
+
+5. Remove circular dependency:
+   routers/ <-> tasks/
+
+==================================================
+CLIENT FEEDBACK TO IMPLEMENT
+============================
+
+1. Add API key configuration fields
+   Support:
+
+* Gemini
+* OpenAI
+* Claude
+
+Requirements:
+
+* secure storage
+* validation
+* provider switching
+
+2. Add Gemini model selector
+
+Support:
+
+* Gemini 3.1 Pro
+* Gemini 3 Flash
+* Gemini 3.1 Flash-Lite
+
+Must support future dynamic model additions.
+
+3. Fix Configure field
+
+* settings currently do not save correctly
+* add validation
+* add persistence checks
+* add success/error states
+
+4. Fix Settings system
+   Requirements:
+
+* persist after refresh
+* proper backend save/load
+* loading states
+* validation states
+* optimistic updates
+
+5. Improve Pipeline Logs
+   Need detailed logs:
+
+* Pipeline ID
+* Store
+* Status
+* Created date
+* Imported products
+* Generated products
+* Failed products
+* AI provider
+* AI model
+* Retry attempts
+* Fallback usage
+* Upload info
+* Sync info
+
+Client must clearly see:
+
+* which products were imported
+* which products failed
+* which products used fallback
+* which products used AI
+
+6. Improve UI visibility
+
+* stronger outlines
+* better contrast
+* clearer buttons
+* readable dark mode
+* improved logs readability
+
+7. Add Categories + Attributes Preview
+   Before import:
+
+* fetch categories
+* fetch attributes
+* preview mappings
+* validation preview
+
+==================================================
+CSV IMPORT FEATURE (NEW)
+========================
+
+Implement CSV import directly inside Fetch Job page.
+
+Purpose:
+Client wants full control over product titles before generation/import.
+
+CSV Columns:
+
+1. Sunsky SKU
+2. Site SKU
+3. Product Title
+
+Behavior:
+
+* Sunsky SKU used for matching fetched products
+* Site SKU saved into WooCommerce
+* Product Title replaces original Sunsky title
+* If no CSV used:
+
+  * original Sunsky SKU is saved in Woo
+
+==================================================
+CSV TITLE RESOLUTION PRIORITY
+=============================
+
+Title resolution order:
+
+1. CSV Import Title
+2. Manual Dashboard Override
+3. Cleaned Sunsky Title
+4. Original Sunsky Title fallback
+
+==================================================
+CSV IMPORT REQUIREMENTS
+=======================
+
+1. Upload CSV before pipeline start
+2. Parse CSV safely
+3. Validate required columns
+4. Match products by Sunsky SKU
+5. Save Site SKU into WooCommerce
+6. Replace product title during generation
+7. Preview imported mappings before execution
+8. Log unmatched SKUs
+9. Support large CSV files
+10. Add import validation UI
+
+==================================================
+GENERATION ENGINE REQUIREMENTS
+==============================
+
+Implement production-grade Product Generation Engine with:
+
+1. DAG-based execution
+2. Dependency resolution
+3. logic / ai / derive modes
+4. Validation engine
+5. Retry + fallback handling
+6. Idempotency support
+7. Field persistence tracking
+8. Celery distributed execution
+9. AI abstraction layer
+10. Config-driven templates
+11. Structured observability
+12. Parallel-safe execution
+13. Registry-driven generators
+
+==================================================
+FIELD EXECUTION FLOW
+====================
+
+Each field must follow:
+
+IMPORT -> LOGIC/AI/DERIVE -> VALIDATE -> FALLBACK -> PERSIST
+
+Field failure must NOT stop the pipeline.
+
+==================================================
+DEPENDENCY ORDER
+================
+
+1. Title (logic)
+2. Slug (derive from Title)
+3. Tags (logic)
+4. Image Alt Text (derive from Title + attributes)
+5. Image Names (derive from Slug)
+6. Description (ai)
+7. Short Description (derive from Description)
+8. Meta Title (derive from Title)
+9. Meta Description (derive from Description)
+
+==================================================
+FIELD RULES
+===========
+
+TITLE (logic)
+
+* Clean HTML entities
+* Trim whitespace
+* Capitalize first letter
+* Max 120 chars
+
+Priority:
+
+1. CSV title
+2. Manual override
+3. Sunsky cleanup
+
+Fallback:
+original Sunsky title
+
+---
+
+SLUG (derive)
+
+* Transliterate unicode
+* Lowercase
+* Replace spaces with "-"
+* Remove special chars
+* Max 70 chars
+* Ensure DB uniqueness
+* On duplicate:
+  append -{sku[-4:]}
+
+Fallback:
+product-{sku[-8:]}
+
+---
+
+TAGS (logic)
+
+* Exactly 3 tags:
+
+  * primary category
+  * subcategory
+  * product type
+* Normalize casing
+* No brand names
+* No generic tags
+
+Fallback:
+primary category
+
+---
+
+IMAGE ALT TEXT (derive)
+Format:
+{cleaned_title} – {primary_attribute} – {brand}
+
+Rules:
+
+* Max 125 chars
+* Trim last word safely
+
+Fallback:
+{cleaned_title} – {sku}
+
+---
+
+IMAGE FILE NAMES (derive)
+Format:
+{slug}-{index}.webp
+
+Rules:
+
+* Sequential indexing
+* Max 70 chars
+
+---
+
+DESCRIPTION (ai)
+Input:
+
+* product name
+* category
+* paramsTable attributes
+* top keywords
+
+Rules:
+
+* 150–250 words
+* No HTML
+* Structure:
+
+  * intro
+  * features
+  * benefits
+  * compatibility
+  * closing
+
+Banned phrases:
+
+* "the best"
+* "100%"
+* "guarantee"
+
+Retry:
+3 times with exponential backoff
+
+Fallback:
+cleaned Sunsky description
+
+---
+
+SHORT DESCRIPTION (derive from Description)
+Rules:
+
+* 2–3 sentences
+* Max 400 chars
+* First sentence contains primary keyword
+* SEO-oriented
+
+Fallback:
+first sentence from Description
+
+---
+
+META TITLE (derive)
+Format:
+{cleaned_title} | {brand}
+
+Rules:
+
+* Max 60 chars
+* Trim title safely
+
+Fallback:
+cleaned_title only
+
+---
+
+META DESCRIPTION (derive from Description)
+Rules:
+
+* 140–160 chars
+* Include primary keyword
+* Natural CTA
+* SEO-oriented
+* No keyword stuffing
+
+Fallback:
+trim Description to 155 chars
+
+==================================================
+VALIDATION RULES
+================
+
+Title:
+
+* non_empty
+* max_chars:120
+
+Slug:
+
+* non_empty
+* max_chars:70
+* unique
+
+Tags:
+
+* max_items:3
+* non_empty
+
+Image Alt:
+
+* non_empty
+* max_chars:125
+
+Image Names:
+
+* non_empty
+* max_chars:70
+
+Description:
+
+* min_words:150
+* max_words:250
+* banned_words
+
+Short Description:
+
+* non_empty
+* max_chars:400
+
+Meta Title:
+
+* non_empty
+* max_chars:60
+
+Meta Description:
+
+* min_chars:140
+* max_chars:160
+
+==================================================
+FIELD LOGGING
+=============
+
+Each field must log:
+
+field
+mode
+status:
+
+* ok
+* fallback
+* failed
+
+source:
+
+* ai:gemini
+* logic
+* derive
+
+fallback_reason
+
+Fallbacks must log as WARNING level.
+
+==================================================
+DASHBOARD REQUIREMENTS
+======================
+
+Add content_source field inside product view.
+
+Display:
+
+* AI generated
+* logic generated
+* fallback generated
+* derive generated
+
+No separate page needed.
+
+==================================================
+AI PROVIDER SYSTEM
+==================
+
+Implement provider abstraction layer:
+
+* Gemini
+* OpenAI
+* Claude
+
+Requirements:
+
+* provider switching
+* model switching
+* retry handling
+* timeout handling
+* rate limiting
+* token tracking
+* cost tracking
+
+==================================================
+OBSERVABILITY
+=============
+
+Add:
+
+* structured logs
+* field metrics
+* retry metrics
+* fallback metrics
+* AI latency metrics
+* pipeline metrics
+
+==================================================
+PERSISTENCE
+===========
+
+Persist:
+
+* jobs
+* field states
+* AI responses
+* generated values
+* errors
+* generation version
+* template version
+
+All writes must be transactional.
+
+==================================================
+DELIVERABLES
+============
+
+1. Refactored architecture
+2. CSV import system
+3. Fetch page CSV UI
+4. AI provider config UI
+5. Gemini model selector
+6. Improved settings system
+7. Categories preview system
+8. Attributes preview system
+9. Validation engine
+10. Retry/fallback engine
+11. Registry-based field engine
+12. Structured logs
+13. Parallel-safe execution
+14. Circular dependency removal
+15. Service-layer refactor
+16. Migration-safe DB updates
+17. Improved dashboard UI
+18. Product-level generation tracking
+
+==================================================
+IMPLEMENTATION APPROACH
+=======================
+
+FIRST:
+
+1. Analyze existing repository
+2. Detect current architecture
+3. Map reusable modules
+4. Create migration plan
+5. Create phased rollout plan
+6. Identify breaking-risk areas
+
+THEN:
+Implement incrementally and safely.
+
+Before coding return:
+
+* architecture audit
+* implementation phases
+* migration plan
+* files to modify
+* files to create
+* DB schema changes
+* service refactor plan
+* dependency cleanup plan
+* UI changes plan
+* risk analysis

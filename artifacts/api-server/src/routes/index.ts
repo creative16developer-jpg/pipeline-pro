@@ -6,6 +6,8 @@ import jobsRouter from "./jobs";
 import sunskyRouter from "./sunsky";
 import dashboardRouter from "./dashboard";
 import pipelinesRouter from "./pipelines";
+import csvRouter from "./csv";
+import generateRouter from "./generate";
 
 const router: IRouter = Router();
 
@@ -16,5 +18,7 @@ router.use("/jobs", jobsRouter);
 router.use("/sunsky", sunskyRouter);
 router.use("/dashboard", dashboardRouter);
 router.use("/pipelines", pipelinesRouter);
+router.use("/csv", csvRouter);
+router.use("/generate", generateRouter);
 
 export default router;

@@ -101,6 +101,10 @@ class Product(Base):
 
     fetch_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
 
+    # CSV Import fields — set when a CSV mapping file is uploaded before pipeline
+    csv_title = Column(String(200), nullable=True)
+    site_sku  = Column(String(100), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -207,6 +211,20 @@ class Image(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     product = relationship("Product", back_populates="images")
+
+
+class CsvMapping(Base):
+    """
+    Stores SKU → title/site-SKU mappings uploaded via CSV before a pipeline run.
+    The sunsky_sku column matches Product.sku (the Sunsky product SKU).
+    """
+    __tablename__ = "csv_mappings"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    sunsky_sku = Column(String(100), nullable=False, unique=True, index=True)
+    site_sku   = Column(String(100), nullable=True)
+    csv_title  = Column(String(200), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class WooCategory(Base):

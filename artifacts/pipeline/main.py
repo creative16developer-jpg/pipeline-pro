@@ -22,7 +22,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from config import get_settings
 from database import engine, Base
-from routers import dashboard, stores, products, jobs, sunsky, content, pipeline
+from routers import dashboard, stores, products, jobs, sunsky, content, pipeline, csv_import
 import models.models  # noqa: F401 — registers all ORM models with Base
 
 STATIC_DIR = Path(__file__).parent.parent / "dashboard" / "dist" / "public"
@@ -33,20 +33,24 @@ settings = get_settings()
 
 
 async def _run_migrations(conn):
-    """Run any pending SQL migrations idempotently on startup."""
+    """Run all pending SQL migrations idempotently on startup."""
     import sqlalchemy as sa
-    migration_sql = Path(__file__).parent / "migrations" / "migrate_pipeline_jobs.sql"
-    if not migration_sql.exists():
+
+    migrations_dir = Path(__file__).parent / "migrations"
+    if not migrations_dir.exists():
         return
-    raw = migration_sql.read_text()
-    # asyncpg requires one statement per execute call — split on ";" and skip blanks/comments
-    for stmt in raw.split(";"):
-        stmt = "\n".join(
-            line for line in stmt.splitlines()
-            if line.strip() and not line.strip().startswith("--")
-        ).strip()
-        if stmt:
-            await conn.execute(sa.text(stmt))
+
+    # Run all .sql files in alphabetical order — each is idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS)
+    sql_files = sorted(migrations_dir.glob("*.sql"))
+    for migration_sql in sql_files:
+        raw = migration_sql.read_text()
+        for stmt in raw.split(";"):
+            stmt = "\n".join(
+                line for line in stmt.splitlines()
+                if line.strip() and not line.strip().startswith("--")
+            ).strip()
+            if stmt:
+                await conn.execute(sa.text(stmt))
 
 
 @asynccontextmanager
@@ -79,6 +83,7 @@ app.include_router(jobs.router, prefix="/api")
 app.include_router(sunsky.router, prefix="/api")
 app.include_router(content.router, prefix="/api")
 app.include_router(pipeline.router, prefix="/api")
+app.include_router(csv_import.router, prefix="/api")
 
 # Serve processed images publicly so WooCommerce can sideload them
 # URL pattern: {SERVER_BASE_URL}/media/images/{sku}_{pos}.webp
