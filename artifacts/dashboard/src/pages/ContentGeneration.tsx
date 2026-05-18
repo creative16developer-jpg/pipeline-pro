@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import {
   Sparkles, Settings2, Play, Eye, ChevronRight, CheckCircle2,
-  XCircle, Loader2, RotateCcw, Save, Copy, X, Info, Zap, CheckCheck
+  XCircle, Loader2, RotateCcw, Save, Copy, X, Info, Zap, CheckCheck,
+  ShieldCheck, RefreshCw
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -187,6 +189,68 @@ const DEFAULT_CONFIG: GenerateConfig = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Mode descriptions shown in configure panel
+// ─────────────────────────────────────────────────────────────────────────────
+
+const MODE_DESCRIPTIONS: Record<string, { title: string; desc: string; color: string }> = {
+  logic: {
+    title: "Logic (rule-based)",
+    desc: "Generates content from product data: SKU, category, specs table, brand. Fast, deterministic — no API key needed. Always available as fallback.",
+    color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20",
+  },
+  ai: {
+    title: "AI (model-generated)",
+    desc: "Uses an AI model (OpenAI / Claude / Gemini) to write the field. Produces the most natural copy. Requires a configured API key. Falls back to logic if the call fails.",
+    color: "text-violet-400 bg-violet-500/10 border-violet-500/20",
+  },
+  derive: {
+    title: "Derive (auto-computed)",
+    desc: "The value is calculated automatically from another field — no AI, no extra config. E.g. slug derives from title, meta title derives from title + brand. Fastest option for these fields.",
+    color: "text-sky-400 bg-sky-500/10 border-sky-500/20",
+  },
+};
+
+// Validation rules per field (mirrors backend VALIDATORS)
+const FIELD_RULES: Record<string, string[]> = {
+  title: ["Max 120 characters", "CSV title used first if available"],
+  slug: ["Max 70 characters", "Lowercase, hyphens only — no spaces", "Append SKU for uniqueness (toggle below)"],
+  tags: ["Maximum 3 tags", "Extracted from name + specs table"],
+  image_alt: ["Max 125 characters", 'Format: "Title – Attribute – Brand"'],
+  image_names: ["Max 70 chars per name", 'Format: "{slug}-1.webp"'],
+  description: ["50 – 300 words", 'Banned phrases: "the best", "100%", "guarantee"', "Structured sections configurable below"],
+  short_description: ["Max 400 characters", "Plain text (no HTML)"],
+  meta_title: ["Max 60 characters", 'Format: "Title | Brand"'],
+  meta_description: ["80 – 160 characters", "Ends with a call-to-action phrase"],
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Config migration (old → new format, hybrid → derive)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function migrateConfig(raw: any): GenerateConfig {
+  const base = DEFAULT_CONFIG;
+  const fields: Record<string, FieldConfig> = {};
+  for (const f of FIELD_LIST) {
+    const saved = raw?.fields?.[f];
+    if (!saved) {
+      fields[f] = base.fields[f];
+    } else {
+      const rawMode = saved.mode === "hybrid" ? "derive" : (saved.mode ?? base.fields[f].mode);
+      fields[f] = {
+        enabled: saved.enabled ?? true,
+        mode: rawMode as Mode,
+        options: saved.options ?? base.fields[f].options ?? {},
+      };
+    }
+  }
+  return {
+    globalSettings: { ...base.globalSettings, ...(raw?.globalSettings ?? {}) },
+    fields,
+    overrides: raw?.overrides ?? {},
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helper: CSS classes
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -234,7 +298,8 @@ function FieldConfigPanel({
   onClose: () => void;
 }) {
   const label = FIELD_LABELS[field] ?? field;
-  const opt = config.options;
+  // Guard: options may be missing from old saved configs
+  const opt: FieldOptions = config.options ?? {};
 
   const setOpt = (patch: Partial<FieldOptions>) =>
     onChange({ ...config, options: { ...opt, ...patch } });
@@ -244,30 +309,39 @@ function FieldConfigPanel({
     setOpt({ structure: cur.includes(item) ? cur.filter((x) => x !== item) : [...cur, item] });
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
+  const modeInfo = MODE_DESCRIPTIONS[config.mode];
+  const rules = FIELD_RULES[field] ?? [];
+  const deps = FIELD_DEPS[field] ?? [];
+
+  const panel = (
+    <div className="fixed inset-0 z-[9999] flex justify-end" style={{ position: "fixed" }}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-md bg-card border-l border-border shadow-2xl flex flex-col h-full animate-in slide-in-from-right duration-300">
+      <div
+        className="relative w-full max-w-md bg-card border-l border-border shadow-2xl flex flex-col"
+        style={{ height: "100vh", overflowY: "auto" }}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-5 border-b border-border/50">
+        <div className="flex items-center justify-between px-6 py-5 border-b border-border/50 sticky top-0 bg-card z-10">
           <div>
-            <h3 className="font-semibold text-foreground">{label}</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">Configure generation options</p>
+            <h3 className="font-semibold text-foreground text-base">{label}</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Field configuration</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-secondary text-muted-foreground">
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-secondary text-muted-foreground transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Body */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
-          {/* Mode */}
+        <div className="px-6 py-5 space-y-6">
+
+          {/* ── Mode selector ───────────────────────────────────────────── */}
           <div>
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Generation Mode</label>
             <div className="mt-2 grid grid-cols-3 gap-2">
               {MODE_OPTIONS.map((m) => (
                 <button
                   key={m}
+                  type="button"
                   onClick={() => onChange({ ...config, mode: m })}
                   className={cn(
                     "px-3 py-2 rounded-lg text-sm font-medium border transition-all capitalize",
@@ -282,7 +356,42 @@ function FieldConfigPanel({
             </div>
           </div>
 
-          {/* Field-specific options */}
+          {/* ── Mode explanation ─────────────────────────────────────────── */}
+          {modeInfo && (
+            <div className={cn("p-3 rounded-xl border", modeInfo.color)}>
+              <p className={cn("text-xs font-semibold mb-1", modeInfo.color.split(" ")[0])}>
+                {modeInfo.title}
+              </p>
+              <p className="text-xs text-muted-foreground leading-relaxed">{modeInfo.desc}</p>
+              {config.mode === "derive" && deps.length > 0 && (
+                <p className="text-xs mt-2">
+                  <span className="text-muted-foreground">Computed from: </span>
+                  {deps.map((d) => (
+                    <span key={d} className="font-mono text-foreground bg-secondary px-1.5 py-0.5 rounded mr-1 text-[10px]">{d}</span>
+                  ))}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* ── Validation rules ─────────────────────────────────────────── */}
+          {rules.length > 0 && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
+                <ShieldCheck className="w-3 h-3" /> Validation Rules
+              </label>
+              <ul className="mt-2 space-y-1.5">
+                {rules.map((r) => (
+                  <li key={r} className="flex items-start gap-2 text-xs text-muted-foreground">
+                    <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-border shrink-0" />
+                    {r}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* ── Field-specific options ────────────────────────────────────── */}
           {field === "description" && (
             <>
               <div>
@@ -317,99 +426,42 @@ function FieldConfigPanel({
             </>
           )}
 
-          {field === "short_description" && (
-            <div>
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Words</label>
-              <input
-                type="number"
-                value={opt.max_words ?? 30}
-                min={5}
-                max={100}
-                onChange={(e) => setOpt({ max_words: Number(e.target.value) })}
-                className={cn(inputCls, "mt-2")}
-              />
-            </div>
-          )}
-
           {field === "slug" && (
             <>
-              <div className="flex items-center justify-between">
-                <label className="text-sm">Transliterate</label>
+              <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/40 border border-border/40">
+                <div>
+                  <p className="text-sm font-medium">Transliterate</p>
+                  <p className="text-xs text-muted-foreground">Convert non-ASCII chars (e.g. é → e)</p>
+                </div>
                 <Toggle checked={!!opt.transliterate} onChange={(v) => setOpt({ transliterate: v })} />
               </div>
-              <div className="flex items-center justify-between">
-                <label className="text-sm">Ensure Unique (append SKU)</label>
+              <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/40 border border-border/40">
+                <div>
+                  <p className="text-sm font-medium">Append SKU suffix</p>
+                  <p className="text-xs text-muted-foreground">Ensures uniqueness across products</p>
+                </div>
                 <Toggle checked={!!opt.ensure_unique} onChange={(v) => setOpt({ ensure_unique: v })} />
               </div>
             </>
           )}
 
-          {config.mode === "derive" && (
-            <div className="p-3 rounded-xl bg-primary/5 border border-primary/20">
-              <p className="text-xs text-primary font-medium mb-1">Derive Mode</p>
-              <p className="text-xs text-muted-foreground">
-                This field is automatically computed from:{" "}
-                <span className="font-mono text-foreground">
-                  {(FIELD_DEPS[field] ?? []).join(", ") || "product data"}
-                </span>
-              </p>
-            </div>
-          )}
-
-          {field === "title" && (
-            <div>
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Characters</label>
-              <input
-                type="number"
-                value={opt.max_chars ?? 120}
-                min={20}
-                max={300}
-                onChange={(e) => setOpt({ max_chars: Number(e.target.value) })}
-                className={cn(inputCls, "mt-2")}
-              />
-            </div>
-          )}
-
-          {(field === "meta_title" || field === "meta_description" || field === "slug" || field === "image_alt" || field === "short_description" || field === "image_names") && (
-            <div>
-              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                Max Characters
-              </label>
-              <input
-                type="number"
-                value={opt.max_chars ?? (field === "meta_title" ? 60 : field === "meta_description" ? 160 : field === "slug" ? 70 : field === "image_alt" ? 125 : field === "short_description" ? 400 : 70)}
-                min={20}
-                max={500}
-                onChange={(e) => setOpt({ max_chars: Number(e.target.value) })}
-                className={cn(inputCls, "mt-2")}
-              />
+          {field === "image_alt" && (
+            <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/40 border border-border/40">
+              <div>
+                <p className="text-sm font-medium">Include SKU in alt text</p>
+                <p className="text-xs text-muted-foreground">Appends the product SKU to the alt tag</p>
+              </div>
+              <Toggle checked={!!opt.include_sku} onChange={(v) => setOpt({ include_sku: v })} />
             </div>
           )}
 
           {field === "tags" && (
-            <>
+            <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/40 border border-border/40">
               <div>
-                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Tags</label>
-                <input
-                  type="number"
-                  value={opt.max_tags ?? 8}
-                  min={1}
-                  max={20}
-                  onChange={(e) => setOpt({ max_tags: Number(e.target.value) })}
-                  className={cn(inputCls, "mt-2")}
-                />
+                <p className="text-sm font-medium">Include spec values</p>
+                <p className="text-xs text-muted-foreground">Extract tags from the product spec table</p>
               </div>
-              <div className="flex items-center justify-between">
-                <label className="text-sm">Include spec values</label>
-                <Toggle checked={!!opt.include_specs} onChange={(v) => setOpt({ include_specs: v })} />
-              </div>
-            </>
-          )}
-
-          {field === "image_alt" && (
-            <div className="flex items-center justify-between">
-              <label className="text-sm">Include SKU in alt text</label>
-              <Toggle checked={!!opt.include_sku} onChange={(v) => setOpt({ include_sku: v })} />
+              <Toggle checked={!!opt.include_specs} onChange={(v) => setOpt({ include_specs: v })} />
             </div>
           )}
 
@@ -426,19 +478,69 @@ function FieldConfigPanel({
               <p className="text-xs text-muted-foreground mt-1">Variables: {"{sku}"}, {"{name}"}</p>
             </div>
           )}
+
+          {/* ── Max Characters (per field) ────────────────────────────── */}
+          {field === "title" && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Characters</label>
+              <input
+                type="number"
+                value={opt.max_chars ?? 120}
+                min={20} max={300}
+                onChange={(e) => setOpt({ max_chars: Number(e.target.value) })}
+                className={cn(inputCls, "mt-2")}
+              />
+            </div>
+          )}
+
+          {(field === "meta_title" || field === "meta_description" || field === "slug" ||
+            field === "image_alt" || field === "short_description" || field === "image_names") && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Characters</label>
+              <input
+                type="number"
+                value={opt.max_chars ?? (
+                  field === "meta_title" ? 60 :
+                  field === "meta_description" ? 160 :
+                  field === "slug" ? 70 :
+                  field === "image_alt" ? 125 :
+                  field === "short_description" ? 400 : 70
+                )}
+                min={20} max={500}
+                onChange={(e) => setOpt({ max_chars: Number(e.target.value) })}
+                className={cn(inputCls, "mt-2")}
+              />
+            </div>
+          )}
+
+          {field === "tags" && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Tags</label>
+              <input
+                type="number"
+                value={opt.max_tags ?? 3}
+                min={1} max={10}
+                onChange={(e) => setOpt({ max_tags: Number(e.target.value) })}
+                className={cn(inputCls, "mt-2")}
+              />
+            </div>
+          )}
         </div>
 
-        <div className="px-6 py-4 border-t border-border/50">
+        <div className="px-6 py-4 border-t border-border/50 sticky bottom-0 bg-card">
           <button
+            type="button"
             onClick={onClose}
             className="w-full py-2.5 rounded-xl bg-primary text-primary-foreground font-medium text-sm hover:bg-primary/90 transition-colors"
           >
-            Save & Close
+            Done
           </button>
         </div>
       </div>
     </div>
   );
+
+  return createPortal(panel, document.body);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -629,7 +731,11 @@ export default function ContentGeneration() {
   useEffect(() => {
     fetch("/api/generate/saved-config")
       .then((r) => r.json())
-      .then((data) => { setConfig(data); setSavedConfig(data); })
+      .then((data) => {
+        const migrated = migrateConfig(data);
+        setConfig(migrated);
+        setSavedConfig(migrated);
+      })
       .catch(() => { setSavedConfig(DEFAULT_CONFIG); });
 
     fetch("/api/generate/providers")
@@ -777,6 +883,18 @@ export default function ContentGeneration() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
+          <button
+            type="button"
+            onClick={() => {
+              setConfig(DEFAULT_CONFIG);
+              toast({ title: "Reset to defaults", description: "Click Save Config to apply. Derive mode set for computed fields." });
+            }}
+            className="px-4 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 border shadow-sm bg-secondary text-muted-foreground border-border hover:text-foreground hover:bg-secondary/80"
+            title="Reset all field modes to smart defaults (derive for computed fields)"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Reset Defaults
+          </button>
           <button
             onClick={handleSaveConfig}
             disabled={saving}
