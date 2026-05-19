@@ -17,9 +17,28 @@ Usage:
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from pathlib import Path
 from typing import Optional
+
+# Path to config-store API keys (fallback when env vars not set)
+_KEYS_PATH = Path(__file__).parent.parent / "config_store" / "api_keys.json"
+
+
+def _get_api_key(env_var: str, provider: str) -> str | None:
+    """Read API key: env var first, then config-store file."""
+    key = os.getenv(env_var)
+    if key:
+        return key
+    try:
+        if _KEYS_PATH.exists():
+            data = json.loads(_KEYS_PATH.read_text())
+            return data.get(provider) or None
+    except Exception:
+        pass
+    return None
 
 
 class AIGenerationError(Exception):
@@ -141,9 +160,9 @@ def _build_prompt(field: str, product: dict, options: dict) -> str:
 # ---------------------------------------------------------------------------
 
 async def _generate_openai(prompt: str, model: Optional[str]) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = _get_api_key("OPENAI_API_KEY", "openai")
     if not api_key:
-        raise AIGenerationError("OPENAI_API_KEY not configured")
+        raise AIGenerationError("OPENAI_API_KEY not configured — add it in Settings")
     try:
         from openai import AsyncOpenAI
     except ImportError:
@@ -160,9 +179,9 @@ async def _generate_openai(prompt: str, model: Optional[str]) -> str:
 
 
 async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = _get_api_key("ANTHROPIC_API_KEY", "anthropic")
     if not api_key:
-        raise AIGenerationError("ANTHROPIC_API_KEY not configured")
+        raise AIGenerationError("ANTHROPIC_API_KEY not configured — add it in Settings")
     try:
         from anthropic import AsyncAnthropic
     except ImportError:
@@ -178,16 +197,18 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
 
 
 async def _generate_gemini(prompt: str, model: Optional[str]) -> str:
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = _get_api_key("GEMINI_API_KEY", "gemini")
     if not api_key:
-        raise AIGenerationError("GEMINI_API_KEY not configured")
+        raise AIGenerationError("GEMINI_API_KEY not configured — add it in Settings")
     try:
         import google.generativeai as genai
     except ImportError:
         raise AIGenerationError("google-generativeai package not installed — run: pip install google-generativeai")
 
+    # gemini-2.0-flash is the recommended default (1.5-flash deprecated on some API versions)
+    resolved_model = model or "gemini-2.0-flash"
     genai.configure(api_key=api_key)
-    model_obj = genai.GenerativeModel(model or "gemini-1.5-flash")
+    model_obj = genai.GenerativeModel(resolved_model)
     response = await model_obj.generate_content_async(prompt)
     return response.text.strip()
 
@@ -223,13 +244,13 @@ def get_provider_status() -> dict:
     """Return which providers have API keys configured and available models."""
     return {
         "openai": {
-            "configured": bool(os.getenv("OPENAI_API_KEY")),
+            "configured": bool(_get_api_key("OPENAI_API_KEY", "openai")),
             "label": "OpenAI",
             "default_model": "gpt-4o-mini",
             "models": ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
         },
         "anthropic": {
-            "configured": bool(os.getenv("ANTHROPIC_API_KEY")),
+            "configured": bool(_get_api_key("ANTHROPIC_API_KEY", "anthropic")),
             "label": "Anthropic (Claude)",
             "default_model": "claude-3-haiku-20240307",
             "models": [
@@ -239,9 +260,14 @@ def get_provider_status() -> dict:
             ],
         },
         "gemini": {
-            "configured": bool(os.getenv("GEMINI_API_KEY")),
+            "configured": bool(_get_api_key("GEMINI_API_KEY", "gemini")),
             "label": "Google Gemini",
-            "default_model": "gemini-1.5-flash",
-            "models": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
+            "default_model": "gemini-2.0-flash",
+            "models": [
+                "gemini-2.0-flash",
+                "gemini-2.0-flash-lite",
+                "gemini-1.5-pro",
+                "gemini-1.5-flash-latest",
+            ],
         },
     }

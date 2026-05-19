@@ -23,6 +23,7 @@ from pathlib import Path
 from config import get_settings
 from database import engine, Base
 from routers import dashboard, stores, products, jobs, sunsky, content, pipeline, csv_import
+from routers import settings as settings_router
 import models.models  # noqa: F401 — registers all ORM models with Base
 
 STATIC_DIR = Path(__file__).parent.parent / "dashboard" / "dist" / "public"
@@ -84,6 +85,7 @@ app.include_router(sunsky.router, prefix="/api")
 app.include_router(content.router, prefix="/api")
 app.include_router(pipeline.router, prefix="/api")
 app.include_router(csv_import.router, prefix="/api")
+app.include_router(settings_router.router, prefix="/api")
 
 # Serve processed images publicly so WooCommerce can sideload them
 # URL pattern: {SERVER_BASE_URL}/media/images/{sku}_{pos}.webp

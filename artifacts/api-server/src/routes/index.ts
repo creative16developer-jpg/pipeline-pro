@@ -8,6 +8,7 @@ import dashboardRouter from "./dashboard";
 import pipelinesRouter from "./pipelines";
 import csvRouter from "./csv";
 import generateRouter from "./generate";
+import settingsRouter from "./settings";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use("/dashboard", dashboardRouter);
 router.use("/pipelines", pipelinesRouter);
 router.use("/csv", csvRouter);
 router.use("/generate", generateRouter);
+router.use("/settings", settingsRouter);
 
 export default router;

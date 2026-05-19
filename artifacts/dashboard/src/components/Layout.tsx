@@ -67,10 +67,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
         </nav>
         
         <div className="p-6 hidden md:block">
-          <div className="flex items-center gap-3 px-4 py-3 rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors cursor-pointer">
-            <Settings className="w-5 h-5" />
-            <span className="font-medium text-sm">Settings</span>
-          </div>
+          <Link href="/settings">
+            <div className={cn(
+              "flex items-center gap-3 px-4 py-3 rounded-xl transition-colors cursor-pointer relative",
+              location === "/settings"
+                ? "text-primary bg-primary/10 border border-primary/20"
+                : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+            )}>
+              <Settings className="w-5 h-5" />
+              <span className="font-medium text-sm">Settings</span>
+            </div>
+          </Link>
         </div>
       </aside>
 
