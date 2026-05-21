@@ -262,12 +262,15 @@ def get_provider_status() -> dict:
         "gemini": {
             "configured": bool(_get_api_key("GEMINI_API_KEY", "gemini")),
             "label": "Google Gemini",
-            "default_model": "gemini-2.0-flash",
+            "default_model": "gemini-2.5-flash",
             "models": [
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
                 "gemini-2.0-flash",
                 "gemini-2.0-flash-lite",
                 "gemini-1.5-pro",
-                "gemini-1.5-flash-latest",
+                "gemini-1.5-flash",
+                "gemini-1.5-flash-8b",
             ],
         },
     }
