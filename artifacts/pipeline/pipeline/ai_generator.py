@@ -196,6 +196,14 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
     return message.content[0].text.strip()
 
 
+_GEMINI_DEPRECATED: dict[str, str] = {
+    "gemini-1.5-flash-latest": "gemini-2.5-flash",
+    "gemini-2.0-flash":        "gemini-2.5-flash",
+    "gemini-2.0-flash-lite":   "gemini-2.5-flash",
+    "gemini-1.0-pro":          "gemini-1.5-pro",
+}
+
+
 async def _generate_gemini(prompt: str, model: Optional[str]) -> str:
     api_key = _get_api_key("GEMINI_API_KEY", "gemini")
     if not api_key:
@@ -205,8 +213,9 @@ async def _generate_gemini(prompt: str, model: Optional[str]) -> str:
     except ImportError:
         raise AIGenerationError("google-generativeai package not installed — run: pip install google-generativeai")
 
-    # gemini-2.0-flash is the recommended default (1.5-flash deprecated on some API versions)
-    resolved_model = model or "gemini-2.0-flash"
+    raw_model = model or "gemini-2.5-flash"
+    # Silently redirect deprecated/removed models to their current equivalent
+    resolved_model = _GEMINI_DEPRECATED.get(raw_model, raw_model)
     genai.configure(api_key=api_key)
     model_obj = genai.GenerativeModel(resolved_model)
     response = await model_obj.generate_content_async(prompt)
