@@ -278,8 +278,15 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
             if csv_entry:
                 csv_title = csv_entry.csv_title or ""
                 site_sku = csv_entry.site_sku or ""
+                # Apply both directly — same pattern, same priority.
+                # Content generation runs AFTER this, so it sees the updated
+                # name but csv_title in prod_dict ensures logic mode also
+                # returns it. Post-generate we re-assert csv_title so AI
+                # mode can't silently overwrite it.
                 if site_sku:
                     product.site_sku = site_sku
+                if csv_title:
+                    product.name = csv_title  # direct apply like site_sku
 
             prod_dict = {
                 "name":        product.name or "",
@@ -317,6 +324,11 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
                                     f"  {product.sku} [{field}]: logic fallback — {err_detail}")
 
             product.content_source = sources
+
+            # CSV title always wins — re-assert after content gen in case
+            # AI mode overwrote it.
+            if csv_title:
+                product.name = csv_title
 
             if prod_failed:
                 fallback_count += 1
