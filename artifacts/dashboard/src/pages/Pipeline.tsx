@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import {
   Play, Zap, ChevronDown, ChevronRight, RotateCcw,
   CloudDownload, Cpu, Upload, ArrowRightLeft, Sparkles,
-  Info, Loader2, AlertTriangle
+  Info, Loader2, AlertTriangle, FileText
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -14,8 +14,9 @@ import { cn } from "@/lib/utils";
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface FetchJob {
+interface SourceJob {
   id: number;
+  type: "fetch" | "csv_import";
   status: string;
   total_items: number;
   config: any;
@@ -59,6 +60,17 @@ const PIPELINE_STEPS = [
   { key: "sync", label: "Sync", desc: "Sync categories & attributes", Icon: ArrowRightLeft, color: "text-pink-400" },
 ];
 
+function jobLabel(j: SourceJob): string {
+  const date = j.created_at ? new Date(j.created_at).toLocaleDateString() : "";
+  if (j.type === "csv_import") {
+    const filename = j.config?.filename || "CSV";
+    return `#${j.id} · CSV: ${filename} · ${j.total_items} products${date ? ` · ${date}` : ""}`;
+  }
+  const cat = j.config?.category_id ? ` · cat: ${j.config.category_id}` : "";
+  const kw  = j.config?.keyword     ? ` · "${j.config.keyword}"`         : "";
+  return `#${j.id} · ${j.total_items} products${cat}${kw}${date ? ` · ${date}` : ""}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main page
 // ─────────────────────────────────────────────────────────────────────────────
@@ -71,7 +83,7 @@ export default function Pipeline() {
   // Selections
   const [storeId, setStoreId] = useState("");
   const [fetchJobId, setFetchJobId] = useState("");
-  const [fetchJobs, setFetchJobs] = useState<FetchJob[]>([]);
+  const [sourceJobs, setSourceJobs] = useState<SourceJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(false);
 
   // Options
@@ -90,26 +102,36 @@ export default function Pipeline() {
   // Running state
   const [running, setRunning] = useState(false);
 
-  // Load fetch jobs whenever store changes
+  // Load source jobs (Sunsky fetch + CSV import) whenever store changes
   useEffect(() => {
     setFetchJobId("");
-    setFetchJobs([]);
+    setSourceJobs([]);
     if (!storeId) return;
 
     setLoadingJobs(true);
-    fetch("/api/jobs?type=fetch&status=completed&limit=50")
-      .then((r) => r.json())
-      .then((d) => {
-        const jobs: FetchJob[] = d.jobs ?? [];
-        setFetchJobs(jobs);
-        if (jobs.length > 0) setFetchJobId(String(jobs[0].id));
+
+    Promise.all([
+      fetch("/api/jobs?type=fetch&status=completed&limit=50").then((r) => r.json()),
+      fetch("/api/jobs?type=csv_import&status=completed&limit=50").then((r) => r.json()),
+    ])
+      .then(([fetchData, csvData]) => {
+        const fetchJobs: SourceJob[] = (fetchData.jobs ?? []).map((j: any) => ({ ...j, type: "fetch" as const }));
+        const csvJobs:   SourceJob[] = (csvData.jobs   ?? []).map((j: any) => ({ ...j, type: "csv_import" as const }));
+
+        // Merge and sort newest-first
+        const all = [...fetchJobs, ...csvJobs].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+        setSourceJobs(all);
+        if (all.length > 0) setFetchJobId(String(all[0].id));
       })
       .catch(() => {})
       .finally(() => setLoadingJobs(false));
   }, [storeId]);
 
-  const selectedStore = stores?.find((s) => String(s.id) === storeId);
-  const selectedFetchJob = fetchJobs.find((j) => String(j.id) === fetchJobId);
+  const selectedStore    = stores?.find((s) => String(s.id) === storeId);
+  const selectedJob      = sourceJobs.find((j) => String(j.id) === fetchJobId);
+  const isCsvSource      = selectedJob?.type === "csv_import";
 
   const handleRun = async () => {
     if (!storeId) {
@@ -117,7 +139,7 @@ export default function Pipeline() {
       return;
     }
     if (!fetchJobId) {
-      toast({ title: "Fetch job required", description: "Select a fetch job to process.", variant: "destructive" });
+      toast({ title: "Source required", description: "Select a fetch job or CSV import to process.", variant: "destructive" });
       return;
     }
 
@@ -133,16 +155,16 @@ export default function Pipeline() {
       }
 
       const body = {
-        store_id: parseInt(storeId),
-        fetch_job_id: parseInt(fetchJobId),
-        include_generate: includeGenerate,
-        force_rerun: forceRerun,
-        process_config: { limit: parseInt(processLimit) || 200 },
-        upload_config: { limit: parseInt(uploadLimit) || 200, skip_images: uploadSkipImages },
+        store_id:           parseInt(storeId),
+        fetch_job_id:       parseInt(fetchJobId),
+        include_generate:   includeGenerate,
+        force_rerun:        forceRerun,
+        process_config:     { limit: parseInt(processLimit) || 200 },
+        upload_config:      { limit: parseInt(uploadLimit) || 200, skip_images: uploadSkipImages },
         sync_config: {
-          limit: parseInt(syncLimit) || 200,
-          sync_categories: syncCategories,
-          sync_attributes: syncAttributes,
+          limit:            parseInt(syncLimit) || 200,
+          sync_categories:  syncCategories,
+          sync_attributes:  syncAttributes,
         },
         content_gen_config: contentGenConfig,
       };
@@ -168,6 +190,9 @@ export default function Pipeline() {
 
   const storeColor = storeId ? getStoreColor(parseInt(storeId)) : null;
 
+  const fetchJobs = sourceJobs.filter((j) => j.type === "fetch");
+  const csvJobs   = sourceJobs.filter((j) => j.type === "csv_import");
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       {/* Header */}
@@ -177,7 +202,7 @@ export default function Pipeline() {
           New Pipeline
         </h1>
         <p className="text-muted-foreground mt-1">
-          Select a store and fetch job, then start the automated pipeline.
+          Select a store and product source, then start the automated pipeline.
         </p>
       </div>
 
@@ -238,41 +263,62 @@ export default function Pipeline() {
           </div>
         </div>
 
-        {/* Fetch Job */}
+        {/* Source (fetch job or CSV import) */}
         <div>
           <label className="text-sm font-medium">
-            Fetch Job <span className="text-red-400">*</span>
+            Product Source <span className="text-red-400">*</span>
             <span className="text-muted-foreground font-normal text-xs ml-2">
-              (completed fetch jobs — each represents one batch of products)
+              (Sunsky fetch job or CSV import)
             </span>
           </label>
+
           {!storeId ? (
             <p className="mt-1.5 text-sm text-muted-foreground italic">Select a store first</p>
           ) : loadingJobs ? (
             <div className="mt-1.5 flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" /> Loading fetch jobs…
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading sources…
             </div>
-          ) : fetchJobs.length === 0 ? (
+          ) : sourceJobs.length === 0 ? (
             <div className="mt-1.5 flex items-center gap-2 text-sm text-amber-400">
               <AlertTriangle className="w-4 h-4" />
-              No completed fetch jobs found. Run a fetch job from Sunsky Fetch first.
+              No sources found. Run a Sunsky fetch or upload a CSV first.
             </div>
           ) : (
-            <select
-              value={fetchJobId}
-              onChange={(e) => setFetchJobId(e.target.value)}
-              className={cn(inputCls, "mt-1.5")}
-            >
-              <option value="">— Select a fetch job —</option>
-              {fetchJobs.map((j) => (
-                <option key={j.id} value={j.id}>
-                  #{j.id} · {j.total_items} products
-                  {j.config?.category_id ? ` · cat: ${j.config.category_id}` : ""}
-                  {j.config?.keyword ? ` · "${j.config.keyword}"` : ""}
-                  {j.created_at ? ` · ${new Date(j.created_at).toLocaleDateString()}` : ""}
-                </option>
-              ))}
-            </select>
+            <>
+              <select
+                value={fetchJobId}
+                onChange={(e) => setFetchJobId(e.target.value)}
+                className={cn(inputCls, "mt-1.5")}
+              >
+                <option value="">— Select a source —</option>
+                {fetchJobs.length > 0 && (
+                  <optgroup label="Sunsky Fetch Jobs">
+                    {fetchJobs.map((j) => (
+                      <option key={j.id} value={j.id}>{jobLabel(j)}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {csvJobs.length > 0 && (
+                  <optgroup label="CSV Imports">
+                    {csvJobs.map((j) => (
+                      <option key={j.id} value={j.id}>{jobLabel(j)}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+
+              {/* CSV source badge */}
+              {isCsvSource && (
+                <div className="mt-2 flex items-center gap-2 text-xs text-violet-400 bg-violet-500/10 border border-violet-500/20 rounded-lg px-3 py-2">
+                  <FileText className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    CSV import — products were loaded directly from{" "}
+                    <strong>{selectedJob?.config?.filename || "CSV"}</strong>.
+                    Title and SKU come from the file.
+                  </span>
+                </div>
+              )}
+            </>
           )}
         </div>
 

@@ -27,6 +27,7 @@ class JobType(str, enum.Enum):
     process = "process"
     upload = "upload"
     sync = "sync"
+    csv_import = "csv_import"
 
 
 class JobStatus(str, enum.Enum):

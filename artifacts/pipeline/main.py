@@ -33,8 +33,25 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 settings = get_settings()
 
 
+async def _run_enum_migrations():
+    """
+    ALTER TYPE ADD VALUE cannot run inside an explicit transaction (PG < 12).
+    Run these separately with AUTOCOMMIT isolation before the main migrations.
+    Safe to run repeatedly — IF NOT EXISTS makes each statement idempotent.
+    """
+    import sqlalchemy as sa
+    try:
+        async with engine.execution_options(isolation_level="AUTOCOMMIT").connect() as conn:
+            await conn.execute(sa.text(
+                "ALTER TYPE job_type ADD VALUE IF NOT EXISTS 'csv_import'"
+            ))
+    except Exception:
+        pass  # enum type not yet created (fresh DB — create_all handles it)
+
+
 async def _run_migrations(conn):
-    """Run all pending SQL migrations idempotently on startup."""
+    """Run all pending SQL migrations idempotently on startup.
+    Skips ALTER TYPE ADD VALUE statements — those run via _run_enum_migrations."""
     import sqlalchemy as sa
 
     migrations_dir = Path(__file__).parent / "migrations"
@@ -50,12 +67,18 @@ async def _run_migrations(conn):
                 line for line in stmt.splitlines()
                 if line.strip() and not line.strip().startswith("--")
             ).strip()
-            if stmt:
-                await conn.execute(sa.text(stmt))
+            if not stmt:
+                continue
+            # ALTER TYPE ADD VALUE runs in _run_enum_migrations (AUTOCOMMIT)
+            if "ADD VALUE" in stmt.upper():
+                continue
+            await conn.execute(sa.text(stmt))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Enum value additions must run outside a transaction (AUTOCOMMIT)
+    await _run_enum_migrations()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _run_migrations(conn)
