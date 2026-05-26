@@ -1,17 +1,49 @@
-import { useState } from "react";
+import { useState, useCallback, Fragment } from "react";
 import { useJobs, useCreateJob, useCancelJob } from "@/hooks/use-jobs";
 import { useStores } from "@/hooks/use-stores";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Modal } from "@/components/Modal";
-import { Activity, Play, XCircle, ChevronRight, Link2, ArrowRightLeft } from "lucide-react";
+import { Activity, Play, ChevronRight, Link2, ArrowRightLeft, ChevronDown, Loader2, ScrollText } from "lucide-react";
 import { format } from "date-fns";
 import { CreateJobInputType, Job } from "@workspace/api-client-react";
+import { cn } from "@/lib/utils";
+
+interface JobLog {
+  id: number;
+  level: string;
+  message: string;
+  created_at: string | null;
+}
 
 export default function Jobs() {
   const [page, setPage] = useState(1);
   const [isNewJobModalOpen, setIsNewJobModalOpen] = useState(false);
   const { data, isLoading } = useJobs({ page, limit: 15 });
   const cancelJob = useCancelJob();
+
+  // Log viewer state
+  const [expandedJobId, setExpandedJobId] = useState<number | null>(null);
+  const [jobLogs, setJobLogs] = useState<Record<number, JobLog[]>>({});
+  const [logsLoading, setLogsLoading] = useState<Record<number, boolean>>({});
+
+  const toggleLogs = useCallback(async (jobId: number) => {
+    if (expandedJobId === jobId) {
+      setExpandedJobId(null);
+      return;
+    }
+    setExpandedJobId(jobId);
+    if (jobLogs[jobId]) return; // already loaded
+    setLogsLoading((prev) => ({ ...prev, [jobId]: true }));
+    try {
+      const r = await fetch(`/api/jobs/${jobId}/logs?limit=200`);
+      const d = await r.json();
+      setJobLogs((prev) => ({ ...prev, [jobId]: d.logs ?? [] }));
+    } catch {
+      setJobLogs((prev) => ({ ...prev, [jobId]: [] }));
+    } finally {
+      setLogsLoading((prev) => ({ ...prev, [jobId]: false }));
+    }
+  }, [expandedJobId, jobLogs]);
 
   return (
     <div className="space-y-6">
@@ -73,68 +105,136 @@ export default function Jobs() {
                 </tr>
               ) : (
                 data?.jobs?.map((job) => (
-                  <tr key={job.id} className="hover:bg-secondary/20 transition-colors">
-                    <td className="p-4 font-mono font-medium">#{job.id}</td>
-                    <td className="p-4"><StatusBadge status={job.type} /></td>
-                    <td className="p-4"><StatusBadge status={job.status} /></td>
-
-                    {/* Source job link */}
-                    <td className="p-4 text-sm">
-                      {job.sourceJobId ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-500/10 text-indigo-400 font-mono text-xs">
-                          <Link2 className="w-3 h-3" />#{job.sourceJobId}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">—</span>
+                  <Fragment key={job.id}>
+                    <tr
+                      className={cn(
+                        "hover:bg-secondary/20 transition-colors cursor-pointer",
+                        expandedJobId === job.id && "bg-secondary/20"
                       )}
-                    </td>
+                      onClick={() => toggleLogs(job.id)}
+                    >
+                      <td className="p-4 font-mono font-medium flex items-center gap-1.5">
+                        <ChevronDown className={cn(
+                          "w-3.5 h-3.5 text-muted-foreground shrink-0 transition-transform",
+                          expandedJobId === job.id ? "rotate-0" : "-rotate-90"
+                        )} />
+                        #{job.id}
+                      </td>
+                      <td className="p-4"><StatusBadge status={job.type} /></td>
+                      <td className="p-4"><StatusBadge status={job.status} /></td>
 
-                    {/* Config summary */}
-                    <td className="p-4 text-xs text-muted-foreground max-w-[180px]">
-                      <ConfigSummary job={job} />
-                    </td>
+                      {/* Source job link */}
+                      <td className="p-4 text-sm">
+                        {job.sourceJobId ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-500/10 text-indigo-400 font-mono text-xs">
+                            <Link2 className="w-3 h-3" />#{job.sourceJobId}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        )}
+                      </td>
 
-                    {/* Progress bar */}
-                    <td className="p-4">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${job.status === 'failed' ? 'bg-rose-500' : 'bg-primary'} transition-all duration-500`}
-                            style={{ width: `${job.progressPercent}%` }}
-                          />
+                      {/* Config summary */}
+                      <td className="p-4 text-xs text-muted-foreground max-w-[180px]">
+                        <ConfigSummary job={job} />
+                      </td>
+
+                      {/* Progress bar */}
+                      <td className="p-4">
+                        <div className="flex items-center gap-3">
+                          <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${job.status === 'failed' ? 'bg-rose-500' : 'bg-primary'} transition-all duration-500`}
+                              style={{ width: `${job.progressPercent}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-medium w-9 text-right">{job.progressPercent}%</span>
                         </div>
-                        <span className="text-xs font-medium w-9 text-right">{job.progressPercent}%</span>
-                      </div>
-                      {job.errorMessage && (
-                        <p className="text-xs text-rose-400 mt-1 line-clamp-1" title={job.errorMessage}>{job.errorMessage}</p>
-                      )}
-                    </td>
+                        {job.errorMessage && (
+                          <p className="text-xs text-rose-400 mt-1 line-clamp-1" title={job.errorMessage}>{job.errorMessage}</p>
+                        )}
+                      </td>
 
-                    <td className="p-4 text-sm font-medium tabular-nums">
-                      {job.processedItems} / {job.totalItems}
-                      {(job.failedItems ?? 0) > 0 && (
-                        <span className="text-rose-400 ml-1">({job.failedItems} failed)</span>
-                      )}
-                    </td>
-                    <td className="p-4 text-sm text-muted-foreground">
-                      {job.startedAt ? format(new Date(job.startedAt), "MMM d, HH:mm:ss") : '—'}
-                    </td>
-                    <td className="p-4 text-right">
-                      {job.status === 'running' || job.status === 'pending' ? (
-                        <button
-                          onClick={() => cancelJob.mutate({ id: job.id })}
-                          disabled={cancelJob.isPending}
-                          className="px-3 py-1.5 rounded-lg bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 text-sm font-medium transition-colors disabled:opacity-50"
-                        >
-                          Cancel
-                        </button>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">
-                          {job.completedAt ? format(new Date(job.completedAt), "HH:mm:ss") : '—'}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
+                      <td className="p-4 text-sm font-medium tabular-nums">
+                        {job.processedItems} / {job.totalItems}
+                        {(job.failedItems ?? 0) > 0 && (
+                          <span className="text-rose-400 ml-1">({job.failedItems} failed)</span>
+                        )}
+                      </td>
+                      <td className="p-4 text-sm text-muted-foreground">
+                        {job.startedAt ? format(new Date(job.startedAt), "MMM d, HH:mm:ss") : '—'}
+                      </td>
+                      <td className="p-4 text-right" onClick={(e) => e.stopPropagation()}>
+                        {job.status === 'running' || job.status === 'pending' ? (
+                          <button
+                            onClick={() => cancelJob.mutate({ id: job.id })}
+                            disabled={cancelJob.isPending}
+                            className="px-3 py-1.5 rounded-lg bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 text-sm font-medium transition-colors disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {job.completedAt ? format(new Date(job.completedAt), "HH:mm:ss") : '—'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+
+                    {/* Expandable log panel */}
+                    {expandedJobId === job.id && (
+                      <tr key={`${job.id}-logs`}>
+                        <td colSpan={9} className="px-6 pb-4 pt-0 bg-secondary/10">
+                          <div className="border border-border/40 rounded-xl overflow-hidden">
+                            <div className="flex items-center gap-2 px-3 py-2 bg-secondary/30 border-b border-border/40">
+                              <ScrollText className="w-3.5 h-3.5 text-muted-foreground" />
+                              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                                Job #{job.id} Logs
+                              </span>
+                              {logsLoading[job.id] && (
+                                <Loader2 className="w-3 h-3 animate-spin text-muted-foreground ml-1" />
+                              )}
+                            </div>
+                            <div className="max-h-64 overflow-y-auto font-mono text-xs">
+                              {logsLoading[job.id] ? (
+                                <p className="p-4 text-muted-foreground">Loading logs…</p>
+                              ) : (jobLogs[job.id] ?? []).length === 0 ? (
+                                <p className="p-4 text-muted-foreground italic">No logs recorded for this job.</p>
+                              ) : (
+                                (jobLogs[job.id] ?? []).map((log) => (
+                                  <div
+                                    key={log.id}
+                                    className={cn(
+                                      "flex gap-3 px-3 py-1 border-b border-border/20 last:border-0",
+                                      log.level === "error" && "bg-rose-500/5",
+                                      log.level === "warn"  && "bg-amber-500/5",
+                                    )}
+                                  >
+                                    <span className={cn(
+                                      "shrink-0 w-10 text-right",
+                                      log.level === "error" ? "text-rose-400" :
+                                      log.level === "warn"  ? "text-amber-400" :
+                                      "text-muted-foreground/50"
+                                    )}>
+                                      {log.level}
+                                    </span>
+                                    <span className={cn(
+                                      "whitespace-pre-wrap break-all",
+                                      log.level === "error" ? "text-rose-300" :
+                                      log.level === "warn"  ? "text-amber-300" :
+                                      "text-foreground/80"
+                                    )}>
+                                      {log.message}
+                                    </span>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))
               )}
             </tbody>

@@ -18,9 +18,9 @@ interface SourceJob {
   id: number;
   type: "fetch" | "csv_import";
   status: string;
-  total_items: number;
+  totalItems: number;
   config: any;
-  created_at: string;
+  createdAt: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -61,14 +61,14 @@ const PIPELINE_STEPS = [
 ];
 
 function jobLabel(j: SourceJob): string {
-  const date = j.created_at ? new Date(j.created_at).toLocaleDateString() : "";
+  const date = j.createdAt ? new Date(j.createdAt).toLocaleDateString() : "";
   if (j.type === "csv_import") {
     const filename = j.config?.filename || "CSV";
-    return `#${j.id} · CSV: ${filename} · ${j.total_items} products${date ? ` · ${date}` : ""}`;
+    return `#${j.id} · CSV: ${filename} · ${j.totalItems} products${date ? ` · ${date}` : ""}`;
   }
   const cat = j.config?.category_id ? ` · cat: ${j.config.category_id}` : "";
   const kw  = j.config?.keyword     ? ` · "${j.config.keyword}"`         : "";
-  return `#${j.id} · ${j.total_items} products${cat}${kw}${date ? ` · ${date}` : ""}`;
+  return `#${j.id} · ${j.totalItems} products${cat}${kw}${date ? ` · ${date}` : ""}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

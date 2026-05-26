@@ -1400,12 +1400,24 @@ async def _run_sync(db, job):
             if remaining:
                 seen_fetch: set[str] = {"0"}
 
+                FETCH_TIMEOUT = 20  # seconds per category API call
+
                 async def _fetch_safe(pid: str) -> tuple[str, list]:
-                    """Fetch with automatic retry on rate-limit (waits 62 s)."""
+                    """Fetch with automatic retry on rate-limit (waits 62 s).
+                    Each individual HTTP call is capped at FETCH_TIMEOUT seconds
+                    so a hung connection can never stall the sync job forever."""
                     for attempt in range(3):
                         try:
-                            kids = await sunsky_client.get_categories(pid)
+                            kids = await asyncio.wait_for(
+                                sunsky_client.get_categories(pid),
+                                timeout=FETCH_TIMEOUT,
+                            )
                             return (pid, kids)
+                        except asyncio.TimeoutError:
+                            await _log(db, job.id, LogLevel.warn,
+                                       f"  Timeout fetching category {pid} "
+                                       f"(>{FETCH_TIMEOUT}s) — skipping")
+                            return (pid, [])
                         except ValueError as exc:
                             if "CALL_LIMIT" in str(exc):
                                 await _log(db, job.id, LogLevel.warn,
