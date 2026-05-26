@@ -116,8 +116,8 @@ async def create_pipeline(body: PipelineCreateRequest, db: AsyncSession = Depend
     fetch_job = await db.get(Job, body.fetch_job_id)
     if not fetch_job:
         raise HTTPException(400, f"Job #{body.fetch_job_id} not found")
-    if fetch_job.type != JobType.fetch:
-        raise HTTPException(400, f"Job #{body.fetch_job_id} is not a fetch job")
+    if fetch_job.type not in (JobType.fetch, JobType.csv_import):
+        raise HTTPException(400, f"Job #{body.fetch_job_id} is not a valid source job")
 
     # Queue check: is another pipeline running/in-review for this store?
     active = (
