@@ -66,7 +66,7 @@ def _extract_specs(product: dict) -> dict[str, str]:
 
 def _build_product_context(product: dict) -> str:
     name = product.get("name", "Product")
-    sku = product.get("sku", "")
+    sku = product.get("site_sku") or product.get("sku", "")
     desc = product.get("description", "")
     specs = _extract_specs(product)
     specs_text = (

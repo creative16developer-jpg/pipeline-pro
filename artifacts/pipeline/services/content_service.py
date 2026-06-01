@@ -268,7 +268,7 @@ def _logic_description(product: dict, options: dict, resolved: dict) -> str:
 
 def _derive_slug(product: dict, options: dict, resolved: dict) -> str:
     title = resolved.get("title", "") or product.get("name", "")
-    sku = product.get("sku", "")
+    sku = product.get("site_sku") or product.get("sku", "")
     max_chars = int(options.get("max_chars", 70))
 
     slug = _slugify(title)
@@ -287,7 +287,7 @@ def _derive_slug(product: dict, options: dict, resolved: dict) -> str:
 
 def _derive_image_alt(product: dict, options: dict, resolved: dict) -> str:
     title = resolved.get("title", "") or product.get("name", "")
-    sku = product.get("sku", "")
+    sku = product.get("site_sku") or product.get("sku", "")
     raw = _get_raw(product)
     specs = _parse_params_table(raw.get("paramsTable", ""))
     brand = _get_brand(specs)
