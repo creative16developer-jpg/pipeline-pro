@@ -1,8 +1,38 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import { db, storesTable, wooCategoriesTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { testWooConnection, fetchWooCategories } from "../lib/woocommerce";
 import { z } from "zod";
+import http from "node:http";
+
+const PYTHON_HOST = "127.0.0.1";
+const PYTHON_PORT = 8000;
+
+function proxyToPython(req: Request, res: Response, basePath: string) {
+  const qs = req.url.includes("?") ? "?" + req.url.split("?")[1] : "";
+  const target = `${basePath}${req.path === "/" ? "" : req.path}${qs}`;
+  const options: http.RequestOptions = {
+    hostname: PYTHON_HOST,
+    port: PYTHON_PORT,
+    path: target,
+    method: req.method,
+    headers: { ...req.headers, host: `${PYTHON_HOST}:${PYTHON_PORT}` },
+  };
+  const proxyReq = http.request(options, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+    proxyRes.pipe(res, { end: true });
+  });
+  proxyReq.on("error", () => {
+    if (!res.headersSent) res.status(502).json({ error: "Python service unavailable" });
+  });
+  if (req.body && ["POST", "PUT", "PATCH"].includes(req.method)) {
+    const body = JSON.stringify(req.body);
+    proxyReq.setHeader("Content-Type", "application/json");
+    proxyReq.setHeader("Content-Length", Buffer.byteLength(body));
+    proxyReq.write(body);
+  }
+  proxyReq.end();
+}
 
 const router: IRouter = Router();
 
@@ -164,6 +194,11 @@ router.post("/:id/categories", async (req, res) => {
     req.log.error({ err }, "Failed to sync categories");
     res.status(500).json({ error: "Internal server error" });
   }
+});
+
+// ── Proxy any unhandled /stores/* paths to Python (category-mappings, normalisation-dict, etc.)
+router.all("/{*path}", (req, res) => {
+  proxyToPython(req, res, "/api/stores");
 });
 
 export default router;

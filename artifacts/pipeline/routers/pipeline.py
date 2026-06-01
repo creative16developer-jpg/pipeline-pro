@@ -10,7 +10,7 @@ from models.models import PipelineJob, PipelineLog, Job, JobType, Store
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
-ACTIVE_STATUSES = ("running", "review")
+ACTIVE_STATUSES = ("running", "review", "enrich_review")
 
 
 def _pl_dict(pl: PipelineJob, step_jobs: list = None) -> dict:
@@ -49,6 +49,7 @@ def _pl_dict(pl: PipelineJob, step_jobs: list = None) -> dict:
 class PipelineCreateRequest(BaseModel):
     store_id: int
     fetch_job_id: int
+    include_enrich: bool = False
     include_generate: bool = False
     force_rerun: bool = False
     process_config: dict = {}
@@ -138,6 +139,7 @@ async def create_pipeline(body: PipelineCreateRequest, db: AsyncSession = Depend
         fetch_job_id=body.fetch_job_id,
         status=initial_status,
         config={
+            "include_enrich":   body.include_enrich,
             "include_generate": body.include_generate,
             "force_rerun": body.force_rerun,
             "process_config": body.process_config,

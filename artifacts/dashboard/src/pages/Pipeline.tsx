@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import {
   Play, Zap, ChevronDown, ChevronRight, RotateCcw,
   CloudDownload, Cpu, Upload, ArrowRightLeft, Sparkles,
-  Info, Loader2, AlertTriangle, FileText
+  Info, Loader2, AlertTriangle, FileText, Layers
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -53,11 +53,12 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 }
 
 const PIPELINE_STEPS = [
-  { key: "process", label: "Process", desc: "Download & compress product images", Icon: Cpu, color: "text-amber-400" },
-  { key: "generate", label: "Generate", desc: "AI content generation (optional)", Icon: Sparkles, color: "text-violet-400" },
-  { key: "review", label: "Review", desc: "Pause for manual approval", Icon: Info, color: "text-sky-400" },
-  { key: "upload", label: "Upload", desc: "Push products to WooCommerce", Icon: Upload, color: "text-emerald-400" },
-  { key: "sync", label: "Sync", desc: "Sync categories & attributes", Icon: ArrowRightLeft, color: "text-pink-400" },
+  { key: "process",  label: "Process",  desc: "Download & compress product images",           Icon: Cpu,          color: "text-amber-400",  optional: false },
+  { key: "enrich",   label: "Enrich",   desc: "AI attribute extraction + variant grouping",   Icon: Layers,       color: "text-orange-400", optional: true  },
+  { key: "generate", label: "Generate", desc: "AI content generation (optional)",             Icon: Sparkles,     color: "text-violet-400", optional: true  },
+  { key: "review",   label: "Review",   desc: "Pause for manual approval + category mapping", Icon: Info,         color: "text-sky-400",    optional: false },
+  { key: "upload",   label: "Upload",   desc: "Push products to WooCommerce",                 Icon: Upload,       color: "text-emerald-400",optional: false },
+  { key: "sync",     label: "Sync",     desc: "Sync categories & attributes",                 Icon: ArrowRightLeft, color: "text-pink-400", optional: false },
 ];
 
 function jobLabel(j: SourceJob): string {
@@ -87,6 +88,7 @@ export default function Pipeline() {
   const [loadingJobs, setLoadingJobs] = useState(false);
 
   // Options
+  const [includeEnrich, setIncludeEnrich] = useState(false);
   const [includeGenerate, setIncludeGenerate] = useState(false);
   const [forceRerun, setForceRerun] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -157,6 +159,7 @@ export default function Pipeline() {
       const body = {
         store_id:           parseInt(storeId),
         fetch_job_id:       parseInt(fetchJobId),
+        include_enrich:     includeEnrich,
         include_generate:   includeGenerate,
         force_rerun:        forceRerun,
         process_config:     { limit: parseInt(processLimit) || 200 },
@@ -212,20 +215,23 @@ export default function Pipeline() {
         <div className="flex flex-wrap items-center gap-1.5">
           {PIPELINE_STEPS.map((step, i) => {
             const Icon = step.Icon;
-            const isOptional = step.key === "generate";
-            const isAlways = step.key === "review";
+            const isPause = step.key === "review";
+            const isActive =
+              step.key === "enrich"   ? includeEnrich :
+              step.key === "generate" ? includeGenerate :
+              true;
             return (
               <div key={step.key} className="flex items-center gap-1.5">
                 <div className={cn(
                   "flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium",
-                  isAlways ? "border-sky-500/25 bg-sky-500/10 text-sky-400" :
-                  isOptional && !includeGenerate ? "border-border/25 bg-secondary/30 text-muted-foreground opacity-50" :
+                  isPause ? "border-sky-500/25 bg-sky-500/10 text-sky-400" :
+                  !isActive ? "border-border/25 bg-secondary/30 text-muted-foreground opacity-40" :
                   "border-border/40 bg-secondary/40 text-foreground"
                 )}>
-                  <Icon className={cn("w-3 h-3", step.color)} />
+                  <Icon className={cn("w-3 h-3", isActive ? step.color : "text-muted-foreground")} />
                   {step.label}
-                  {isOptional && <span className="text-[10px] opacity-70">(opt)</span>}
-                  {isAlways && <span className="text-[10px] bg-sky-500/20 text-sky-300 px-1 rounded">pause</span>}
+                  {step.optional && <span className="text-[10px] opacity-70">(opt)</span>}
+                  {isPause && <span className="text-[10px] bg-sky-500/20 text-sky-300 px-1 rounded">pause</span>}
                 </div>
                 {i < PIPELINE_STEPS.length - 1 && (
                   <ChevronRight className="w-3 h-3 text-border shrink-0" />
@@ -324,6 +330,19 @@ export default function Pipeline() {
 
         {/* Options */}
         <div className="space-y-3 pt-1">
+          <div className="flex items-start gap-3 p-3 rounded-xl bg-secondary/30 border border-border/40">
+            <Toggle checked={includeEnrich} onChange={setIncludeEnrich} />
+            <div>
+              <p className="text-sm font-medium flex items-center gap-1.5">
+                <Layers className="w-3.5 h-3.5 text-orange-400" />
+                Include Attribute Enrichment
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Extract product attributes with AI (Color, Brand, Compatible With…), suggest variant groups, and pause for review before continuing.
+              </p>
+            </div>
+          </div>
+
           <div className="flex items-start gap-3 p-3 rounded-xl bg-secondary/30 border border-border/40">
             <Toggle checked={includeGenerate} onChange={setIncludeGenerate} />
             <div>
@@ -467,9 +486,10 @@ export default function Pipeline() {
         </p>
         <ul className="space-y-1.5 list-disc list-inside text-xs leading-relaxed">
           <li><strong className="text-foreground">Process</strong> — images downloaded, compressed, watermarked</li>
+          {includeEnrich && <li><strong className="text-foreground">Enrich</strong> — AI extracts attributes and suggests variant groups; pauses for your review</li>}
           {includeGenerate && <li><strong className="text-foreground">Generate</strong> — AI content created for each product</li>}
-          <li><strong className="text-foreground">Review</strong> — pipeline pauses; you approve before upload</li>
-          <li><strong className="text-foreground">Upload</strong> — products pushed as drafts to WooCommerce</li>
+          <li><strong className="text-foreground">Review</strong> — pipeline pauses; confirm category mappings before upload</li>
+          <li><strong className="text-foreground">Upload</strong> — products pushed as drafts to WooCommerce (with mapped categories)</li>
           <li><strong className="text-foreground">Sync</strong> — categories and attributes assigned</li>
           <li>If another pipeline is running for this store, yours will be queued and auto-start automatically</li>
         </ul>

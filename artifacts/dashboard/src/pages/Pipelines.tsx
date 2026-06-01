@@ -3,7 +3,8 @@ import { useLocation } from "wouter";
 import {
   Plus, ChevronDown, ChevronRight, CheckCircle2, XCircle,
   Loader2, Clock, AlertTriangle, Square, Play, RefreshCw,
-  RotateCcw, Eye, Info, ChevronUp, Activity
+  RotateCcw, Eye, Info, ChevronUp, Activity, Layers, Tag,
+  Check, X as XIcon, ChevronLeft
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -61,12 +62,13 @@ interface QueueInfo {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUS_META: Record<string, { icon: any; cls: string; dot: string; label: string }> = {
-  running:   { icon: Loader2,       cls: "bg-primary/10 text-primary border-primary/25",             dot: "bg-primary animate-pulse",        label: "Running" },
-  queued:    { icon: Clock,         cls: "bg-secondary text-muted-foreground border-border",          dot: "bg-muted-foreground",             label: "Queued" },
-  review:    { icon: Eye,           cls: "bg-amber-500/10 text-amber-400 border-amber-500/25",        dot: "bg-amber-400 animate-pulse",      label: "Review" },
-  completed: { icon: CheckCircle2,  cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/25", dot: "bg-emerald-400",                  label: "Completed" },
-  failed:    { icon: XCircle,       cls: "bg-red-500/10 text-red-400 border-red-500/25",             dot: "bg-red-400",                      label: "Failed" },
-  cancelled: { icon: Square,        cls: "bg-orange-500/10 text-orange-400 border-orange-500/25",    dot: "bg-orange-400",                   label: "Cancelled" },
+  running:       { icon: Loader2,       cls: "bg-primary/10 text-primary border-primary/25",               dot: "bg-primary animate-pulse",        label: "Running" },
+  queued:        { icon: Clock,         cls: "bg-secondary text-muted-foreground border-border",            dot: "bg-muted-foreground",             label: "Queued" },
+  review:        { icon: Eye,           cls: "bg-amber-500/10 text-amber-400 border-amber-500/25",          dot: "bg-amber-400 animate-pulse",      label: "Review" },
+  enrich_review: { icon: Layers,        cls: "bg-orange-500/10 text-orange-400 border-orange-500/25",      dot: "bg-orange-400 animate-pulse",     label: "Enrich Review" },
+  completed:     { icon: CheckCircle2,  cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/25",   dot: "bg-emerald-400",                  label: "Completed" },
+  failed:        { icon: XCircle,       cls: "bg-red-500/10 text-red-400 border-red-500/25",               dot: "bg-red-400",                      label: "Failed" },
+  cancelled:     { icon: Square,        cls: "bg-orange-500/10 text-orange-400 border-orange-500/25",      dot: "bg-orange-400",                   label: "Cancelled" },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -82,11 +84,12 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 const STEP_LABELS: Record<string, string> = {
-  process: "Processing",
-  generate: "Generating",
-  review: "Under Review",
-  upload: "Uploading",
-  sync: "Syncing",
+  process:       "Processing",
+  enrich:        "Extracting Attrs",
+  generate:      "Generating",
+  review:        "Under Review",
+  upload:        "Uploading",
+  sync:          "Syncing",
 };
 
 const LOG_COLOR: Record<string, string> = {
@@ -181,6 +184,372 @@ function LogPanel({ plId, isLive }: { plId: number; isLive: boolean }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Category Map Panel (shown inside Review row)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => void }) {
+  const { toast } = useToast();
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [mappings, setMappings] = useState<Record<string, { woo_cat_id: number | null; woo_cat_name: string }>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/pipelines/${pl.id}/map-data`)
+      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then((d) => {
+        setData(d);
+        const init: typeof mappings = {};
+        (d.categories ?? []).forEach((c: any) => {
+          init[c.sunsky_cat] = { woo_cat_id: c.woo_cat_id ?? null, woo_cat_name: c.woo_cat_name ?? "" };
+        });
+        setMappings(init);
+      })
+      .catch(() => toast({ title: "Failed to load category data", variant: "destructive" }))
+      .finally(() => setLoading(false));
+  }, [pl.id]);
+
+  const handleConfirmResume = async () => {
+    setSaving(true);
+    try {
+      const entries = Object.entries(mappings)
+        .filter(([, v]) => v.woo_cat_id)
+        .map(([sunsky_cat, v]) => ({ sunsky_cat, woo_cat_id: v.woo_cat_id, woo_cat_name: v.woo_cat_name || null }));
+      const r = await fetch(`/api/pipelines/${pl.id}/map-confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mappings: entries }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Category mappings saved — pipeline resumed" });
+      onResumed();
+    } catch (e: any) {
+      toast({ title: "Failed to confirm mappings", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return (
+    <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading category data…
+    </div>
+  );
+
+  if (!data || data.categories?.length === 0) return (
+    <div className="p-4 text-sm text-muted-foreground italic">
+      No Sunsky categories found in this batch. Click Resume to continue.
+    </div>
+  );
+
+  return (
+    <div className="p-4 space-y-3">
+      <div className="flex items-center gap-2 mb-1">
+        <Tag className="w-4 h-4 text-amber-400" />
+        <span className="text-sm font-medium text-amber-400">Category Mapping</span>
+        <span className="text-xs text-muted-foreground">
+          Map Sunsky categories → WooCommerce categories (optional — skip any you don't need)
+        </span>
+      </div>
+
+      <div className="overflow-x-auto rounded-xl border border-border/40">
+        <table className="w-full text-xs">
+          <thead className="bg-secondary/40">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium text-muted-foreground">Sunsky Category</th>
+              <th className="px-3 py-2 text-left font-medium text-muted-foreground">Products</th>
+              <th className="px-3 py-2 text-left font-medium text-muted-foreground">WooCommerce Category</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(data.categories ?? []).map((cat: any) => {
+              const cur = mappings[cat.sunsky_cat] ?? { woo_cat_id: null, woo_cat_name: "" };
+              return (
+                <tr key={cat.sunsky_cat} className="border-t border-border/30">
+                  <td className="px-3 py-2 font-mono text-foreground">{cat.sunsky_cat}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{cat.product_count}</td>
+                  <td className="px-3 py-2">
+                    {data.woo_options?.length > 0 ? (
+                      <select
+                        value={cur.woo_cat_id ?? ""}
+                        onChange={(e) => {
+                          const opt = data.woo_options.find((o: any) => String(o.id) === e.target.value);
+                          setMappings((prev) => ({
+                            ...prev,
+                            [cat.sunsky_cat]: {
+                              woo_cat_id: opt ? opt.id : null,
+                              woo_cat_name: opt ? opt.name : "",
+                            },
+                          }));
+                        }}
+                        className="w-full bg-secondary border border-border/40 rounded-lg px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
+                      >
+                        <option value="">— skip —</option>
+                        {data.woo_options.map((o: any) => (
+                          <option key={o.id} value={o.id}>{o.name}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        placeholder="Category name (optional)"
+                        value={cur.woo_cat_name}
+                        onChange={(e) =>
+                          setMappings((prev) => ({
+                            ...prev,
+                            [cat.sunsky_cat]: { woo_cat_id: null, woo_cat_name: e.target.value },
+                          }))
+                        }
+                        className="w-full bg-secondary border border-border/40 rounded-lg px-2 py-1 text-xs text-foreground focus:outline-none"
+                      />
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          onClick={handleConfirmResume}
+          disabled={saving}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors disabled:opacity-50"
+        >
+          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3 fill-current" />}
+          Confirm &amp; Resume
+        </button>
+        <span className="text-xs text-muted-foreground">Mappings are saved for future pipeline runs too</span>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enrich Review Panel (shown when status = enrich_review)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () => void }) {
+  const { toast } = useToast();
+  const [tab, setTab] = useState<"attrs" | "norm" | "variants">("attrs");
+  const [enrichData, setEnrichData] = useState<any>(null);
+  const [groupsData, setGroupsData] = useState<any>(null);
+  const [loadingEnrich, setLoadingEnrich] = useState(true);
+  const [loadingGroups, setLoadingGroups] = useState(true);
+  const [normEdits, setNormEdits] = useState<Record<string, Record<string, string>>>({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/pipelines/${pl.id}/enrich-data`)
+      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then(setEnrichData)
+      .catch(() => toast({ title: "Failed to load enrich data", variant: "destructive" }))
+      .finally(() => setLoadingEnrich(false));
+
+    fetch(`/api/pipelines/${pl.id}/variant-groups`)
+      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then(setGroupsData)
+      .catch(() => {})
+      .finally(() => setLoadingGroups(false));
+  }, [pl.id]);
+
+  const confidenceColor = (c?: number) =>
+    !c ? "text-muted-foreground" : c >= 0.85 ? "text-emerald-400" : c >= 0.65 ? "text-amber-400" : "text-red-400";
+
+  const handleConfirm = async () => {
+    setSaving(true);
+    try {
+      const attrs: any[] = [];
+      (enrichData?.products ?? []).forEach((p: any) => {
+        (p.attrs ?? []).forEach((a: any) => {
+          const normVal = normEdits[a.id]?.value ?? a.normalised_value ?? a.raw_value;
+          attrs.push({ product_id: p.product_id, attribute: a.attribute, normalised_value: normVal, confirmed: true });
+        });
+      });
+
+      const new_norm_entries: any[] = [];
+      Object.entries(normEdits).forEach(([attrId, v]) => {
+        const allProducts = enrichData?.products ?? [];
+        for (const p of allProducts) {
+          const a = p.attrs?.find((x: any) => String(x.id) === String(attrId));
+          if (a && v.value && v.value !== a.raw_value) {
+            new_norm_entries.push({ attribute: a.attribute, raw_value: a.raw_value, woo_term: v.value });
+          }
+        }
+      });
+
+      const r = await fetch(`/api/pipelines/${pl.id}/enrich-confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attrs, new_norm_entries }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Attributes confirmed — pipeline continuing" });
+      onConfirmed();
+    } catch (e: any) {
+      toast({ title: "Failed to confirm attributes", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleGroup = async (groupId: number, confirmed: boolean) => {
+    try {
+      await fetch(`/api/pipelines/${pl.id}/variant-groups/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify([{ id: groupId, confirmed }]),
+      });
+      setGroupsData((prev: any) => ({
+        ...prev,
+        groups: (prev?.groups ?? []).map((g: any) => g.id === groupId ? { ...g, confirmed } : g),
+      }));
+    } catch (_) {}
+  };
+
+  return (
+    <div className="p-4 space-y-3">
+      <div className="flex items-center gap-3 mb-2">
+        <Layers className="w-4 h-4 text-orange-400" />
+        <span className="text-sm font-medium text-orange-400">Attribute Review</span>
+        <span className="text-xs text-muted-foreground">Review AI-extracted attributes, adjust normalisations, and confirm variant groups</span>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 border-b border-border/40">
+        {([["attrs", "Attributes"], ["norm", "Normalisation"], ["variants", "Variant Groups"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setTab(key)}
+            className={cn(
+              "px-3 py-1.5 text-xs font-medium border-b-2 -mb-px transition-colors",
+              tab === key ? "border-orange-400 text-orange-400" : "border-transparent text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Attributes tab */}
+      {tab === "attrs" && (
+        loadingEnrich ? (
+          <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading attributes…
+          </div>
+        ) : !enrichData?.products?.length ? (
+          <div className="py-3 text-sm text-muted-foreground italic">No attributes extracted yet.</div>
+        ) : (
+          <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+            {enrichData.products.map((p: any) => (
+              <div key={p.product_id} className="rounded-xl border border-border/30 bg-secondary/20 overflow-hidden">
+                <div className="px-3 py-2 bg-secondary/40 text-xs font-medium text-foreground truncate">
+                  {p.product_sku && <span className="text-muted-foreground mr-2 font-mono">{p.product_sku}</span>}
+                  {p.product_name}
+                </div>
+                <table className="w-full text-xs">
+                  <tbody>
+                    {(p.attrs ?? []).map((a: any) => (
+                      <tr key={a.id} className="border-t border-border/20">
+                        <td className="px-3 py-1.5 text-muted-foreground w-28 shrink-0">{a.attribute}</td>
+                        <td className="px-3 py-1.5 font-mono text-foreground">{a.raw_value}</td>
+                        <td className="px-3 py-1.5 w-32">
+                          <input
+                            type="text"
+                            placeholder={a.norm_suggestion ?? a.raw_value}
+                            defaultValue={a.normalised_value ?? a.norm_suggestion ?? ""}
+                            onChange={(e) => setNormEdits((prev) => ({ ...prev, [a.id]: { value: e.target.value } }))}
+                            className="w-full bg-transparent border-b border-border/30 focus:border-orange-400/60 outline-none py-0.5 text-foreground placeholder:text-muted-foreground/50 text-xs"
+                          />
+                        </td>
+                        <td className={cn("px-2 py-1.5 text-right tabular-nums text-[10px] w-10", confidenceColor(a.confidence))}>
+                          {a.confidence != null ? `${Math.round(a.confidence * 100)}%` : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+
+      {/* Normalisation tab */}
+      {tab === "norm" && (
+        <div className="py-2 text-sm text-muted-foreground">
+          <p className="mb-2 text-xs">
+            Edit the "normalised" column in the Attributes tab to teach the pipeline how to translate raw Sunsky values into WooCommerce terms.
+            Those mappings are saved permanently and applied to future runs.
+          </p>
+          <p className="text-xs text-muted-foreground/60">
+            Norm dict size for this store: {enrichData?.norm_dict_size ?? 0} entries
+          </p>
+        </div>
+      )}
+
+      {/* Variant groups tab */}
+      {tab === "variants" && (
+        loadingGroups ? (
+          <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading groups…
+          </div>
+        ) : !groupsData?.groups?.length ? (
+          <div className="py-3 text-sm text-muted-foreground italic">No variant groups suggested — all products will be uploaded as individual items.</div>
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+            {groupsData.groups.map((g: any) => (
+              <div key={g.id} className={cn(
+                "rounded-xl border p-3 text-xs",
+                g.confirmed ? "border-emerald-500/30 bg-emerald-500/5" : "border-border/30 bg-secondary/20"
+              )}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="font-medium text-foreground">{g.attribute}</span>
+                  {g.pattern && <span className="text-muted-foreground font-mono truncate flex-1">{g.pattern}</span>}
+                  <button
+                    onClick={() => toggleGroup(g.id, !g.confirmed)}
+                    className={cn(
+                      "flex items-center gap-1 px-2 py-0.5 rounded-md border text-xs transition-colors",
+                      g.confirmed
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20"
+                        : "border-border/40 text-muted-foreground hover:border-emerald-500/30 hover:text-emerald-400 hover:bg-emerald-500/10"
+                    )}
+                  >
+                    {g.confirmed ? <><Check className="w-3 h-3" /> Confirmed</> : <><XIcon className="w-3 h-3" /> Confirm</>}
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {g.products?.map((p: any) => (
+                    <span key={p.id} className="px-1.5 py-0.5 rounded bg-secondary border border-border/30 font-mono text-muted-foreground">
+                      {p.sku || p.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      )}
+
+      <div className="flex items-center gap-2 pt-1 border-t border-border/30">
+        <button
+          onClick={handleConfirm}
+          disabled={saving}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/20 transition-colors disabled:opacity-50"
+        >
+          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+          Confirm Attributes &amp; Continue
+        </button>
+        <span className="text-xs text-muted-foreground">Pipeline will resume with Generate / Review after confirmation</span>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Pipeline row
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -197,7 +566,9 @@ function PipelineRow({
   onToggleLogs: () => void;
   onAction: (action: string, id: number) => void;
 }) {
-  const isLive = ["running", "review"].includes(pl.status);
+  const [enrichPanelOpen, setEnrichPanelOpen] = useState(pl.status === "enrich_review");
+  const [mapPanelOpen, setMapPanelOpen] = useState(pl.status === "review");
+  const isLive = ["running", "review", "enrich_review"].includes(pl.status);
 
   return (
     <>
@@ -254,18 +625,38 @@ function PipelineRow({
               Logs
             </button>
 
-            {/* Resume (review only) */}
-            {pl.status === "review" && (
+            {/* Enrich review panel toggle */}
+            {pl.status === "enrich_review" && (
               <button
-                onClick={() => onAction("resume", pl.id)}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors"
+                onClick={() => setEnrichPanelOpen((x) => !x)}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/20 transition-colors"
               >
-                <Play className="w-3 h-3 fill-current" /> Resume
+                <Layers className="w-3 h-3" />
+                {enrichPanelOpen ? "Hide Review" : "Review Attrs"}
               </button>
             )}
 
-            {/* Cancel (running | queued | review) */}
-            {["running", "queued", "review"].includes(pl.status) && (
+            {/* Category map panel toggle + plain Resume (review only) */}
+            {pl.status === "review" && (
+              <>
+                <button
+                  onClick={() => setMapPanelOpen((x) => !x)}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors"
+                >
+                  <Tag className="w-3 h-3" />
+                  {mapPanelOpen ? "Hide Map" : "Map Categories"}
+                </button>
+                <button
+                  onClick={() => onAction("resume", pl.id)}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Play className="w-3 h-3 fill-current" /> Skip &amp; Resume
+                </button>
+              </>
+            )}
+
+            {/* Cancel (running | queued | review | enrich_review) */}
+            {["running", "queued", "review", "enrich_review"].includes(pl.status) && (
               <button
                 onClick={() => onAction("cancel", pl.id)}
                 className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
@@ -287,13 +678,34 @@ function PipelineRow({
         </td>
       </tr>
 
+      {/* Enrich review panel */}
+      {pl.status === "enrich_review" && enrichPanelOpen && (
+        <tr className="border-b border-orange-500/10 bg-orange-500/5">
+          <td colSpan={7} className="px-0">
+            <EnrichReviewPanel pl={pl} onConfirmed={() => onAction("_refresh", pl.id)} />
+          </td>
+        </tr>
+      )}
+
+      {/* Enrich review banner (always visible when enrich_review) */}
+      {pl.status === "enrich_review" && (
+        <tr className="border-b border-orange-500/10 bg-orange-500/5">
+          <td colSpan={7} className="px-4 py-2">
+            <div className="flex items-center gap-3 text-sm">
+              <Layers className="w-4 h-4 text-orange-400 shrink-0" />
+              <span className="text-orange-400 font-medium">AI attribute extraction complete — review &amp; confirm to continue</span>
+            </div>
+          </td>
+        </tr>
+      )}
+
       {/* Review stats row */}
       {pl.status === "review" && pl.stats_json && (
         <tr className="border-b border-amber-500/10 bg-amber-500/5">
           <td colSpan={7} className="px-4 py-2">
             <div className="flex items-center gap-4 text-sm">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-              <span className="text-amber-400 font-medium">Review required before upload</span>
+              <span className="text-amber-400 font-medium">Review required — map categories then Confirm &amp; Resume</span>
               <div className="flex items-center gap-3 text-xs">
                 <span className="text-foreground">{pl.stats_json.total ?? 0} total</span>
                 <span className="text-emerald-400">{pl.stats_json.ok ?? 0} OK</span>
@@ -304,6 +716,15 @@ function PipelineRow({
                 <span className="text-muted-foreground italic text-xs">{pl.stats_json.note}</span>
               )}
             </div>
+          </td>
+        </tr>
+      )}
+
+      {/* Category map panel */}
+      {pl.status === "review" && mapPanelOpen && (
+        <tr className="border-b border-amber-500/10 bg-amber-500/5">
+          <td colSpan={7} className="px-0">
+            <CategoryMapPanel pl={pl} onResumed={() => onAction("_refresh", pl.id)} />
           </td>
         </tr>
       )}
@@ -374,6 +795,10 @@ export default function Pipelines() {
     });
 
   const handleAction = async (action: string, id: number) => {
+    if (action === "_refresh") {
+      await fetchPipelines();
+      return;
+    }
     try {
       let url = `/api/pipelines/${id}/${action}`;
       const r = await fetch(url, { method: "POST" });

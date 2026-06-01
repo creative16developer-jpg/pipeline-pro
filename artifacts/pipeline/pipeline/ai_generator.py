@@ -236,8 +236,14 @@ async def generate_with_ai(
     """
     Generate content for `field` using the specified AI provider.
     Raises AIGenerationError on any failure (caller should fall back to logic).
+
+    If options contains ``_prompt_override``, that string is used as the prompt
+    verbatim (used by the enrich step for raw JSON extraction prompts).
     """
-    prompt = _build_prompt(field, product, options)
+    if "_prompt_override" in options:
+        prompt = str(options["_prompt_override"])
+    else:
+        prompt = _build_prompt(field, product, options)
 
     if provider == "openai":
         return await _generate_openai(prompt, model)

@@ -773,6 +773,30 @@ async def _run_upload(db, job):
         try:
             raw = product.raw_data or {}
 
+            # ── Resolve category mapping for this product ─────────────────
+            woo_cat_ids: list[int] = []
+            try:
+                from models.models import SunskyCategoryMapping
+                raw_for_cat = product.raw_data or {}
+                sunsky_cat = (
+                    str(raw_for_cat.get("catName") or
+                        raw_for_cat.get("categoryName") or
+                        raw_for_cat.get("categoryId") or
+                        raw_for_cat.get("catId") or "").strip()
+                )
+                if sunsky_cat and job.store_id:
+                    from sqlalchemy import select as _sel
+                    mapping = (await db.execute(
+                        _sel(SunskyCategoryMapping).where(
+                            SunskyCategoryMapping.store_id == job.store_id,
+                            SunskyCategoryMapping.sunsky_cat == sunsky_cat,
+                        )
+                    )).scalar_one_or_none()
+                    if mapping and mapping.woo_cat_id:
+                        woo_cat_ids = [mapping.woo_cat_id]
+            except Exception:
+                pass
+
             payload = {
                 "name":              product.name,
                 "sku":               product.site_sku or product.sku,
@@ -786,6 +810,8 @@ async def _run_upload(db, job):
                 "image_alt":         product.image_alt or "",
                 "stock_quantity":    10 if product.stock_status == "in_stock" else 0,
             }
+            if woo_cat_ids:
+                payload["categories"] = [{"id": cid} for cid in woo_cat_ids]
 
             if not skip_images:
                 image_urls = await _resolve_product_images(db, job, product, raw, wc, store)

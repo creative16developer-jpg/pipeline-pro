@@ -34,6 +34,12 @@ def resume_pipeline_job(self, pipeline_job_id: int):
     asyncio.run(_resume_pipeline(pipeline_job_id))
 
 
+@celery_app.task(bind=True, name="tasks.enrich_resume_pipeline_job")
+def enrich_resume_pipeline_job(self, pipeline_job_id: int):
+    """Continue pipeline from enrich_review → Generate (opt) → Review pause."""
+    asyncio.run(_enrich_resume_pipeline(pipeline_job_id))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -136,7 +142,7 @@ async def _execute_pipeline(pipeline_job_id: int):
 
             try:
                 # ── Step 1: Process ────────────────────────────────────────
-                from tasks.job_tasks import _run_process
+                from tasks.job_tasks import _run_process  # noqa: keep import here
                 process_job = Job(
                     type=JobType.process,
                     status=JobStatus.pending,
@@ -156,6 +162,24 @@ async def _execute_pipeline(pipeline_job_id: int):
 
                 if await _is_cancelled(db, pl.id):
                     return
+
+                # ── Step 1.5: Enrich (optional) ───────────────────────────
+                include_enrich = cfg.get("include_enrich", False)
+                if include_enrich:
+                    pl.current_step = "enrich"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _plog(db, pl.id, "enrich", "info",
+                                "Enrich step: AI attribute extraction starting…")
+                    enrich_count = await _run_enrich_extraction(db, pl, cfg)
+                    await _plog(db, pl.id, "enrich", "info",
+                                f"Attribute extraction complete — {enrich_count} attrs extracted. "
+                                f"Pausing for review.")
+                    pl.status = "enrich_review"
+                    pl.current_step = "enrich"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    return  # Resumed by enrich_resume_pipeline_job after user confirms
 
                 # ── Step 2: Generate (optional) ───────────────────────────
                 include_generate = cfg.get("include_generate", False)
@@ -354,6 +378,166 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
         "fallback": fallback_count,
         "failed": failed_count,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enrich extraction helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
+    """
+    Run AI attribute extraction for all products in this pipeline's fetch job.
+    Saves results to product_enrich_attrs and variant_groups tables.
+    Returns total attr count extracted.
+    """
+    from models.models import Product, ProductEnrichAttr, VariantGroup
+    from sqlalchemy import select
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from services.enrich_service import extract_attributes, suggest_variant_groups
+    import json
+    from pathlib import Path
+
+    gen_cfg = cfg.get("content_gen_config", {})
+    if not gen_cfg:
+        saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+        if saved_path.exists():
+            try:
+                gen_cfg = json.loads(saved_path.read_text())
+            except Exception:
+                pass
+
+    products = (
+        await db.execute(
+            select(Product).where(Product.fetch_job_id == pl.fetch_job_id)
+        )
+    ).scalars().all()
+
+    total_attrs = 0
+    product_dicts = []
+    for product in products:
+        raw = product.raw_data or {}
+        prod_dict = {"id": product.id, "name": product.name or "", **raw}
+        product_dicts.append(prod_dict)
+
+        attrs = await extract_attributes(prod_dict, gen_cfg)
+        for a in attrs:
+            stmt = (
+                pg_insert(ProductEnrichAttr)
+                .values(
+                    pipeline_job_id=pl.id,
+                    product_id=product.id,
+                    attribute=a["attribute"],
+                    raw_value=a["raw_value"],
+                    confidence=a.get("confidence"),
+                    confirmed=False,
+                )
+                .on_conflict_do_update(
+                    index_elements=["pipeline_job_id", "product_id", "attribute"],
+                    set_={"raw_value": a["raw_value"], "confidence": a.get("confidence")},
+                )
+            )
+            await db.execute(stmt)
+            total_attrs += 1
+
+    await db.commit()
+
+    # Suggest variant groups
+    suggestions = await suggest_variant_groups(product_dicts, gen_cfg)
+    for sg in suggestions:
+        vg = VariantGroup(
+            pipeline_job_id=pl.id,
+            attribute=sg["attribute"],
+            product_ids=sg["product_ids"],
+            pattern=sg.get("pattern"),
+            confirmed=False,
+        )
+        db.add(vg)
+    await db.commit()
+
+    await _plog(db, pl.id, "enrich", "info",
+                f"  {len(products)} products · {total_attrs} attributes · "
+                f"{len(suggestions)} variant group suggestion(s)")
+    return total_attrs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enrich resume: continues from enrich_review → Generate (opt) → Review pause
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _enrich_resume_pipeline(pipeline_job_id: int):
+    from database import make_session_factory
+    from models.models import PipelineJob
+
+    CelerySession, celery_engine = make_session_factory()
+    try:
+        async with CelerySession() as db:
+            pl = await db.get(PipelineJob, pipeline_job_id)
+            if not pl or pl.status not in ("enrich_review", "running"):
+                return
+
+            cfg = pl.config or {}
+            include_generate = cfg.get("include_generate", False)
+
+            try:
+                # ── Step 2: Generate (optional) ───────────────────────────
+                if include_generate:
+                    pl.current_step = "generate"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _plog(db, pl.id, "generate", "info", "Content generation starting…")
+                    stats = await _run_generate(db, pl, cfg)
+                    pl.stats_json = stats
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    if await _is_cancelled(db, pl.id):
+                        return
+                else:
+                    from models.models import Job, JobType
+                    from sqlalchemy import select
+                    process_job = (
+                        await db.execute(
+                            select(Job).where(
+                                Job.pipeline_job_id == pl.id,
+                                Job.type == JobType.process,
+                            ).order_by(Job.id.desc()).limit(1)
+                        )
+                    ).scalar_one_or_none()
+                    pl.stats_json = {
+                        "total":    process_job.total_items     if process_job else 0,
+                        "ok":       (process_job.processed_items - process_job.failed_items) if process_job else 0,
+                        "fallback": 0,
+                        "failed":   process_job.failed_items    if process_job else 0,
+                        "note":     "Content generation skipped",
+                    }
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+
+                # ── Pause at Review ───────────────────────────────────────
+                pl.status = "review"
+                pl.current_step = "review"
+                pl.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                stats = pl.stats_json or {}
+                await _plog(
+                    db, pl.id, "review", "info",
+                    f"Pipeline paused for review — "
+                    f"{stats.get('total', 0)} total | "
+                    f"{stats.get('ok', 0)} OK | "
+                    f"{stats.get('fallback', 0)} fallback | "
+                    f"{stats.get('failed', 0)} failed. "
+                    f"Confirm category mapping and click Resume.",
+                )
+
+            except Exception as e:
+                pl.status = "failed"
+                pl.error_message = str(e)
+                pl.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                await _plog(db, pl.id, pl.current_step or "enrich", "error",
+                            f"Pipeline failed after enrich resume: {e}")
+                await _advance_queue(db, pl.store_id, pl.id)
+    finally:
+        await celery_engine.dispose()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

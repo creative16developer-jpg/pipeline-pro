@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, Float, DateTime,
-    ForeignKey, JSON, Enum as SAEnum
+    ForeignKey, JSON, Enum as SAEnum, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -253,3 +253,76 @@ class JobLog(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     job = relationship("Job", back_populates="logs")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Map step
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SunskyCategoryMapping(Base):
+    """Persistent Sunsky-category → WooCommerce-category mapping per store."""
+    __tablename__ = "sunsky_category_mappings"
+    __table_args__ = (UniqueConstraint("store_id", "sunsky_cat"),)
+
+    id           = Column(Integer, primary_key=True, index=True)
+    store_id     = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    sunsky_cat   = Column(Text, nullable=False)
+    woo_cat_id   = Column(Integer, nullable=True)
+    woo_cat_name = Column(Text, nullable=True)
+    created_at   = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at   = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    store = relationship("Store")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enrich step
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ProductEnrichAttr(Base):
+    """AI-extracted attribute per product per pipeline run."""
+    __tablename__ = "product_enrich_attrs"
+    __table_args__ = (UniqueConstraint("pipeline_job_id", "product_id", "attribute"),)
+
+    id               = Column(Integer, primary_key=True, index=True)
+    pipeline_job_id  = Column(Integer, ForeignKey("pipeline_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id       = Column(Integer, ForeignKey("products.id",      ondelete="CASCADE"), nullable=False, index=True)
+    attribute        = Column(Text, nullable=False)
+    raw_value        = Column(Text, nullable=False)
+    normalised_value = Column(Text, nullable=True)
+    confidence       = Column(Float, nullable=True)
+    confirmed        = Column(Boolean, nullable=False, default=False)
+    created_at       = Column(DateTime(timezone=True), server_default=func.now())
+
+    product      = relationship("Product")
+    pipeline_job = relationship("PipelineJob")
+
+
+class NormalisationDict(Base):
+    """Persistent raw-value → WooCommerce-term mapping per store per attribute."""
+    __tablename__ = "normalisation_dict"
+    __table_args__ = (UniqueConstraint("store_id", "attribute", "raw_value"),)
+
+    id         = Column(Integer, primary_key=True, index=True)
+    store_id   = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    attribute  = Column(Text, nullable=False)
+    raw_value  = Column(Text, nullable=False)
+    woo_term   = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    store = relationship("Store")
+
+
+class VariantGroup(Base):
+    """AI-suggested variant group (SKUs that form one WooCommerce variable product)."""
+    __tablename__ = "variant_groups"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    pipeline_job_id = Column(Integer, ForeignKey("pipeline_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    attribute       = Column(Text, nullable=False)
+    product_ids     = Column(JSON, nullable=False, default=list)
+    confirmed       = Column(Boolean, nullable=False, default=False)
+    pattern         = Column(Text, nullable=True)
+    created_at      = Column(DateTime(timezone=True), server_default=func.now())
+
+    pipeline_job = relationship("PipelineJob")
