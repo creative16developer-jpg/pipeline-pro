@@ -1108,7 +1108,7 @@ async def _run_upload(db, job):
             if sunsky_cat_id:
                 cat_woo_ids, cat_names = await _p2_collect_hierarchy(sunsky_cat_id)
 
-            # Fallback: if cache miss but raw_data has a plain category name
+            # Fallback 1: raw_data has a plain category name field
             if not cat_woo_ids and cat_name_direct:
                 woo_cat_id = p2_cat_by_name.get(cat_name_direct.lower())
                 if not woo_cat_id:
@@ -1128,26 +1128,55 @@ async def _run_upload(db, job):
                     cat_woo_ids = [woo_cat_id]
                     cat_names   = [cat_name_direct]
 
-            # Set the full category hierarchy on the product
-            try:
-                await woo_client.set_product_categories(
-                    store, prod.woo_product_id, cat_woo_ids
-                )
-                if cat_woo_ids:
+            # Fallback 2: persistent SunskyCategoryMapping set via Map panel
+            # This is the user's manual mapping — highest-quality fallback.
+            if not cat_woo_ids and job.store_id:
+                try:
+                    from models.models import SunskyCategoryMapping as _SCM2
+                    from sqlalchemy import select as _sel_scm
+                    _p2_sunsky_cat = (
+                        str(raw.get("catName") or raw.get("categoryName") or
+                            raw.get("categoryId") or raw.get("catId") or "").strip()
+                    )
+                    if _p2_sunsky_cat:
+                        _mapping2 = (await db.execute(
+                            _sel_scm(_SCM2).where(
+                                _SCM2.store_id == job.store_id,
+                                _SCM2.sunsky_cat == _p2_sunsky_cat,
+                            )
+                        )).scalar_one_or_none()
+                        if _mapping2 and _mapping2.woo_cat_id:
+                            cat_woo_ids = [_mapping2.woo_cat_id]
+                            cat_names   = [_mapping2.woo_cat_name or _p2_sunsky_cat]
+                            await _log(db, job.id, LogLevel.info,
+                                       f"  {prod.sku}: using SunskyCategoryMapping "
+                                       f"{_p2_sunsky_cat!r} → woo_id={_mapping2.woo_cat_id}")
+                except Exception as _scm_e:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  {prod.sku}: SunskyCategoryMapping lookup failed — {_scm_e}")
+
+            # Set the full category hierarchy on the product.
+            # IMPORTANT: only call when we have IDs — passing [] would clear the
+            # category that Phase 1 already set in the create/update payload.
+            if cat_woo_ids:
+                try:
+                    await woo_client.set_product_categories(
+                        store, prod.woo_product_id, cat_woo_ids
+                    )
                     p2_cat_ok += 1
                     path_str = " → ".join(cat_names) or str(cat_woo_ids)
                     await _log(db, job.id, LogLevel.info,
-                               f"  ✓ {prod.sku} → {len(cat_woo_ids)}-level hierarchy: "
-                               f"{path_str} "
-                               f"(woo ids: {cat_woo_ids})")
-                else:
-                    p2_cat_miss += 1
+                               f"  ✓ {prod.sku} → {len(cat_woo_ids)}-level category: "
+                               f"{path_str} (woo ids: {cat_woo_ids})")
+                except Exception as _ce:
                     await _log(db, job.id, LogLevel.warn,
-                               f"  ✗ {prod.sku}: category {sunsky_cat_id!r} not in cache "
-                               f"— run a Sync job once to build the category cache")
-            except Exception as _ce:
+                               f"  ✗ {prod.sku}: set_categories failed — {_ce}")
+            else:
+                p2_cat_miss += 1
                 await _log(db, job.id, LogLevel.warn,
-                           f"  ✗ {prod.sku}: set_categories failed — {_ce}")
+                           f"  ✗ {prod.sku}: no category resolved (disk cache empty for "
+                           f"{sunsky_cat_id!r} and no manual mapping) — "
+                           f"Phase 1 category preserved; run Sync to build cache")
 
             # ── Attributes (entirely from raw_data — no Sunsky API calls) ─
             woo_attrs: list[dict] = []
@@ -1216,6 +1245,7 @@ async def _run_upload(db, job):
                         _sel_ea(_PEA).where(
                             _PEA.pipeline_job_id == job.pipeline_job_id,
                             _PEA.product_id == prod.id,
+                            _PEA.confirmed == True,  # noqa: E712 — only user-approved attrs
                         )
                     )).scalars().all()
 
