@@ -948,10 +948,28 @@ async def _run_upload(db, job):
         }
         p2_term_cache: dict[int, dict[str, int]] = {}
 
+        # ── Pre-load normalisation dict for this store (enrich step output) ─
+        p2_norm_lookup: dict[tuple[str, str], str] = {}
+        if job.pipeline_job_id:
+            try:
+                from models.models import NormalisationDict as _NormDict
+                from sqlalchemy import select as _sel_nd
+                _norm_rows = (await db.execute(
+                    _sel_nd(_NormDict).where(_NormDict.store_id == job.store_id)
+                )).scalars().all()
+                p2_norm_lookup = {
+                    (r.attribute.lower(), r.raw_value.lower()): r.woo_term
+                    for r in _norm_rows
+                }
+            except Exception as _ne:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Could not load normalisation dict: {_ne}")
+
         await _log(db, job.id, LogLevel.info,
                    f"  WooCommerce: {len(woo_cats)} categories, "
                    f"{len(woo_global_attrs)} global attributes loaded | "
-                   f"Sunsky cache: {len(p2_cat_cache)} entries")
+                   f"Sunsky cache: {len(p2_cat_cache)} entries | "
+                   f"Norm dict: {len(p2_norm_lookup)} entries")
 
         # ── Helper: ensure one category node exists in WooCommerce ──────
         async def _p2_ensure_cat(sunsky_id: str, _g: int = 0) -> Optional[int]:
@@ -1186,6 +1204,64 @@ async def _run_upload(db, job):
                             "visible": True,
                             "variation": False,
                         })
+
+            # AI-extracted enrich attributes (Enrich step output)
+            # Applied after Sunsky attrs so they don't overwrite existing entries;
+            # normalisation dict values take priority over raw AI values.
+            if job.pipeline_job_id:
+                try:
+                    from models.models import ProductEnrichAttr as _PEA
+                    from sqlalchemy import select as _sel_ea
+                    _enrich_attrs = (await db.execute(
+                        _sel_ea(_PEA).where(
+                            _PEA.pipeline_job_id == job.pipeline_job_id,
+                            _PEA.product_id == prod.id,
+                        )
+                    )).scalars().all()
+
+                    if _enrich_attrs:
+                        # Build a name-level dedup set from attrs already queued
+                        _seen_names: set[str] = {a["name"].lower() for a in woo_attrs}
+                        _enrich_added = 0
+                        for _ea in _enrich_attrs:
+                            _aname = (_ea.attribute or "").strip()
+                            if not _aname or _aname.lower() in _seen_names:
+                                continue  # skip if Sunsky raw_data already covers this attr
+
+                            # Value resolution priority:
+                            # 1. NormalisationDict (store-level canonical term)
+                            # 2. normalised_value set during Enrich review
+                            # 3. raw_value from AI extraction
+                            _raw = (_ea.raw_value or "").strip()
+                            _woo_val = (
+                                p2_norm_lookup.get((_aname.lower(), _raw.lower()))
+                                or (_ea.normalised_value or "").strip()
+                                or _raw
+                            )
+                            if not _woo_val:
+                                continue
+
+                            _attr = await _p2_get_or_create_attr(_aname)
+                            if _attr and _attr["id"] not in seen_attr_ids:
+                                seen_attr_ids.add(_attr["id"])
+                                _seen_names.add(_aname.lower())
+                                await _p2_get_or_create_term(_attr["id"], _woo_val)
+                                woo_attrs.append({
+                                    "id": _attr["id"],
+                                    "name": _attr["name"],
+                                    "options": [_woo_val],
+                                    "visible": True,
+                                    "variation": False,
+                                })
+                                _enrich_added += 1
+
+                        if _enrich_added:
+                            await _log(db, job.id, LogLevel.info,
+                                       f"  + {prod.sku}: {_enrich_added} enrich attr(s) added "
+                                       f"({', '.join(a['name'] for a in woo_attrs[-_enrich_added:])})")
+                except Exception as _ea_err:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  ✗ {prod.sku}: enrich attrs error — {_ea_err}")
 
             try:
                 await woo_client.set_product_attributes(
