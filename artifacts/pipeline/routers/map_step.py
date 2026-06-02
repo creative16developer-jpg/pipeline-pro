@@ -166,12 +166,9 @@ async def map_confirm(
         await db.execute(stmt)
     await db.commit()
 
-    # Trigger resume (same Celery task as the plain /resume endpoint)
+    # Trigger resume — _resume_pipeline owns the status transition (review → running)
+    # DO NOT set pl.status here; _resume_pipeline checks pl.status == "review" on entry
     from tasks.pipeline_tasks import resume_pipeline_job
-    pl.status = "running"
-    pl.current_step = "upload"
-    pl.updated_at = datetime.now(timezone.utc)
-    await db.commit()
     resume_pipeline_job.delay(pipeline_id)
 
     return {"ok": True, "pipeline_id": pipeline_id, "mapped": len(req.mappings)}
