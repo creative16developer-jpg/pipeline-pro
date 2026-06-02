@@ -1,5 +1,5 @@
 """
-Pipeline orchestration Celery tasks.
+Pipeline orchestration tasks.
 
 Each PipelineJob runs: Process → Generate (optional) → Review (pause) → Upload → Sync
 
@@ -16,28 +16,6 @@ if _pkg_dir not in sys.path:
 import asyncio
 from datetime import datetime, timezone
 from typing import Optional
-
-from celery_app import celery_app
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Celery tasks
-# ─────────────────────────────────────────────────────────────────────────────
-
-@celery_app.task(bind=True, name="tasks.run_pipeline_job")
-def run_pipeline_job(self, pipeline_job_id: int):
-    asyncio.run(_execute_pipeline(pipeline_job_id))
-
-
-@celery_app.task(bind=True, name="tasks.resume_pipeline_job")
-def resume_pipeline_job(self, pipeline_job_id: int):
-    asyncio.run(_resume_pipeline(pipeline_job_id))
-
-
-@celery_app.task(bind=True, name="tasks.enrich_resume_pipeline_job")
-def enrich_resume_pipeline_job(self, pipeline_job_id: int):
-    """Continue pipeline from enrich_review → Generate (opt) → Review pause."""
-    asyncio.run(_enrich_resume_pipeline(pipeline_job_id))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,7 +85,7 @@ async def _advance_queue(db, store_id: int, finished_pl_id: int):
         await db.commit()
         await _plog(db, next_pl.id, None, "info",
                     f"Auto-started from queue — PL-{str(finished_pl_id).zfill(3)} finished")
-        run_pipeline_job.delay(next_pl.id)
+        asyncio.create_task(_execute_pipeline(next_pl.id))
 
 
 def _make_pl_id(n: int) -> str:

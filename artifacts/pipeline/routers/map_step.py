@@ -7,6 +7,7 @@ mappings via map-confirm, which also triggers the pipeline resume (Upload → Sy
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -168,8 +169,8 @@ async def map_confirm(
 
     # Trigger resume — _resume_pipeline owns the status transition (review → running)
     # DO NOT set pl.status here; _resume_pipeline checks pl.status == "review" on entry
-    from tasks.pipeline_tasks import resume_pipeline_job
-    resume_pipeline_job.delay(pipeline_id)
+    from tasks.pipeline_tasks import _resume_pipeline
+    asyncio.create_task(_resume_pipeline(pipeline_id))
 
     return {"ok": True, "pipeline_id": pipeline_id, "mapped": len(req.mappings)}
 

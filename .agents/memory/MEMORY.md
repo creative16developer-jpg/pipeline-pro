@@ -1,1 +1,2 @@
 - [Map + Enrich pipeline steps](map-enrich-architecture.md) — flow, DB tables, status transitions, Node.js proxy rules, AI prompt override pattern.
+- [Pipeline task dispatch](pipeline-task-dispatch.md) — Celery/Redis not available; use asyncio.create_task() for all background pipeline tasks

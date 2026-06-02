@@ -1,6 +1,6 @@
 """
-Celery tasks for background job processing.
-Each task wraps an async runner using asyncio.run().
+Background job processing tasks.
+Tasks run as asyncio coroutines via asyncio.create_task() — no Celery/Redis required.
 """
 import sys
 from pathlib import Path
@@ -14,7 +14,6 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-from celery_app import celery_app
 
 # ── Sunsky category tree cache ─────────────────────────────────────────────
 # The BFS through the Sunsky tree easily hits Sunsky's per-minute API call
@@ -56,20 +55,6 @@ def _save_cat_cache(entries: dict[str, dict]) -> None:
         )
     except Exception as e:
         print(f"[cat_cache] Could not save: {e}")
-
-
-def _run(coro):
-    return asyncio.run(coro)
-
-
-@celery_app.task(bind=True, name="tasks.run_job")
-def run_job(self, job_id: int):
-    import sys
-    from pathlib import Path
-    _d = str(Path(__file__).parent.parent.resolve())
-    if _d not in sys.path:
-        sys.path.insert(0, _d)
-    _run(_execute_job(job_id))
 
 
 async def _execute_job(job_id: int):
@@ -135,7 +120,7 @@ async def _execute_job(job_id: int):
                         f"({next_job.type.value}) after job #{job.id} completed",
                     )
                     await db.commit()
-                    run_job.delay(next_job.id)
+                    asyncio.create_task(_execute_job(next_job.id))
     finally:
         await celery_engine.dispose()
 

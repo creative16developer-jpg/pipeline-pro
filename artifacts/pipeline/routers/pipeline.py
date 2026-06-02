@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import asyncio
 import math
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -153,8 +154,8 @@ async def create_pipeline(body: PipelineCreateRequest, db: AsyncSession = Depend
     await db.refresh(pl)
 
     if initial_status == "running":
-        from tasks.pipeline_tasks import run_pipeline_job
-        run_pipeline_job.delay(pl.id)
+        from tasks.pipeline_tasks import _execute_pipeline
+        asyncio.create_task(_execute_pipeline(pl.id))
     else:
         from models.models import PipelineLog
         db.add(PipelineLog(
@@ -196,8 +197,8 @@ async def resume_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
     if pl.status != "review":
         raise HTTPException(400, "Pipeline is not in review state")
 
-    from tasks.pipeline_tasks import resume_pipeline_job
-    resume_pipeline_job.delay(pl.id)
+    from tasks.pipeline_tasks import _resume_pipeline
+    asyncio.create_task(_resume_pipeline(pl.id))
 
     return {"message": f"PL-{str(pl_id).zfill(3)} resuming — upload step starting"}
 
@@ -263,8 +264,8 @@ async def retry_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
     await db.refresh(new_pl)
 
     if initial_status == "running":
-        from tasks.pipeline_tasks import run_pipeline_job
-        run_pipeline_job.delay(new_pl.id)
+        from tasks.pipeline_tasks import _execute_pipeline
+        asyncio.create_task(_execute_pipeline(new_pl.id))
 
     return _pl_dict(new_pl)
 

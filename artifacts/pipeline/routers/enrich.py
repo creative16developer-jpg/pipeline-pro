@@ -12,6 +12,7 @@ DELETE /api/stores/{id}/normalisation-dict/{entry_id}
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -179,13 +180,14 @@ async def enrich_confirm(
 
     await db.commit()
 
-    # Dispatch Celery task to continue pipeline (Generate → Review)
-    from tasks.pipeline_tasks import enrich_resume_pipeline_job
+    # Dispatch background task to continue pipeline (Generate → Review)
+    from tasks.pipeline_tasks import _enrich_resume_pipeline
+    from datetime import datetime, timezone
     pl.status = "running"
     pl.current_step = "generate"
-    pl.updated_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+    pl.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    enrich_resume_pipeline_job.delay(pipeline_id)
+    asyncio.create_task(_enrich_resume_pipeline(pipeline_id))
 
     return {"ok": True, "pipeline_id": pipeline_id}
 

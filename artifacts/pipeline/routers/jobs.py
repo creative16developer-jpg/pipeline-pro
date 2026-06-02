@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import asyncio
 import math
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,9 +74,8 @@ async def create_job(body: JobCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(job)
 
-    # Dispatch to Celery worker
-    from tasks.job_tasks import run_job
-    run_job.delay(job.id)
+    from tasks.job_tasks import _execute_job
+    asyncio.create_task(_execute_job(job.id))
 
     return JobOut.model_validate(job)
 
