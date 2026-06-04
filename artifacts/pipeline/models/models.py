@@ -264,13 +264,17 @@ class SunskyCategoryMapping(Base):
     __tablename__ = "sunsky_category_mappings"
     __table_args__ = (UniqueConstraint("store_id", "sunsky_cat"),)
 
-    id           = Column(Integer, primary_key=True, index=True)
-    store_id     = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
-    sunsky_cat   = Column(Text, nullable=False)
-    woo_cat_id   = Column(Integer, nullable=True)
-    woo_cat_name = Column(Text, nullable=True)
-    created_at   = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at   = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    id                 = Column(Integer, primary_key=True, index=True)
+    store_id           = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    sunsky_cat         = Column(Text, nullable=False)
+    woo_cat_id         = Column(Integer, nullable=True)   # backward-compat: primary cat id
+    woo_cat_name       = Column(Text, nullable=True)      # backward-compat: primary cat name
+    woo_cats_json      = Column(Text, nullable=True)      # JSON: [{id, name}, ...]
+    primary_woo_cat_id = Column(Integer, nullable=True)
+    times_used         = Column(Integer, nullable=False, default=0)
+    last_used_at       = Column(DateTime(timezone=True), nullable=True)
+    created_at         = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at         = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     store = relationship("Store")
 

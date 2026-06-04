@@ -777,8 +777,13 @@ async def _run_upload(db, job):
                             SunskyCategoryMapping.sunsky_cat == sunsky_cat,
                         )
                     )).scalar_one_or_none()
-                    if mapping and mapping.woo_cat_id:
-                        woo_cat_ids = [mapping.woo_cat_id]
+                    if mapping:
+                        if mapping.woo_cats_json:
+                            import json as _json_cat
+                            _woo_cats = _json_cat.loads(mapping.woo_cats_json)
+                            woo_cat_ids = [c["id"] for c in _woo_cats if c.get("id")]
+                        elif mapping.woo_cat_id:
+                            woo_cat_ids = [mapping.woo_cat_id]
             except Exception:
                 pass
 
@@ -1130,12 +1135,19 @@ async def _run_upload(db, job):
                                 _SCM2.sunsky_cat == _p2_sunsky_cat,
                             )
                         )).scalar_one_or_none()
-                        if _mapping2 and _mapping2.woo_cat_id:
-                            cat_woo_ids = [_mapping2.woo_cat_id]
-                            cat_names   = [_mapping2.woo_cat_name or _p2_sunsky_cat]
-                            await _log(db, job.id, LogLevel.info,
-                                       f"  {prod.sku}: using SunskyCategoryMapping "
-                                       f"{_p2_sunsky_cat!r} → woo_id={_mapping2.woo_cat_id}")
+                        if _mapping2:
+                            if _mapping2.woo_cats_json:
+                                import json as _json_m2
+                                _m2_cats = _json_m2.loads(_mapping2.woo_cats_json)
+                                cat_woo_ids = [c["id"] for c in _m2_cats if c.get("id")]
+                                cat_names   = [c.get("name", "") for c in _m2_cats if c.get("id")]
+                            elif _mapping2.woo_cat_id:
+                                cat_woo_ids = [_mapping2.woo_cat_id]
+                                cat_names   = [_mapping2.woo_cat_name or _p2_sunsky_cat]
+                            if cat_woo_ids:
+                                await _log(db, job.id, LogLevel.info,
+                                           f"  {prod.sku}: SunskyCategoryMapping "
+                                           f"{_p2_sunsky_cat!r} → {cat_woo_ids}")
                 except Exception as _scm_e:
                     await _log(db, job.id, LogLevel.warn,
                                f"  {prod.sku}: SunskyCategoryMapping lookup failed — {_scm_e}")

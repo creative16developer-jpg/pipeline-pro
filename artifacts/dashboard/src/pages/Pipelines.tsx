@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useLocation } from "wouter";
 import {
   Plus, ChevronDown, ChevronRight, CheckCircle2, XCircle,
@@ -184,6 +184,144 @@ function LogPanel({ plId, isLive }: { plId: number; isLive: boolean }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Category Map Panel — types and helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface WooOpt { id: number; name: string; parent_id: number }
+interface WooCatEntry { id: number; name: string }
+interface CategoryRow {
+  sunsky_cat: string;
+  product_count: number;
+  woo_cats: WooCatEntry[];
+  primary_woo_cat_id: number | null;
+  is_new: boolean;
+  times_used: number;
+}
+interface RowSel {
+  woo_cats: WooCatEntry[];
+  primary_id: number | null;
+  save_as_rule: boolean;
+}
+interface TreeNode { opt: WooOpt; children: TreeNode[]; depth: number }
+
+function buildCatTree(opts: WooOpt[]): TreeNode[] {
+  const byId = new Map<number, TreeNode>();
+  for (const o of opts) byId.set(o.id, { opt: o, children: [], depth: 0 });
+  const roots: TreeNode[] = [];
+  for (const node of byId.values()) {
+    const pid = node.opt.parent_id;
+    if (pid && byId.has(pid)) byId.get(pid)!.children.push(node);
+    else roots.push(node);
+  }
+  function sortAndDepth(nodes: TreeNode[], d: number) {
+    nodes.sort((a, b) => a.opt.name.localeCompare(b.opt.name));
+    for (const n of nodes) { n.depth = d; sortAndDepth(n.children, d + 1); }
+  }
+  sortAndDepth(roots, 0);
+  return roots;
+}
+
+// WooCommerce category checkbox tree widget
+function WooCatTree({ tree, selected, primaryId, onToggle, onSetPrimary }: {
+  tree: TreeNode[];
+  selected: WooCatEntry[];
+  primaryId: number | null;
+  onToggle: (opt: WooOpt) => void;
+  onSetPrimary: (id: number) => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const selectedIds = useMemo(() => new Set(selected.map(c => c.id)), [selected]);
+
+  function toggleExpand(id: number) {
+    setExpanded(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  }
+
+  function renderNode(node: TreeNode): React.ReactNode {
+    const isChecked = selectedIds.has(node.opt.id);
+    const isPrimary = node.opt.id === primaryId;
+    const hasKids = node.children.length > 0;
+    const isOpen = expanded.has(node.opt.id);
+    return (
+      <div key={node.opt.id}>
+        <div
+          className="flex items-center gap-1.5 py-1 px-1 rounded hover:bg-secondary/50 group"
+          style={{ paddingLeft: `${node.depth * 14 + 4}px` }}
+        >
+          {hasKids ? (
+            <button onClick={() => toggleExpand(node.opt.id)} className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground shrink-0">
+              {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            </button>
+          ) : <span className="w-3.5 shrink-0" />}
+          <input
+            type="checkbox"
+            checked={isChecked}
+            onChange={() => onToggle(node.opt)}
+            className="w-3.5 h-3.5 rounded shrink-0 cursor-pointer accent-primary"
+          />
+          <span
+            className={cn("text-xs cursor-pointer flex-1 min-w-0 truncate",
+              isChecked ? (isPrimary ? "text-emerald-400 font-medium" : "text-blue-400") : "text-foreground"
+            )}
+            onClick={() => onToggle(node.opt)}
+          >
+            {node.opt.name}
+          </span>
+          {isChecked && !isPrimary && (
+            <button
+              onClick={() => onSetPrimary(node.opt.id)}
+              className="text-[10px] text-muted-foreground hover:text-emerald-400 opacity-0 group-hover:opacity-100 px-1 shrink-0 transition-opacity"
+            >
+              Set primary
+            </button>
+          )}
+          {isChecked && isPrimary && (
+            <span className="text-[10px] text-emerald-400 shrink-0 px-1">Primary</span>
+          )}
+        </div>
+        {hasKids && isOpen && <div>{node.children.map(renderNode)}</div>}
+      </div>
+    );
+  }
+
+  if (tree.length === 0) return (
+    <div className="p-3 text-xs text-muted-foreground italic">No WooCommerce categories synced. Sync from the Stores page first.</div>
+  );
+  return (
+    <div className="max-h-52 overflow-y-auto bg-black/20 rounded-lg border border-border/30 p-1">
+      {tree.map(renderNode)}
+    </div>
+  );
+}
+
+// Result summary — shows the final WooCommerce assignment in plain language
+function CatResultSummary({ rowSel, wooById }: { rowSel: RowSel; wooById: Map<number, WooOpt> }) {
+  if (!rowSel.woo_cats.length) return null;
+
+  function getPath(id: number): string {
+    const parts: string[] = [];
+    let cur = wooById.get(id);
+    while (cur) {
+      parts.unshift(cur.name);
+      cur = cur.parent_id ? wooById.get(cur.parent_id) : undefined;
+    }
+    return parts.join(" › ") || String(id);
+  }
+
+  const primary = rowSel.woo_cats.find(c => c.id === rowSel.primary_id);
+  const others  = rowSel.woo_cats.filter(c => c.id !== rowSel.primary_id);
+  return (
+    <div className="mt-1.5 p-2 bg-secondary/30 rounded-lg border border-border/30 text-xs space-y-0.5">
+      {primary && (
+        <div><span className="text-muted-foreground">Primary: </span><span className="text-emerald-400 font-medium">{getPath(primary.id)}</span></div>
+      )}
+      {others.length > 0 && (
+        <div><span className="text-muted-foreground">Also in: </span><span className="text-blue-400">{others.map(c => getPath(c.id)).join(", ")}</span></div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Category Map Panel (shown inside Review row)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -191,34 +329,79 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
   const { toast } = useToast();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [mappings, setMappings] = useState<Record<string, { woo_cat_id: number | null; woo_cat_name: string }>>({});
+  const [sel, setSel] = useState<Record<string, RowSel>>({});
   const [saving, setSaving] = useState(false);
+  const [openTree, setOpenTree] = useState<string | null>(null);
 
   useEffect(() => {
     fetch(`/api/pipelines/${pl.id}/map-data`)
-      .then((r) => r.ok ? r.json() : Promise.reject())
-      .then((d) => {
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => {
         setData(d);
-        const init: typeof mappings = {};
-        (d.categories ?? []).forEach((c: any) => {
-          init[c.sunsky_cat] = { woo_cat_id: c.woo_cat_id ?? null, woo_cat_name: c.woo_cat_name ?? "" };
+        const init: Record<string, RowSel> = {};
+        (d.categories ?? []).forEach((c: CategoryRow) => {
+          const cats = c.woo_cats ?? [];
+          init[c.sunsky_cat] = {
+            woo_cats: cats,
+            primary_id: c.primary_woo_cat_id ?? cats[0]?.id ?? null,
+            save_as_rule: true,
+          };
         });
-        setMappings(init);
+        setSel(init);
       })
       .catch(() => toast({ title: "Failed to load category data", variant: "destructive" }))
       .finally(() => setLoading(false));
   }, [pl.id]);
 
+  const wooById = useMemo<Map<number, WooOpt>>(() => {
+    const m = new Map<number, WooOpt>();
+    (data?.woo_options ?? []).forEach((o: WooOpt) => m.set(o.id, o));
+    return m;
+  }, [data?.woo_options]);
+
+  const wooTree = useMemo(() => buildCatTree(data?.woo_options ?? []), [data?.woo_options]);
+
+  const cats: CategoryRow[] = data?.categories ?? [];
+  const isStateA = cats.length > 0 && cats.every(c => !c.is_new);
+  const newCats  = cats.filter(c => c.is_new);
+  const knownCats = cats.filter(c => !c.is_new);
+
+  function toggleWooCat(sunsky_cat: string, opt: WooOpt) {
+    setSel(prev => {
+      const row = prev[sunsky_cat] ?? { woo_cats: [], primary_id: null, save_as_rule: true };
+      const already = row.woo_cats.some(c => c.id === opt.id);
+      let woo_cats: WooCatEntry[];
+      let primary_id = row.primary_id;
+      if (already) {
+        woo_cats = row.woo_cats.filter(c => c.id !== opt.id);
+        if (primary_id === opt.id) primary_id = woo_cats[0]?.id ?? null;
+      } else {
+        woo_cats = [...row.woo_cats, { id: opt.id, name: opt.name }];
+        if (!primary_id) primary_id = opt.id;
+      }
+      return { ...prev, [sunsky_cat]: { ...row, woo_cats, primary_id } };
+    });
+  }
+
+  function setPrimary(sunsky_cat: string, id: number) {
+    setSel(prev => ({ ...prev, [sunsky_cat]: { ...prev[sunsky_cat], primary_id: id } }));
+  }
+
   const handleConfirmResume = async () => {
     setSaving(true);
     try {
-      const entries = Object.entries(mappings)
-        .filter(([, v]) => v.woo_cat_id)
-        .map(([sunsky_cat, v]) => ({ sunsky_cat, woo_cat_id: v.woo_cat_id, woo_cat_name: v.woo_cat_name || null }));
+      const mappings = Object.entries(sel)
+        .filter(([, v]) => v.woo_cats.length > 0)
+        .map(([sunsky_cat, v]) => ({
+          sunsky_cat,
+          woo_cats: v.woo_cats,
+          primary_woo_cat_id: v.primary_id,
+          save_as_rule: v.save_as_rule,
+        }));
       const r = await fetch(`/api/pipelines/${pl.id}/map-confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mappings: entries }),
+        body: JSON.stringify({ mappings }),
       });
       if (!r.ok) throw new Error(await r.text());
       toast({ title: "Category mappings saved — pipeline resumed" });
@@ -236,91 +419,192 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
     </div>
   );
 
-  if (!data || data.categories?.length === 0) return (
-    <div className="p-4 text-sm text-muted-foreground italic">
-      No Sunsky categories found in this batch. Click Resume to continue.
+  if (!data || cats.length === 0) return (
+    <div className="p-4 space-y-3">
+      <p className="text-sm text-muted-foreground italic">No Sunsky categories found in this batch.</p>
+      <button onClick={handleConfirmResume} disabled={saving}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 disabled:opacity-50">
+        {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3 fill-current" />}
+        Resume Pipeline
+      </button>
     </div>
   );
 
   return (
-    <div className="p-4 space-y-3">
-      <div className="flex items-center gap-2 mb-1">
+    <div className="p-4 space-y-4">
+      {/* Header */}
+      <div className="flex items-center gap-2">
         <Tag className="w-4 h-4 text-amber-400" />
         <span className="text-sm font-medium text-amber-400">Category Mapping</span>
-        <span className="text-xs text-muted-foreground">
-          Map Sunsky categories → WooCommerce categories (optional — skip any you don't need)
-        </span>
+        <span className="text-xs text-muted-foreground">{cats.length} Sunsky {cats.length === 1 ? "category" : "categories"}</span>
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-border/40">
-        <table className="w-full text-xs">
-          <thead className="bg-secondary/40">
-            <tr>
-              <th className="px-3 py-2 text-left font-medium text-muted-foreground">Sunsky Category</th>
-              <th className="px-3 py-2 text-left font-medium text-muted-foreground">Products</th>
-              <th className="px-3 py-2 text-left font-medium text-muted-foreground">WooCommerce Category</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(data.categories ?? []).map((cat: any) => {
-              const cur = mappings[cat.sunsky_cat] ?? { woo_cat_id: null, woo_cat_name: "" };
-              return (
-                <tr key={cat.sunsky_cat} className="border-t border-border/30">
-                  <td className="px-3 py-2 font-mono text-foreground">{cat.sunsky_cat}</td>
-                  <td className="px-3 py-2 text-muted-foreground">{cat.product_count}</td>
-                  <td className="px-3 py-2">
-                    {data.woo_options?.length > 0 ? (
-                      <select
-                        value={cur.woo_cat_id ?? ""}
-                        onChange={(e) => {
-                          const opt = data.woo_options.find((o: any) => String(o.id) === e.target.value);
-                          setMappings((prev) => ({
-                            ...prev,
-                            [cat.sunsky_cat]: {
-                              woo_cat_id: opt ? opt.id : null,
-                              woo_cat_name: opt ? opt.name : "",
-                            },
-                          }));
-                        }}
-                        className="w-full bg-secondary border border-border/40 rounded-lg px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50"
-                      >
-                        <option value="">— skip —</option>
-                        {data.woo_options.map((o: any) => (
-                          <option key={o.id} value={o.id}>{o.name}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        placeholder="Category name (optional)"
-                        value={cur.woo_cat_name}
-                        onChange={(e) =>
-                          setMappings((prev) => ({
-                            ...prev,
-                            [cat.sunsky_cat]: { woo_cat_id: null, woo_cat_name: e.target.value },
-                          }))
-                        }
-                        className="w-full bg-secondary border border-border/40 rounded-lg px-2 py-1 text-xs text-foreground focus:outline-none"
-                      />
+      {/* State A — all known, one-click confirm */}
+      {isStateA && (
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-xs text-emerald-400">
+          <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-medium">All {cats.length} {cats.length === 1 ? "category" : "categories"} already mapped</div>
+            <div className="text-emerald-400/70 mt-0.5">Saved rules will be auto-applied. Confirm below to upload.</div>
+          </div>
+        </div>
+      )}
+
+      {/* State B — new categories banner */}
+      {!isStateA && newCats.length > 0 && (
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-400">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <div className="font-medium">{newCats.length} new {newCats.length === 1 ? "category" : "categories"} need mapping</div>
+            {knownCats.length > 0 && (
+              <div className="text-amber-400/70 mt-0.5">{knownCats.length} known {knownCats.length === 1 ? "category" : "categories"} auto-applied from saved rules.</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Known categories — read-only summary */}
+      {knownCats.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+            Auto-mapped ({knownCats.length})
+          </div>
+          {knownCats.map((cat: CategoryRow) => {
+            const rowSel = sel[cat.sunsky_cat];
+            const primary = rowSel?.woo_cats?.find(c => c.id === rowSel.primary_id);
+            const others  = rowSel?.woo_cats?.filter(c => c.id !== rowSel.primary_id) ?? [];
+            return (
+              <div key={cat.sunsky_cat} className="flex items-start gap-2 p-2 rounded-lg bg-secondary/30 border border-border/30 text-xs">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <span className="font-mono text-foreground">{cat.sunsky_cat}</span>
+                  <span className="text-muted-foreground ml-2">({cat.product_count} products)</span>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {primary && (
+                      <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 text-[11px]">
+                        ★ {primary.name}
+                      </span>
                     )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    {others.map(c => (
+                      <span key={c.id} className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/25 text-[11px]">
+                        {c.name}
+                      </span>
+                    ))}
+                    {!rowSel?.woo_cats?.length && (
+                      <span className="text-muted-foreground italic text-[11px]">no mapping</span>
+                    )}
+                  </div>
+                </div>
+                {cat.times_used > 0 && (
+                  <span className="text-[10px] text-muted-foreground shrink-0">used {cat.times_used}×</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      <div className="flex items-center gap-2 pt-1">
+      {/* New categories — interactive checkbox tree */}
+      {newCats.length > 0 && (
+        <div className="space-y-3">
+          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+            Assign WooCommerce categories ({newCats.length} new)
+          </div>
+          {newCats.map((cat: CategoryRow) => {
+            const rowSel = sel[cat.sunsky_cat] ?? { woo_cats: [], primary_id: null, save_as_rule: true };
+            const isOpen = openTree === cat.sunsky_cat;
+            return (
+              <div key={cat.sunsky_cat} className="rounded-xl border border-border/40 overflow-hidden">
+                {/* Row header */}
+                <div className="flex items-center gap-2 px-3 py-2 bg-secondary/30">
+                  <span className="font-mono text-xs text-foreground flex-1 min-w-0 truncate">{cat.sunsky_cat}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">{cat.product_count} products</span>
+                  <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={rowSel.save_as_rule}
+                      onChange={e => setSel(prev => ({ ...prev, [cat.sunsky_cat]: { ...prev[cat.sunsky_cat], save_as_rule: e.target.checked } }))}
+                      className="w-3 h-3 rounded accent-primary"
+                    />
+                    Save as rule
+                  </label>
+                </div>
+
+                {/* Selected category chips */}
+                {rowSel.woo_cats.length > 0 && (
+                  <div className="flex flex-wrap gap-1 px-3 py-2 bg-secondary/10 border-t border-border/20">
+                    {rowSel.woo_cats.map(c => (
+                      <span
+                        key={c.id}
+                        title={c.id === rowSel.primary_id ? "Primary — click another to change" : "Click to set as primary"}
+                        onClick={() => c.id !== rowSel.primary_id && setPrimary(cat.sunsky_cat, c.id)}
+                        className={cn(
+                          "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border cursor-pointer select-none",
+                          c.id === rowSel.primary_id
+                            ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                            : "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                        )}
+                      >
+                        {c.id === rowSel.primary_id && <span className="text-[10px]">★</span>}
+                        {c.name}
+                        <button
+                          onClick={e => { e.stopPropagation(); toggleWooCat(cat.sunsky_cat, { id: c.id, name: c.name, parent_id: 0 }); }}
+                          className="ml-0.5 hover:text-red-400 leading-none"
+                        >×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Result summary */}
+                {rowSel.woo_cats.length > 0 && (
+                  <div className="px-3 pb-2">
+                    <CatResultSummary rowSel={rowSel} wooById={wooById} />
+                  </div>
+                )}
+
+                {/* Tree expand / collapse */}
+                <div className="px-3 pt-1 pb-2">
+                  <button
+                    onClick={() => setOpenTree(isOpen ? null : cat.sunsky_cat)}
+                    className="flex items-center gap-1 text-xs text-primary hover:text-primary/80"
+                  >
+                    {isOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                    {isOpen ? "Close selector" : rowSel.woo_cats.length > 0 ? "Edit selection" : "Select WooCommerce categories"}
+                  </button>
+                  {isOpen && (
+                    <div className="mt-2">
+                      <WooCatTree
+                        tree={wooTree}
+                        selected={rowSel.woo_cats}
+                        primaryId={rowSel.primary_id}
+                        onToggle={opt => toggleWooCat(cat.sunsky_cat, opt)}
+                        onSetPrimary={id => setPrimary(cat.sunsky_cat, id)}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Confirm button */}
+      <div className="flex items-center gap-3 pt-1 border-t border-border/30">
         <button
           onClick={handleConfirmResume}
           disabled={saving}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors disabled:opacity-50"
         >
           {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3 fill-current" />}
           Confirm &amp; Resume
         </button>
-        <span className="text-xs text-muted-foreground">Mappings are saved for future pipeline runs too</span>
+        <span className="text-xs text-muted-foreground">
+          {isStateA
+            ? "All categories already saved — one click to upload"
+            : newCats.filter(c => (sel[c.sunsky_cat]?.woo_cats?.length ?? 0) > 0).length + "/" + newCats.length + " new categories assigned"}
+        </span>
       </div>
     </div>
   );
