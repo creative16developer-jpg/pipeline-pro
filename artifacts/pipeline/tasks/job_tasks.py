@@ -743,13 +743,16 @@ async def _run_upload(db, job):
             await db.execute(select(Product).where(*base_filter).limit(limit))
         ).scalars().all()
 
-    if not products:
+    # Even when Phase 1 has nothing to upload, Phase 2 must still run to
+    # assign categories + attributes to products already in WooCommerce.
+    phase1_skip = not products
+    if phase1_skip:
         await _log(db, job.id, LogLevel.info,
-                   "No products to upload (all already uploaded or none match filter)")
-        return
-
-    job.total_items = len(products)
-    await db.commit()
+                   "No new products to upload — proceeding to Phase 2 "
+                   "(categories + attributes) for already-uploaded products")
+    else:
+        job.total_items = len(products)
+        await db.commit()
 
     created_count = updated_count = skipped_count = failed_count = 0
 
@@ -910,8 +913,23 @@ async def _run_upload(db, job):
     #   • product.raw_data  (stored during fetch/process steps)
     #   • disk category cache (built by sync jobs, reused here)
     # ═══════════════════════════════════════════════════════════════════════
-    # Only process products that were successfully uploaded this run
-    uploaded_products = [p for p in products if p.woo_product_id]
+    # Query ALL products in this batch that have a WooCommerce ID — including
+    # ones already uploaded in previous runs (which were excluded from the
+    # Phase 1 query by woo_product_id.is_(None)).  This ensures categories
+    # and attributes are always applied, even on re-runs.
+    if fetch_job_id:
+        uploaded_products = (
+            await db.execute(
+                select(Product).where(
+                    Product.fetch_job_id == fetch_job_id,
+                    Product.woo_product_id.is_not(None),
+                )
+            )
+        ).scalars().all()
+    else:
+        # No fetch_job_id: fall back to in-memory products that got woo_product_id set
+        uploaded_products = [p for p in products if p.woo_product_id]
+
     if not uploaded_products:
         await _log(db, job.id, LogLevel.info,
                    "  Phase 2: no products with WooCommerce IDs — skipping category/attribute assignment")
