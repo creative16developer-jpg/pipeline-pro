@@ -1978,27 +1978,76 @@ async def _run_sync(db, job):
                         })
                         attrs_synced += 1
 
-            # Always push to WooCommerce — even an empty list clears any
-            # previously-set unrelated attributes (strict Sunsky-only rule).
+            # ── Enrich attrs (confirmed by user in Attribute Review) ──
+            # Applied last so user-confirmed values take priority over Sunsky raw spec.
+            # Query across ALL pipelines — enrich attrs may have been confirmed in a
+            # previous pipeline run.
+            seen_attr_ids_sync: set[int] = {a["id"] for a in woo_attrs}
+            try:
+                from models.models import ProductEnrichAttr as _SPEA
+                from sqlalchemy import select as _ssel_ea, desc as _sdesc_ea
+                _s_enrich = (await db.execute(
+                    _ssel_ea(_SPEA).where(
+                        _SPEA.product_id == prod.id,
+                        _SPEA.confirmed == True,  # noqa: E712
+                    ).order_by(_sdesc_ea(_SPEA.id))
+                )).scalars().all()
+                _s_enrich_added = 0
+                _seen_names_s: set[str] = {a["name"].lower() for a in woo_attrs}
+                for _sea in _s_enrich:
+                    _s_aname = (_sea.attribute or "").strip()
+                    if not _s_aname:
+                        continue
+                    _s_woo_name = (_sea.woo_attr_name or "").strip() or _s_aname
+                    if _s_woo_name.lower() in _seen_names_s:
+                        continue
+                    _s_raw = (_sea.raw_value or "").strip()
+                    _s_val = (_sea.normalised_value or "").strip() or _s_raw
+                    if not _s_val:
+                        continue
+                    _s_attr = await get_or_create_attr(_s_woo_name)
+                    if _s_attr and _s_attr["id"] not in seen_attr_ids_sync:
+                        seen_attr_ids_sync.add(_s_attr["id"])
+                        _seen_names_s.add(_s_woo_name.lower())
+                        await get_or_create_term(_s_attr["id"], _s_val)
+                        woo_attrs.append({
+                            "id": _s_attr["id"],
+                            "name": _s_attr["name"],
+                            "options": [_s_val],
+                            "visible": True,
+                            "variation": False,
+                        })
+                        _s_enrich_added += 1
+                if _s_enrich_added:
+                    await _log(db, job.id, LogLevel.info,
+                               f"  + {prod.sku}: {_s_enrich_added} enrich attr(s) added from review")
+            except Exception as _sea_e:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  {prod.sku}: enrich attrs error in sync — {_sea_e}")
+
+            # Push to WooCommerce only if we have something to set.
+            # Never send an empty list — that would clear user-confirmed attrs.
             if prod.woo_product_id:
-                try:
-                    await woo_client.set_product_attributes(store, prod.woo_product_id, woo_attrs)
-                    job.processed_items = (job.processed_items or 0) + 1
-                    await db.commit()
-                    if woo_attrs:
+                if woo_attrs:
+                    try:
+                        await woo_client.set_product_attributes(store, prod.woo_product_id, woo_attrs)
+                        job.processed_items = (job.processed_items or 0) + 1
+                        await db.commit()
                         attr_names = ", ".join(a["name"] for a in woo_attrs)
                         await _log(db, job.id, LogLevel.info,
                                    f"  ✓ {prod.sku} (woo #{prod.woo_product_id}) "
                                    f"→ {len(woo_attrs)} attribute(s): {attr_names}")
                         products_updated += 1
-                    else:
+                    except Exception as e:
                         await _log(db, job.id, LogLevel.warn,
-                                   f"  ✗ {prod.sku} (woo #{prod.woo_product_id}): "
-                                   f"no Sunsky spec data — attributes cleared")
-                except Exception as e:
+                                   f"  Failed to set attributes on {prod.sku} "
+                                   f"(woo #{prod.woo_product_id}): {e}")
+                else:
+                    job.processed_items = (job.processed_items or 0) + 1
+                    await db.commit()
                     await _log(db, job.id, LogLevel.warn,
-                               f"  Failed to set attributes on {prod.sku} "
-                               f"(woo #{prod.woo_product_id}): {e}")
+                               f"  ✗ {prod.sku} (woo #{prod.woo_product_id}): "
+                               f"no spec data or confirmed attrs — skipping (existing attrs preserved)")
             else:
                 await _log(db, job.id, LogLevel.warn,
                            f"  {prod.sku}: not in WooCommerce yet — skipped")
