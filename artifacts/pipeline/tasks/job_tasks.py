@@ -1128,50 +1128,12 @@ async def _run_upload(db, job):
                     cat_name_direct = _v.strip()
                     break
 
-            # Primary: resolve via disk cache → full hierarchy root → leaf
             cat_woo_ids: list[int] = []
             cat_names:   list[str] = []
-            if sunsky_cat_id:
-                cat_woo_ids, cat_names = await _p2_collect_hierarchy(sunsky_cat_id)
 
-            # Fallback 1: raw_data has a plain category name field
-            if not cat_woo_ids and cat_name_direct:
-                woo_cat_id = p2_cat_by_name.get(cat_name_direct.lower())
-                if not woo_cat_id:
-                    try:
-                        resp = await woo_client.create_woo_category(
-                            store, cat_name_direct, 0
-                        )
-                        woo_cat_id = resp["id"]
-                        p2_cat_by_name[cat_name_direct.lower()] = woo_cat_id
-                        await _log(db, job.id, LogLevel.info,
-                                   f"  Created WooCommerce category (from catName field): "
-                                   f"{cat_name_direct!r} → #{woo_cat_id}")
-                    except Exception as _ce:
-                        await _log(db, job.id, LogLevel.warn,
-                                   f"  Cannot create fallback category {cat_name_direct!r}: {_ce}")
-                if woo_cat_id:
-                    cat_woo_ids = [woo_cat_id]
-                    cat_names   = [cat_name_direct]
-
-            # Manual product-level override — takes priority over all fallbacks
-            if not cat_woo_ids and getattr(prod, "cat_source", None) == "manual" and prod.manual_woo_cats_json:
-                try:
-                    import json as _json_manual2
-                    _manual2 = _json_manual2.loads(prod.manual_woo_cats_json)
-                    cat_woo_ids = [c["id"] for c in _manual2 if c.get("id")]
-                    cat_names   = [c.get("name", "") for c in _manual2 if c.get("id")]
-                    if cat_woo_ids:
-                        await _log(db, job.id, LogLevel.info,
-                                   f"  {prod.sku}: manual category override → {cat_woo_ids}")
-                except Exception:
-                    pass
-
-            # Fallback 2: persistent SunskyCategoryMapping set via Map panel
-            # This is the user's manual mapping — highest-quality fallback.
-            # Try all possible Sunsky identifiers so name-saved vs ID-saved mappings
-            # both match regardless of which field raw_data carries.
-            if not cat_woo_ids and job.store_id:
+            # ── Priority 1: SunskyCategoryMapping (user's explicit manual mapping) ──
+            # This always wins — checked before any automatic Sunsky tree lookup.
+            if job.store_id:
                 try:
                     from models.models import SunskyCategoryMapping as _SCM2
                     from sqlalchemy import select as _sel_scm
@@ -1225,6 +1187,24 @@ async def _run_upload(db, job):
                 except Exception as _scm_e:
                     await _log(db, job.id, LogLevel.warn,
                                f"  {prod.sku}: SunskyCategoryMapping lookup failed — {_scm_e}")
+
+            # ── Priority 2 (fallback): Sunsky disk cache → full category hierarchy ──
+            if not cat_woo_ids and sunsky_cat_id:
+                cat_woo_ids, cat_names = await _p2_collect_hierarchy(sunsky_cat_id)
+
+            # ── Priority 3 (fallback): plain catName field in raw_data ──────────
+            if not cat_woo_ids and cat_name_direct:
+                woo_cat_id = p2_cat_by_name.get(cat_name_direct.lower())
+                if not woo_cat_id:
+                    try:
+                        resp = await woo_client.create_woo_category(store, cat_name_direct, 0)
+                        woo_cat_id = resp["id"]
+                        p2_cat_by_name[cat_name_direct.lower()] = woo_cat_id
+                    except Exception:
+                        pass
+                if woo_cat_id:
+                    cat_woo_ids = [woo_cat_id]
+                    cat_names   = [cat_name_direct]
 
             # Set the full category hierarchy on the product.
             # IMPORTANT: only call when we have IDs — passing [] would clear the
@@ -1805,8 +1785,8 @@ async def _run_sync(db, job):
 
             # ── 5. Assign WooCommerce categories ──────────────────────────────
             # Priority:
-            #   1. Sunsky BFS tree result (sunsky_to_woo_cat)
-            #   2. SunskyCategoryMapping (user's manual mapping in Settings)
+            #   1. SunskyCategoryMapping (user's explicit mapping — always wins)
+            #   2. Sunsky BFS tree result (sunsky_to_woo_cat — automatic fallback)
             #   3. Skip — never clear if no mapping found (preserves any existing category)
             await _log(db, job.id, LogLevel.info, "  Assigning categories to products in WooCommerce…")
             cat_ok = cat_miss = 0
@@ -1819,15 +1799,10 @@ async def _run_sync(db, job):
                 raw_p = prod.raw_data or {}
                 sunsky_cat_id = _get_sunsky_cat_id(prod)
 
-                # Priority 1: Sunsky BFS result
+                # Priority 1: SunskyCategoryMapping — user's explicit mapping always wins
                 woo_cat_ids: list[int] = []
                 woo_cat_source = ""
-                if sunsky_cat_id and sunsky_cat_id in sunsky_to_woo_cat:
-                    woo_cat_ids = [sunsky_to_woo_cat[sunsky_cat_id]]
-                    woo_cat_source = f"Sunsky BFS ({sunsky_cat_id})"
-
-                # Priority 2: SunskyCategoryMapping — try all candidate keys
-                if not woo_cat_ids and store_id:
+                if store_id:
                     try:
                         from models.models import SunskyCategoryMapping as _SSCM
                         from sqlalchemy import select as _ssel_scm
@@ -1872,6 +1847,11 @@ async def _run_sync(db, job):
                     except Exception as _sme:
                         await _log(db, job.id, LogLevel.warn,
                                    f"  {prod.sku}: SunskyCategoryMapping lookup failed — {_sme}")
+
+                # Priority 2 (fallback): Sunsky BFS tree result
+                if not woo_cat_ids and sunsky_cat_id and sunsky_cat_id in sunsky_to_woo_cat:
+                    woo_cat_ids = [sunsky_to_woo_cat[sunsky_cat_id]]
+                    woo_cat_source = f"Sunsky BFS ({sunsky_cat_id})"
 
                 if woo_cat_ids:
                     try:
