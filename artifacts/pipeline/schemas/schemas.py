@@ -97,6 +97,10 @@ class ProductOut(BaseModel):
     error_message: Optional[str] = None
     raw_data: Optional[Any] = None
     fetch_job_id: Optional[int] = None
+    manual_woo_cats_json: Optional[str] = None
+    manual_primary_woo_cat_id: Optional[int] = None
+    cat_source: Optional[str] = "auto"
+    store_id: Optional[int] = None   # resolved from fetch_job; not a DB column
     created_at: datetime
     updated_at: datetime
 

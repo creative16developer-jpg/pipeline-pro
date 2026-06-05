@@ -1,9 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useProducts, useProduct } from "@/hooks/use-products";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Modal } from "@/components/Modal";
-import { Search, Package, Image as ImageIcon, ExternalLink, Filter, Sparkles, Database } from "lucide-react";
+import {
+  Search, Package, Image as ImageIcon, ExternalLink, Filter,
+  Sparkles, Database, Tag, CheckCircle2, X, ChevronDown, ChevronRight,
+  Loader2, AlertTriangle, Save
+} from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 
 // ── Source badge helper ────────────────────────────────────────────────────────
 function SourceBadge({ source }: { source?: string }) {
@@ -61,7 +66,6 @@ function FieldRow({
         <SourceBadge source={source} />
       </div>
       <div className="p-3 space-y-2">
-        {/* Generated / AI value */}
         {hasValue ? (
           <div>
             {isDifferent && isAI && (
@@ -84,7 +88,6 @@ function FieldRow({
         ) : (
           <p className="text-xs text-muted-foreground/50 italic">Not generated</p>
         )}
-        {/* Sunsky original — only shown when different from generated */}
         {isDifferent && hasSunsky && (
           <div className="pt-2 border-t border-border/30">
             <p className="text-[10px] text-orange-400 mb-1 font-medium uppercase tracking-wide flex items-center gap-1">
@@ -97,6 +100,86 @@ function FieldRow({
     </div>
   );
 }
+
+// ── Mini WooCatTree for the Mapping tab ──────────────────────────────────────
+interface WooOpt { id: number; name: string; parent_id: number }
+interface WooCatEntry { id: number; name: string }
+interface TreeNode { opt: WooOpt; children: TreeNode[]; depth: number }
+
+function buildTree(opts: WooOpt[]): TreeNode[] {
+  const byId = new Map<number, TreeNode>();
+  for (const o of opts) byId.set(o.id, { opt: o, children: [], depth: 0 });
+  const roots: TreeNode[] = [];
+  for (const node of byId.values()) {
+    const pid = node.opt.parent_id;
+    if (pid && byId.has(pid)) byId.get(pid)!.children.push(node);
+    else roots.push(node);
+  }
+  function sd(nodes: TreeNode[], d: number) {
+    nodes.sort((a, b) => a.opt.name.localeCompare(b.opt.name));
+    for (const n of nodes) { n.depth = d; sd(n.children, d + 1); }
+  }
+  sd(roots, 0);
+  return roots;
+}
+
+function WooCatTree({ tree, selected, primaryId, onToggle, onSetPrimary }: {
+  tree: TreeNode[];
+  selected: WooCatEntry[];
+  primaryId: number | null;
+  onToggle: (opt: WooOpt) => void;
+  onSetPrimary: (id: number) => void;
+}) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const selIds = useMemo(() => new Set(selected.map(c => c.id)), [selected]);
+
+  function renderNode(node: TreeNode): React.ReactNode {
+    const checked = selIds.has(node.opt.id);
+    const isPrimary = node.opt.id === primaryId;
+    const hasKids = node.children.length > 0;
+    const isOpen = expanded.has(node.opt.id);
+    return (
+      <div key={node.opt.id}>
+        <div
+          className="flex items-center gap-1.5 py-0.5 px-1 rounded hover:bg-secondary/50 group"
+          style={{ paddingLeft: `${node.depth * 14 + 4}px` }}
+        >
+          {hasKids
+            ? <button onClick={() => setExpanded(p => { const s = new Set(p); s.has(node.opt.id) ? s.delete(node.opt.id) : s.add(node.opt.id); return s; })} className="w-3.5 h-3.5 shrink-0 text-muted-foreground">
+                {isOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              </button>
+            : <span className="w-3.5 shrink-0" />
+          }
+          <input type="checkbox" checked={checked} onChange={() => onToggle(node.opt)} className="w-3.5 h-3.5 rounded shrink-0 cursor-pointer accent-primary" />
+          <span
+            onClick={() => onToggle(node.opt)}
+            className={cn("text-xs cursor-pointer flex-1 min-w-0 truncate",
+              checked ? (isPrimary ? "text-emerald-400 font-medium" : "text-blue-400") : "text-foreground"
+            )}
+          >
+            {node.opt.name}
+          </span>
+          {checked && !isPrimary && (
+            <button onClick={() => onSetPrimary(node.opt.id)} className="text-[10px] text-muted-foreground hover:text-emerald-400 opacity-0 group-hover:opacity-100 px-1 shrink-0">Set primary</button>
+          )}
+          {checked && isPrimary && <span className="text-[10px] text-emerald-400 shrink-0 px-1">Primary</span>}
+        </div>
+        {hasKids && isOpen && <div>{node.children.map(renderNode)}</div>}
+      </div>
+    );
+  }
+
+  if (!tree.length) return <div className="p-3 text-xs text-muted-foreground italic">No WooCommerce categories — sync from Stores page first.</div>;
+  return (
+    <div className="max-h-52 overflow-y-auto bg-black/20 rounded-lg border border-border/30 p-1">
+      {tree.map(renderNode)}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Products list page
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function Products() {
   const [page, setPage] = useState(1);
@@ -184,7 +267,6 @@ export default function Products() {
                       <div className="font-medium text-foreground max-w-xs truncate">{product.name}</div>
                       <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
                         <span>Sunsky ID: {(product as any).sunskyId}</span>
-                        {/* Show AI badge if any field was AI-generated */}
                         {(product as any).contentSource &&
                           Object.values((product as any).contentSource as Record<string, string>).some(
                             (s) => s?.startsWith("ai:")
@@ -193,6 +275,11 @@ export default function Products() {
                               <Sparkles className="w-2.5 h-2.5" /> AI
                             </span>
                           )}
+                        {(product as any).catSource === "manual" && (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/20">
+                            <Tag className="w-2.5 h-2.5" /> Manual Cat
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="p-4 text-sm">{(product as any).categoryId || '—'}</td>
@@ -252,13 +339,106 @@ export default function Products() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Product Detail Modal — with Mapping tab
+// ─────────────────────────────────────────────────────────────────────────────
+
 function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () => void }) {
-  const { data: product, isLoading } = useProduct(id as number);
-  const [tab, setTab] = useState<"content" | "raw">("content");
+  const { data: product, isLoading, refetch } = useProduct(id as number) as any;
+  const [tab, setTab] = useState<"content" | "raw" | "mapping">("content");
+
+  // Mapping tab state
+  const [wooOpts, setWooOpts] = useState<WooOpt[]>([]);
+  const [wooLoading, setWooLoading] = useState(false);
+  const [editCats, setEditCats] = useState<WooCatEntry[]>([]);
+  const [editPrimary, setEditPrimary] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const { toast } = useToast();
+
+  const wooTree = useMemo(() => buildTree(wooOpts), [wooOpts]);
 
   const src = (product as any)?.contentSource as Record<string, string> | null | undefined;
   const raw = (product as any)?.rawData as Record<string, any> | null | undefined;
   const sunskyDesc = raw?.description || raw?.desc || "";
+  const storeId = (product as any)?.storeId as number | undefined;
+  const catSource = (product as any)?.catSource as string | undefined;
+  const manualCatsJson = (product as any)?.manualWooCatsJson as string | null;
+
+  // When switching to mapping tab, load WooCommerce categories + init edit state
+  useEffect(() => {
+    if (tab !== "mapping" || !storeId) return;
+    setWooLoading(true);
+    fetch(`/api/stores/${storeId}/categories`)
+      .then(r => r.ok ? r.json() : [])
+      .then((cats: any[]) => {
+        const list = Array.isArray(cats) ? cats : (cats.categories ?? []);
+        setWooOpts(list.map((c: any) => ({ id: c.woo_id ?? c.id, name: c.name, parent_id: c.parent_id ?? 0 })));
+      })
+      .catch(() => {})
+      .finally(() => setWooLoading(false));
+  }, [tab, storeId]);
+
+  // Init edit state from product's manual override (or empty)
+  useEffect(() => {
+    if (tab !== "mapping") return;
+    if (manualCatsJson) {
+      try {
+        const cats = JSON.parse(manualCatsJson);
+        setEditCats(cats);
+        setEditPrimary((product as any)?.manualPrimaryWooCatId ?? cats[0]?.id ?? null);
+        return;
+      } catch { /* fall through */ }
+    }
+    setEditCats([]);
+    setEditPrimary(null);
+  }, [tab, manualCatsJson, product?.id]);
+
+  const handleSave = async () => {
+    if (!id) return;
+    setSaving(true);
+    try {
+      const r = await fetch(`/api/products/${id}/categories`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ woo_cats: editCats, primary_woo_cat_id: editPrimary }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Category override saved", description: "This product will use these categories during upload." });
+      refetch?.();
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleClearOverride = async () => {
+    if (!id) return;
+    setClearing(true);
+    try {
+      const r = await fetch(`/api/products/${id}/categories/override`, { method: "DELETE" });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Override cleared", description: "Product will use auto-mapping on next upload." });
+      setEditCats([]);
+      setEditPrimary(null);
+      refetch?.();
+    } catch (e: any) {
+      toast({ title: "Failed", description: e.message, variant: "destructive" });
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const toggleWoo = (opt: WooOpt) => {
+    setEditCats(prev => {
+      const has = prev.some(c => c.id === opt.id);
+      const next = has ? prev.filter(c => c.id !== opt.id) : [...prev, { id: opt.id, name: opt.name }];
+      if (has && editPrimary === opt.id) setEditPrimary(next[0]?.id ?? null);
+      else if (!has && !editPrimary) setEditPrimary(opt.id);
+      return next;
+    });
+  };
 
   return (
     <Modal isOpen={!!id} onClose={onClose} title={(product as any)?.name || "Product Details"} className="max-w-3xl">
@@ -300,25 +480,25 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
 
           {/* Tabs */}
           <div className="flex gap-1 p-1 bg-secondary/40 rounded-xl w-fit">
-            {(["content", "raw"] as const).map((t) => (
+            {(["content", "raw", "mapping"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
                 className={cn(
-                  "px-4 py-1.5 rounded-lg text-sm font-medium transition-all capitalize",
+                  "flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-sm font-medium transition-all capitalize",
                   tab === t
                     ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                {t === "content" ? "Generated Content" : "Raw Data"}
+                {t === "mapping" && <Tag className="w-3.5 h-3.5" />}
+                {t === "content" ? "Generated Content" : t === "raw" ? "Raw Data" : "Mapping"}
               </button>
             ))}
           </div>
 
           {tab === "content" ? (
             <div className="space-y-3">
-              {/* Legend */}
               <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
                 <span className="flex items-center gap-1">
                   <Sparkles className="w-3 h-3 text-violet-400" />
@@ -332,68 +512,146 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
                 </span>
               </div>
 
-              <FieldRow
-                label="Title"
-                value={(product as any).name}
-                source={src?.title || "sunsky"}
-                sunskyValue={(product as any).name}
-              />
-              <FieldRow
-                label="Description"
-                value={(product as any).description}
-                source={src?.description || "sunsky"}
-                sunskyValue={sunskyDesc}
-              />
-              <FieldRow
-                label="Short Description"
-                value={(product as any).shortDescription}
-                source={src?.short_description || "sunsky"}
-                sunskyValue={sunskyDesc ? sunskyDesc.split(" ").slice(0, 30).join(" ") + "…" : undefined}
-              />
+              <FieldRow label="Title" value={(product as any).name} source={src?.title || "sunsky"} sunskyValue={(product as any).name} />
+              <FieldRow label="Description" value={(product as any).description} source={src?.description || "sunsky"} sunskyValue={sunskyDesc} />
+              <FieldRow label="Short Description" value={(product as any).shortDescription} source={src?.short_description || "sunsky"} sunskyValue={sunskyDesc ? sunskyDesc.split(" ").slice(0, 30).join(" ") + "…" : undefined} />
               <div className="grid grid-cols-2 gap-3">
-                <FieldRow
-                  label="Slug"
-                  value={(product as any).slug}
-                  source={src?.slug}
-                  mono
-                />
-                <FieldRow
-                  label="Tags"
-                  value={(product as any).tags}
-                  source={src?.tags}
-                />
+                <FieldRow label="Slug" value={(product as any).slug} source={src?.slug} mono />
+                <FieldRow label="Tags" value={(product as any).tags} source={src?.tags} />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <FieldRow
-                  label="Meta Title"
-                  value={(product as any).metaTitle}
-                  source={src?.meta_title}
-                />
-                <FieldRow
-                  label="Meta Description"
-                  value={(product as any).metaDescription}
-                  source={src?.meta_description}
-                />
+                <FieldRow label="Meta Title" value={(product as any).metaTitle} source={src?.meta_title} />
+                <FieldRow label="Meta Description" value={(product as any).metaDescription} source={src?.meta_description} />
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <FieldRow
-                  label="Image Alt"
-                  value={(product as any).imageAlt}
-                  source={src?.image_alt}
-                />
-                <FieldRow
-                  label="Image Names"
-                  value={(product as any).imageNames}
-                  source={src?.image_names}
-                  mono
-                />
+                <FieldRow label="Image Alt" value={(product as any).imageAlt} source={src?.image_alt} />
+                <FieldRow label="Image Names" value={(product as any).imageNames} source={src?.image_names} mono />
               </div>
             </div>
-          ) : (
+          ) : tab === "raw" ? (
             <div className="bg-black/40 border border-border rounded-xl p-4 overflow-x-auto max-h-96">
               <pre className="text-xs font-mono text-muted-foreground">
                 {JSON.stringify(raw || {}, null, 2)}
               </pre>
+            </div>
+          ) : (
+            /* ── Mapping tab ── */
+            <div className="space-y-4">
+              {/* Source badge */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Category source:</span>
+                  {catSource === "manual" ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                      <Tag className="w-3 h-3" /> Manual override
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full bg-secondary text-muted-foreground border border-border/40">
+                      <CheckCircle2 className="w-3 h-3" /> Auto (batch rules)
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Sunsky category */}
+              {raw && (
+                <div className="flex items-center gap-2 p-2.5 rounded-lg bg-secondary/30 border border-border/30 text-xs">
+                  <span className="text-muted-foreground shrink-0">Sunsky category:</span>
+                  <span className="font-mono text-foreground">
+                    {raw.catName || raw.categoryName || raw.categoryId || raw.catId || "—"}
+                  </span>
+                </div>
+              )}
+
+              {/* Manual override notice */}
+              {catSource === "manual" && (
+                <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-xs text-amber-400">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-medium">Manual override active</div>
+                    <div className="text-amber-400/70 mt-0.5">
+                      These categories will always be used for this product — batch mapping rules are ignored.
+                      Click "Clear Override" to return to auto-mapping.
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Selected chips */}
+              {editCats.length > 0 && (
+                <div>
+                  <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Assigned WooCommerce categories</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {editCats.map(c => (
+                      <span
+                        key={c.id}
+                        onClick={() => c.id !== editPrimary && setEditPrimary(c.id)}
+                        className={cn(
+                          "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border cursor-pointer",
+                          c.id === editPrimary
+                            ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                            : "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                        )}
+                      >
+                        {c.id === editPrimary && <span className="text-[10px]">★</span>}
+                        {c.name}
+                        <button
+                          onClick={e => { e.stopPropagation(); toggleWoo({ id: c.id, name: c.name, parent_id: 0 }); }}
+                          className="ml-0.5 hover:text-red-400"
+                        >×</button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-1.5 text-[10px] text-muted-foreground">Click a category to set it as primary (★). Click × to remove.</div>
+                </div>
+              )}
+
+              {/* Tree selector */}
+              {!storeId ? (
+                <div className="p-3 rounded-xl border border-border/40 text-xs text-muted-foreground italic">
+                  No store linked to this product — cannot load WooCommerce categories.
+                </div>
+              ) : wooLoading ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground py-4 justify-center">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading WooCommerce categories…
+                </div>
+              ) : (
+                <div>
+                  <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-1.5">Select WooCommerce categories</div>
+                  <WooCatTree
+                    tree={wooTree}
+                    selected={editCats}
+                    primaryId={editPrimary}
+                    onToggle={toggleWoo}
+                    onSetPrimary={id => setEditPrimary(id)}
+                  />
+                </div>
+              )}
+
+              {/* Action buttons */}
+              <div className="flex items-center gap-3 pt-2 border-t border-border/30">
+                <button
+                  onClick={handleSave}
+                  disabled={saving || editCats.length === 0}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50 transition-colors"
+                >
+                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  Save Override
+                </button>
+                {catSource === "manual" && (
+                  <button
+                    onClick={handleClearOverride}
+                    disabled={clearing}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:border-red-500/40 hover:text-red-400 transition-colors disabled:opacity-50"
+                  >
+                    {clearing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                    Clear Override
+                  </button>
+                )}
+                <span className="text-xs text-muted-foreground">
+                  {catSource === "manual" ? "Manual override — batch rules ignored" : "No override — auto-mapped from batch rules"}
+                </span>
+              </div>
             </div>
           )}
         </div>

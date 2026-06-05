@@ -102,6 +102,11 @@ class Product(Base):
 
     fetch_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
 
+    # Manual product-level WooCommerce category override (never overwritten by batch rules)
+    manual_woo_cats_json      = Column(Text, nullable=True)   # JSON: [{id, name}, ...]
+    manual_primary_woo_cat_id = Column(Integer, nullable=True)
+    cat_source                = Column(String(20), nullable=False, default="auto")  # 'auto' | 'manual'
+
     # CSV Import fields — set when a CSV mapping file is uploaded before pipeline
     csv_title = Column(String(200), nullable=True)
     site_sku  = Column(String(100), nullable=True)

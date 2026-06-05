@@ -761,29 +761,35 @@ async def _run_upload(db, job):
             # ── Resolve category mapping for this product ─────────────────
             woo_cat_ids: list[int] = []
             try:
-                from models.models import SunskyCategoryMapping
-                raw_for_cat = product.raw_data or {}
-                sunsky_cat = (
-                    str(raw_for_cat.get("catName") or
-                        raw_for_cat.get("categoryName") or
-                        raw_for_cat.get("categoryId") or
-                        raw_for_cat.get("catId") or "").strip()
-                )
-                if sunsky_cat and job.store_id:
-                    from sqlalchemy import select as _sel
-                    mapping = (await db.execute(
-                        _sel(SunskyCategoryMapping).where(
-                            SunskyCategoryMapping.store_id == job.store_id,
-                            SunskyCategoryMapping.sunsky_cat == sunsky_cat,
-                        )
-                    )).scalar_one_or_none()
-                    if mapping:
-                        if mapping.woo_cats_json:
-                            import json as _json_cat
-                            _woo_cats = _json_cat.loads(mapping.woo_cats_json)
-                            woo_cat_ids = [c["id"] for c in _woo_cats if c.get("id")]
-                        elif mapping.woo_cat_id:
-                            woo_cat_ids = [mapping.woo_cat_id]
+                # Manual product-level override takes absolute priority over batch rules
+                if getattr(product, "cat_source", None) == "manual" and product.manual_woo_cats_json:
+                    import json as _json_manual
+                    _manual = _json_manual.loads(product.manual_woo_cats_json)
+                    woo_cat_ids = [c["id"] for c in _manual if c.get("id")]
+                else:
+                    from models.models import SunskyCategoryMapping
+                    raw_for_cat = product.raw_data or {}
+                    sunsky_cat = (
+                        str(raw_for_cat.get("catName") or
+                            raw_for_cat.get("categoryName") or
+                            raw_for_cat.get("categoryId") or
+                            raw_for_cat.get("catId") or "").strip()
+                    )
+                    if sunsky_cat and job.store_id:
+                        from sqlalchemy import select as _sel
+                        mapping = (await db.execute(
+                            _sel(SunskyCategoryMapping).where(
+                                SunskyCategoryMapping.store_id == job.store_id,
+                                SunskyCategoryMapping.sunsky_cat == sunsky_cat,
+                            )
+                        )).scalar_one_or_none()
+                        if mapping:
+                            if mapping.woo_cats_json:
+                                import json as _json_cat
+                                _woo_cats = _json_cat.loads(mapping.woo_cats_json)
+                                woo_cat_ids = [c["id"] for c in _woo_cats if c.get("id")]
+                            elif mapping.woo_cat_id:
+                                woo_cat_ids = [mapping.woo_cat_id]
             except Exception:
                 pass
 
@@ -1117,6 +1123,19 @@ async def _run_upload(db, job):
                 if woo_cat_id:
                     cat_woo_ids = [woo_cat_id]
                     cat_names   = [cat_name_direct]
+
+            # Manual product-level override — takes priority over all fallbacks
+            if not cat_woo_ids and getattr(prod, "cat_source", None) == "manual" and prod.manual_woo_cats_json:
+                try:
+                    import json as _json_manual2
+                    _manual2 = _json_manual2.loads(prod.manual_woo_cats_json)
+                    cat_woo_ids = [c["id"] for c in _manual2 if c.get("id")]
+                    cat_names   = [c.get("name", "") for c in _manual2 if c.get("id")]
+                    if cat_woo_ids:
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  {prod.sku}: manual category override → {cat_woo_ids}")
+                except Exception:
+                    pass
 
             # Fallback 2: persistent SunskyCategoryMapping set via Map panel
             # This is the user's manual mapping — highest-quality fallback.

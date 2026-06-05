@@ -590,6 +590,47 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
         </div>
       )}
 
+      {/* ── Pipeline Summary ── */}
+      {(() => {
+        const totalProducts = data?.total_products ?? cats.reduce((s: number, c: CategoryRow) => s + c.product_count, 0);
+        const autoMappedCats = knownCats.length;
+        const autoMappedProds = knownCats.reduce((s: number, c: CategoryRow) => s + c.product_count, 0);
+        const newAssigned = newCats.filter(c => (sel[c.sunsky_cat]?.woo_cats?.length ?? 0) > 0).length;
+        const newUnmapped = newCats.length - newAssigned;
+        const allReady = newUnmapped === 0;
+        return (
+          <div className="rounded-xl border border-border/40 bg-secondary/20 overflow-hidden">
+            <div className="px-4 py-2.5 border-b border-border/30 flex items-center justify-between">
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Pipeline Summary</span>
+              {allReady && (
+                <span className="flex items-center gap-1 text-xs text-emerald-400 font-medium">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Ready for Upload
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-y sm:divide-y-0 divide-border/30">
+              {[
+                { label: "Products", value: totalProducts, color: "" },
+                { label: "Auto-Mapped", value: autoMappedCats, sub: `${autoMappedProds} products`, color: autoMappedCats > 0 ? "emerald" : "" },
+                { label: "New Assigned", value: `${newAssigned}/${newCats.length}`, sub: "new categories", color: newCats.length === 0 ? "emerald" : newAssigned === newCats.length ? "emerald" : "blue" },
+                { label: "Unmapped", value: newUnmapped, sub: newUnmapped === 0 ? "all covered" : "will skip cat", color: newUnmapped === 0 ? "emerald" : "amber" },
+              ].map(stat => (
+                <div key={stat.label} className="px-4 py-3">
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">{stat.label}</div>
+                  <div className={cn("text-lg font-bold",
+                    stat.color === "emerald" ? "text-emerald-400" :
+                    stat.color === "amber" ? "text-amber-400" :
+                    stat.color === "blue" ? "text-blue-400" :
+                    "text-foreground"
+                  )}>{stat.value}</div>
+                  {stat.sub && <div className="text-[10px] text-muted-foreground">{stat.sub}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Confirm button */}
       <div className="flex items-center gap-3 pt-1 border-t border-border/30">
         <button
@@ -603,7 +644,7 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
         <span className="text-xs text-muted-foreground">
           {isStateA
             ? "All categories already saved — one click to upload"
-            : newCats.filter(c => (sel[c.sunsky_cat]?.woo_cats?.length ?? 0) > 0).length + "/" + newCats.length + " new categories assigned"}
+            : `${newCats.filter(c => (sel[c.sunsky_cat]?.woo_cats?.length ?? 0) > 0).length}/${newCats.length} new categories assigned`}
         </span>
       </div>
     </div>

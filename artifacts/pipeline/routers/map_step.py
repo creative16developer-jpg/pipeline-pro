@@ -18,7 +18,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -148,10 +148,16 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             "times_used":        m.times_used if m else 0,
         })
 
+    # Total product count in this batch (products may have no extractable category)
+    total_products = (await db.execute(
+        select(func.count(Product.id)).where(Product.fetch_job_id == pl.fetch_job_id)
+    )).scalar_one()
+
     return {
-        "pipeline_id": pipeline_id,
-        "store_id":    pl.store_id,
-        "categories":  categories,
+        "pipeline_id":    pipeline_id,
+        "store_id":       pl.store_id,
+        "total_products": total_products,
+        "categories":     categories,
         "woo_options": [
             {"id": c.woo_id, "name": c.name, "parent_id": c.parent_id or 0}
             for c in sorted(woo_cats, key=lambda x: x.name)
