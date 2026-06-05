@@ -299,6 +299,7 @@ class ProductEnrichAttr(Base):
     attribute        = Column(Text, nullable=False)
     raw_value        = Column(Text, nullable=False)
     normalised_value = Column(Text, nullable=True)
+    woo_attr_name    = Column(Text, nullable=True)   # override WooCommerce attribute name
     confidence       = Column(Float, nullable=True)
     confirmed        = Column(Boolean, nullable=False, default=False)
     created_at       = Column(DateTime(timezone=True), server_default=func.now())
@@ -312,12 +313,13 @@ class NormalisationDict(Base):
     __tablename__ = "normalisation_dict"
     __table_args__ = (UniqueConstraint("store_id", "attribute", "raw_value"),)
 
-    id         = Column(Integer, primary_key=True, index=True)
-    store_id   = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
-    attribute  = Column(Text, nullable=False)
-    raw_value  = Column(Text, nullable=False)
-    woo_term   = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    id            = Column(Integer, primary_key=True, index=True)
+    store_id      = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    attribute     = Column(Text, nullable=False)
+    raw_value     = Column(Text, nullable=False)
+    woo_term      = Column(Text, nullable=False)
+    woo_attr_name = Column(Text, nullable=True)   # override WooCommerce attribute name
+    created_at    = Column(DateTime(timezone=True), server_default=func.now())
 
     store = relationship("Store")
 

@@ -664,6 +664,8 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
   const [loadingEnrich, setLoadingEnrich] = useState(true);
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [normEdits, setNormEdits] = useState<Record<string, Record<string, string>>>({});
+  // nameEdits: keyed by attribute name (not row ID) so all rows for same attr share one rename
+  const [nameEdits, setNameEdits] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -690,7 +692,14 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
       (enrichData?.products ?? []).forEach((p: any) => {
         (p.attrs ?? []).forEach((a: any) => {
           const normVal = normEdits[a.id]?.value ?? a.normalised_value ?? a.raw_value;
-          attrs.push({ product_id: p.product_id, attribute: a.attribute, normalised_value: normVal, confirmed: true });
+          const wooAttrName = nameEdits[a.attribute]?.trim() || undefined;
+          attrs.push({
+            product_id: p.product_id,
+            attribute: a.attribute,
+            normalised_value: normVal,
+            woo_attr_name: wooAttrName,
+            confirmed: true,
+          });
         });
       });
 
@@ -700,7 +709,36 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
         for (const p of allProducts) {
           const a = p.attrs?.find((x: any) => String(x.id) === String(attrId));
           if (a && v.value && v.value !== a.raw_value) {
-            new_norm_entries.push({ attribute: a.attribute, raw_value: a.raw_value, woo_term: v.value });
+            const wooAttrName = nameEdits[a.attribute]?.trim() || undefined;
+            new_norm_entries.push({
+              attribute: a.attribute,
+              raw_value: a.raw_value,
+              woo_term: v.value,
+              woo_attr_name: wooAttrName,
+            });
+          }
+        }
+      });
+
+      // Also persist attr-name-only renames (even when value wasn't changed)
+      const enrichedAttrIds = new Set(new_norm_entries.map(e => `${e.attribute}||${e.raw_value}`));
+      Object.entries(nameEdits).forEach(([attrName, wooName]) => {
+        if (!wooName?.trim() || wooName.trim() === attrName) return;
+        const allProducts = enrichData?.products ?? [];
+        for (const p of allProducts) {
+          for (const a of (p.attrs ?? [])) {
+            if (a.attribute === attrName) {
+              const key = `${a.attribute}||${a.raw_value}`;
+              if (!enrichedAttrIds.has(key)) {
+                enrichedAttrIds.add(key);
+                new_norm_entries.push({
+                  attribute: a.attribute,
+                  raw_value: a.raw_value,
+                  woo_term: normEdits[a.id]?.value ?? a.normalised_value ?? a.raw_value,
+                  woo_attr_name: wooName.trim(),
+                });
+              }
+            }
           }
         }
       });
@@ -775,10 +813,28 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
                   {p.product_name}
                 </div>
                 <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-t border-border/20 bg-secondary/20">
+                      <th className="px-3 py-1 text-left text-[10px] font-medium text-muted-foreground/70 w-28">Sunsky Attr</th>
+                      <th className="px-3 py-1 text-left text-[10px] font-medium text-orange-400/80 w-32">WooCommerce Name</th>
+                      <th className="px-3 py-1 text-left text-[10px] font-medium text-muted-foreground/70">Raw Value</th>
+                      <th className="px-3 py-1 text-left text-[10px] font-medium text-blue-400/80 w-32">Normalised Value</th>
+                      <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground/70 w-10">Conf.</th>
+                    </tr>
+                  </thead>
                   <tbody>
                     {(p.attrs ?? []).map((a: any) => (
                       <tr key={a.id} className="border-t border-border/20">
                         <td className="px-3 py-1.5 text-muted-foreground w-28 shrink-0">{a.attribute}</td>
+                        <td className="px-3 py-1.5 w-32">
+                          <input
+                            type="text"
+                            placeholder={a.woo_attr_name_suggest ?? a.attribute}
+                            defaultValue={a.woo_attr_name ?? a.woo_attr_name_suggest ?? ""}
+                            onChange={(e) => setNameEdits((prev) => ({ ...prev, [a.attribute]: e.target.value }))}
+                            className="w-full bg-transparent border-b border-orange-400/25 focus:border-orange-400/70 outline-none py-0.5 text-orange-300 placeholder:text-muted-foreground/40 text-xs"
+                          />
+                        </td>
                         <td className="px-3 py-1.5 font-mono text-foreground">{a.raw_value}</td>
                         <td className="px-3 py-1.5 w-32">
                           <input
@@ -786,7 +842,7 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
                             placeholder={a.norm_suggestion ?? a.raw_value}
                             defaultValue={a.normalised_value ?? a.norm_suggestion ?? ""}
                             onChange={(e) => setNormEdits((prev) => ({ ...prev, [a.id]: { value: e.target.value } }))}
-                            className="w-full bg-transparent border-b border-border/30 focus:border-orange-400/60 outline-none py-0.5 text-foreground placeholder:text-muted-foreground/50 text-xs"
+                            className="w-full bg-transparent border-b border-blue-400/25 focus:border-blue-400/70 outline-none py-0.5 text-blue-300 placeholder:text-muted-foreground/40 text-xs"
                           />
                         </td>
                         <td className={cn("px-2 py-1.5 text-right tabular-nums text-[10px] w-10", confidenceColor(a.confidence))}>

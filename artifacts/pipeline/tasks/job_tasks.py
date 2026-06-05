@@ -946,6 +946,7 @@ async def _run_upload(db, job):
 
         # ── Pre-load normalisation dict for this store (enrich step output) ─
         p2_norm_lookup: dict[tuple[str, str], str] = {}
+        p2_attr_name_override: dict[str, str] = {}  # attribute.lower() → woo_attr_name
         if job.pipeline_job_id:
             try:
                 from models.models import NormalisationDict as _NormDict
@@ -957,6 +958,10 @@ async def _run_upload(db, job):
                     (r.attribute.lower(), r.raw_value.lower()): r.woo_term
                     for r in _norm_rows
                 }
+                # Build attr-name override lookup (first non-null per attribute wins)
+                for _nr in _norm_rows:
+                    if _nr.woo_attr_name and _nr.attribute.lower() not in p2_attr_name_override:
+                        p2_attr_name_override[_nr.attribute.lower()] = _nr.woo_attr_name
             except Exception as _ne:
                 await _log(db, job.id, LogLevel.warn,
                            f"  Could not load normalisation dict: {_ne}")
@@ -1271,7 +1276,20 @@ async def _run_upload(db, job):
                         _enrich_added = 0
                         for _ea in _enrich_attrs:
                             _aname = (_ea.attribute or "").strip()
-                            if not _aname or _aname.lower() in _seen_names:
+                            if not _aname:
+                                continue
+
+                            # WooCommerce attribute name resolution priority:
+                            # 1. Per-product woo_attr_name saved during Enrich review
+                            # 2. Store-level attr-name override from NormalisationDict
+                            # 3. Original Sunsky attribute name
+                            _woo_aname = (
+                                (_ea.woo_attr_name or "").strip()
+                                or p2_attr_name_override.get(_aname.lower(), "")
+                                or _aname
+                            )
+
+                            if _woo_aname.lower() in _seen_names:
                                 continue  # skip if Sunsky raw_data already covers this attr
 
                             # Value resolution priority:
@@ -1287,10 +1305,10 @@ async def _run_upload(db, job):
                             if not _woo_val:
                                 continue
 
-                            _attr = await _p2_get_or_create_attr(_aname)
+                            _attr = await _p2_get_or_create_attr(_woo_aname)
                             if _attr and _attr["id"] not in seen_attr_ids:
                                 seen_attr_ids.add(_attr["id"])
-                                _seen_names.add(_aname.lower())
+                                _seen_names.add(_woo_aname.lower())
                                 await _p2_get_or_create_term(_attr["id"], _woo_val)
                                 woo_attrs.append({
                                     "id": _attr["id"],

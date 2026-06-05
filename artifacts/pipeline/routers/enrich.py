@@ -38,6 +38,7 @@ class AttrConfirmEntry(BaseModel):
     product_id: int
     attribute: str
     normalised_value: Optional[str] = None
+    woo_attr_name: Optional[str] = None    # override WooCommerce attribute name
     confirmed: bool = True
 
 
@@ -45,6 +46,7 @@ class NormEntry(BaseModel):
     attribute: str
     raw_value: str
     woo_term: str
+    woo_attr_name: Optional[str] = None   # persisted attribute-name override
 
 
 class EnrichConfirmRequest(BaseModel):
@@ -87,6 +89,11 @@ async def get_enrich_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         (r.attribute.lower(), r.raw_value.lower()): r.woo_term
         for r in norm_rows
     }
+    # Attribute-name override lookup: attribute.lower() → woo_attr_name (first non-null wins)
+    attr_name_lookup: dict[str, str] = {}
+    for r in norm_rows:
+        if r.woo_attr_name and r.attribute.lower() not in attr_name_lookup:
+            attr_name_lookup[r.attribute.lower()] = r.woo_attr_name
 
     # Load product names
     product_ids = list({a.product_id for a in attrs})
@@ -101,13 +108,15 @@ async def get_enrich_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
     by_product: dict[int, list] = {}
     for a in attrs:
         entry = {
-            "id":               a.id,
-            "attribute":        a.attribute,
-            "raw_value":        a.raw_value,
-            "normalised_value": a.normalised_value,
-            "confidence":       a.confidence,
-            "confirmed":        a.confirmed,
-            "norm_suggestion":  norm_lookup.get((a.attribute.lower(), a.raw_value.lower())),
+            "id":                    a.id,
+            "attribute":             a.attribute,
+            "raw_value":             a.raw_value,
+            "normalised_value":      a.normalised_value,
+            "woo_attr_name":         a.woo_attr_name,
+            "confidence":            a.confidence,
+            "confirmed":             a.confirmed,
+            "norm_suggestion":       norm_lookup.get((a.attribute.lower(), a.raw_value.lower())),
+            "woo_attr_name_suggest": attr_name_lookup.get(a.attribute.lower()),
         }
         by_product.setdefault(a.product_id, []).append(entry)
 
@@ -160,20 +169,27 @@ async def enrich_confirm(
         if attr_row:
             attr_row.normalised_value = entry.normalised_value or attr_row.raw_value
             attr_row.confirmed = entry.confirmed
+            if entry.woo_attr_name:
+                attr_row.woo_attr_name = entry.woo_attr_name
 
     # Upsert new normalisation dict entries
     for ne in req.new_norm_entries:
+        vals: dict = dict(
+            store_id=pl.store_id,
+            attribute=ne.attribute,
+            raw_value=ne.raw_value,
+            woo_term=ne.woo_term,
+        )
+        updates: dict = {"woo_term": ne.woo_term}
+        if ne.woo_attr_name:
+            vals["woo_attr_name"] = ne.woo_attr_name
+            updates["woo_attr_name"] = ne.woo_attr_name
         stmt = (
             pg_insert(NormalisationDict)
-            .values(
-                store_id=pl.store_id,
-                attribute=ne.attribute,
-                raw_value=ne.raw_value,
-                woo_term=ne.woo_term,
-            )
+            .values(**vals)
             .on_conflict_do_update(
                 index_elements=["store_id", "attribute", "raw_value"],
-                set_={"woo_term": ne.woo_term},
+                set_=updates,
             )
         )
         await db.execute(stmt)
