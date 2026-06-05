@@ -660,6 +660,7 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
   const { toast } = useToast();
   const [tab, setTab] = useState<"attrs" | "norm" | "variants">("attrs");
   const [enrichData, setEnrichData] = useState<any>(null);
+  const [enrichError, setEnrichError] = useState<string | null>(null);
   const [groupsData, setGroupsData] = useState<any>(null);
   const [loadingEnrich, setLoadingEnrich] = useState(true);
   const [loadingGroups, setLoadingGroups] = useState(true);
@@ -669,10 +670,17 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    setEnrichError(null);
     fetch(`/api/pipelines/${pl.id}/enrich-data`)
-      .then((r) => r.ok ? r.json() : Promise.reject())
+      .then(async (r) => {
+        if (!r.ok) {
+          const text = await r.text().catch(() => `HTTP ${r.status}`);
+          throw new Error(text || `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
       .then(setEnrichData)
-      .catch(() => toast({ title: "Failed to load enrich data", variant: "destructive" }))
+      .catch((e) => setEnrichError(e.message ?? "Failed to load attribute data"))
       .finally(() => setLoadingEnrich(false));
 
     fetch(`/api/pipelines/${pl.id}/variant-groups`)
@@ -801,6 +809,16 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
         loadingEnrich ? (
           <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
             <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading attributes…
+          </div>
+        ) : enrichError ? (
+          <div className="rounded-xl border border-red-500/25 bg-red-500/10 p-4 space-y-2">
+            <div className="flex items-center gap-2 text-red-400 text-sm font-medium">
+              <AlertTriangle className="w-4 h-4 shrink-0" /> Failed to load attribute data
+            </div>
+            <pre className="text-xs text-red-400/70 whitespace-pre-wrap break-all font-mono max-h-32 overflow-y-auto">{enrichError}</pre>
+            <p className="text-xs text-muted-foreground">
+              If this mentions a missing column, run <code className="px-1 bg-secondary rounded font-mono">git pull && pm2 restart pipeline-api</code> on your server to apply the latest migration.
+            </p>
           </div>
         ) : !enrichData?.products?.length ? (
           <div className="py-3 text-sm text-muted-foreground italic">No attributes extracted yet.</div>
