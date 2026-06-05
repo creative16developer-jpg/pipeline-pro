@@ -1334,23 +1334,23 @@ async def _run_upload(db, job):
                     await _log(db, job.id, LogLevel.warn,
                                f"  ✗ {prod.sku}: enrich attrs error — {_ea_err}")
 
-            try:
-                await woo_client.set_product_attributes(
-                    store, prod.woo_product_id, woo_attrs
-                )
-                if woo_attrs:
+            if woo_attrs:
+                try:
+                    await woo_client.set_product_attributes(
+                        store, prod.woo_product_id, woo_attrs
+                    )
                     p2_attr_ok += 1
                     await _log(db, job.id, LogLevel.info,
                                f"  ✓ {prod.sku} → {len(woo_attrs)} attribute(s): "
                                f"{', '.join(a['name'] for a in woo_attrs)}")
-                else:
-                    p2_attr_miss += 1
+                except Exception as _ae:
                     await _log(db, job.id, LogLevel.warn,
-                               f"  ✗ {prod.sku}: no spec data in raw_data "
-                               f"(run Process job to fetch detail from Sunsky)")
-            except Exception as _ae:
+                               f"  ✗ {prod.sku}: set_attributes failed — {_ae}")
+            else:
+                p2_attr_miss += 1
                 await _log(db, job.id, LogLevel.warn,
-                           f"  ✗ {prod.sku}: set_attributes failed — {_ae}")
+                           f"  ✗ {prod.sku}: no attributes to assign — "
+                           f"check that Process step ran (paramsTable) and/or Enrich Review was confirmed")
 
         await _log(db, job.id, LogLevel.info,
                    f"  Phase 2 done — categories: {p2_cat_ok} ✓ / {p2_cat_miss} ✗  |  "

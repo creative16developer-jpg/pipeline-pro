@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Settings as SettingsIcon, Key, Eye, EyeOff, CheckCircle2,
   XCircle, Save, Trash2, Loader2, Info, Sparkles, ExternalLink,
-  RefreshCw, Tag, Search, ChevronDown, ChevronRight, Edit2, X
+  RefreshCw, Tag, Search, ChevronDown, ChevronRight, Edit2, X, Plus
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -170,6 +170,9 @@ function CategoryMappingDictionary() {
   const [editSel, setEditSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null }>({ woo_cats: [], primary_id: null });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [addingNew, setAddingNew] = useState(false);
+  const [newSunskyCat, setNewSunskyCat] = useState("");
+  const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null }>({ woo_cats: [], primary_id: null });
 
   const wooTree = useMemo(() => buildTree(wooOpts), [wooOpts]);
 
@@ -222,6 +225,42 @@ function CategoryMappingDictionary() {
       const primary_id = has && prev.primary_id === opt.id ? (woo_cats[0]?.id ?? null) : (prev.primary_id ?? (!has ? opt.id : null));
       return { woo_cats, primary_id };
     });
+  };
+
+  const toggleNewWoo = (opt: WooOpt) => {
+    setNewSel(prev => {
+      const has = prev.woo_cats.some(c => c.id === opt.id);
+      const woo_cats = has ? prev.woo_cats.filter(c => c.id !== opt.id) : [...prev.woo_cats, { id: opt.id, name: opt.name }];
+      const primary_id = has && prev.primary_id === opt.id ? (woo_cats[0]?.id ?? null) : (prev.primary_id ?? (!has ? opt.id : null));
+      return { woo_cats, primary_id };
+    });
+  };
+
+  const handleSaveNew = async () => {
+    if (!storeId || !newSunskyCat.trim()) return;
+    setSaving(true);
+    try {
+      const primary_id = newSel.primary_id ?? (newSel.woo_cats[0]?.id ?? null);
+      const r = await fetch(`/api/stores/${storeId}/category-mappings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify([{
+          sunsky_cat: newSunskyCat.trim(),
+          woo_cats: newSel.woo_cats,
+          primary_woo_cat_id: primary_id,
+        }]),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Mapping added" });
+      setAddingNew(false);
+      setNewSunskyCat("");
+      setNewSel({ woo_cats: [], primary_id: null });
+      reload();
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSaveEdit = async (m: CatMapping) => {
@@ -300,7 +339,80 @@ function CategoryMappingDictionary() {
         <button onClick={reload} disabled={loading} className="p-2 rounded-xl border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
           <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
         </button>
+        <button
+          onClick={() => { setAddingNew(true); setNewSunskyCat(""); setNewSel({ woo_cats: [], primary_id: null }); }}
+          disabled={addingNew}
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 shrink-0"
+        >
+          <Plus className="w-4 h-4" /> Add Mapping
+        </button>
       </div>
+
+      {/* Inline "Add new mapping" form */}
+      {addingNew && (
+        <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-semibold text-foreground">New Category Mapping</span>
+            <button onClick={() => setAddingNew(false)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Sunsky Category (ID or Name)</label>
+            <input
+              type="text"
+              placeholder="e.g. 110358  or  Mobile Accessories"
+              value={newSunskyCat}
+              onChange={e => setNewSunskyCat(e.target.value)}
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary placeholder:font-sans placeholder:text-muted-foreground"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">WooCommerce Categories</label>
+            {newSel.woo_cats.length > 0 && (
+              <div className="flex flex-wrap gap-1 mb-2">
+                {newSel.woo_cats.map(c => (
+                  <span
+                    key={c.id}
+                    onClick={() => c.id !== newSel.primary_id && setNewSel(prev => ({ ...prev, primary_id: c.id }))}
+                    className={cn(
+                      "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border cursor-pointer",
+                      c.id === newSel.primary_id
+                        ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                        : "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                    )}
+                  >
+                    {c.id === newSel.primary_id && <span className="text-[10px]">★</span>}
+                    {c.name}
+                    <button onClick={e => { e.stopPropagation(); toggleNewWoo({ id: c.id, name: c.name, parent_id: 0 }); }} className="ml-0.5 hover:text-red-400">×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <MiniCatTree
+              tree={wooTree}
+              selected={newSel.woo_cats}
+              primaryId={newSel.primary_id}
+              onToggle={toggleNewWoo}
+              onSetPrimary={id => setNewSel(prev => ({ ...prev, primary_id: id }))}
+            />
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleSaveNew}
+              disabled={saving || !newSunskyCat.trim()}
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
+            >
+              {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+              Save Mapping
+            </button>
+            <button onClick={() => setAddingNew(false)} className="px-4 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Stats row */}
       <div className="flex items-center gap-4 text-xs text-muted-foreground">
