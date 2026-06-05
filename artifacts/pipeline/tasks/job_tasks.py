@@ -1185,14 +1185,20 @@ async def _run_upload(db, job):
                         _scm_candidates.append(sunsky_cat_id)
                     if cat_name_direct and cat_name_direct not in _scm_candidates:
                         _scm_candidates.append(cat_name_direct)
+                    # Also try the human-readable name from disk cache for this Sunsky ID
+                    if sunsky_cat_id:
+                        _dc_name = (p2_cat_cache.get(sunsky_cat_id) or {}).get("name", "")
+                        if _dc_name and _dc_name not in _scm_candidates:
+                            _scm_candidates.append(_dc_name)
 
                     _mapping2 = None
                     _matched_key = None
                     for _cand in _scm_candidates:
+                        # Case-insensitive match — handles "mobile accessories" vs "Mobile Accessories"
                         _mapping2 = (await db.execute(
                             _sel_scm(_SCM2).where(
                                 _SCM2.store_id == job.store_id,
-                                _SCM2.sunsky_cat == _cand,
+                                _SCM2.sunsky_cat.ilike(_cand),
                             )
                         )).scalar_one_or_none()
                         if _mapping2:
@@ -1797,11 +1803,11 @@ async def _run_sync(db, job):
                        f"  Categories: {cats_created} created, {cats_synced} already existed "
                        f"— {len(sunsky_to_woo_cat)} ready to assign")
 
-            # ── 5. Assign WooCommerce categories — strictly from Sunsky data ─
-            # Rule: each product gets ONLY its Sunsky leaf category.
-            #   • Mapped    → PUT categories=[{id: woo_cat_id}]   (replaces all)
-            #   • Not found → PUT categories=[]                    (clears unrelated cats)
-            #   • No woo_id → skip (product not in WooCommerce yet)
+            # ── 5. Assign WooCommerce categories ──────────────────────────────
+            # Priority:
+            #   1. Sunsky BFS tree result (sunsky_to_woo_cat)
+            #   2. SunskyCategoryMapping (user's manual mapping in Settings)
+            #   3. Skip — never clear if no mapping found (preserves any existing category)
             await _log(db, job.id, LogLevel.info, "  Assigning categories to products in WooCommerce…")
             cat_ok = cat_miss = 0
             for prod in target_products:
@@ -1810,36 +1816,88 @@ async def _run_sync(db, job):
                                f"  ✗ {prod.sku}: not uploaded to WooCommerce yet — skipped")
                     continue
 
+                raw_p = prod.raw_data or {}
                 sunsky_cat_id = _get_sunsky_cat_id(prod)
-                woo_cat_id = sunsky_to_woo_cat.get(sunsky_cat_id) if sunsky_cat_id else None
-                cat_payload = [woo_cat_id] if woo_cat_id else []
 
-                try:
-                    await woo_client.set_product_categories(
-                        store, prod.woo_product_id, cat_payload
-                    )
-                    if woo_cat_id:
+                # Priority 1: Sunsky BFS result
+                woo_cat_ids: list[int] = []
+                woo_cat_source = ""
+                if sunsky_cat_id and sunsky_cat_id in sunsky_to_woo_cat:
+                    woo_cat_ids = [sunsky_to_woo_cat[sunsky_cat_id]]
+                    woo_cat_source = f"Sunsky BFS ({sunsky_cat_id})"
+
+                # Priority 2: SunskyCategoryMapping — try all candidate keys
+                if not woo_cat_ids and store_id:
+                    try:
+                        from models.models import SunskyCategoryMapping as _SSCM
+                        from sqlalchemy import select as _ssel_scm
+                        _sync_candidates: list[str] = []
+                        for _f in ("catName", "categoryName", "categoryId", "catId"):
+                            _v = str(raw_p.get(_f) or "").strip()
+                            if _v and _v not in _sync_candidates:
+                                _sync_candidates.append(_v)
+                        if sunsky_cat_id and sunsky_cat_id not in _sync_candidates:
+                            _sync_candidates.append(sunsky_cat_id)
+                        # Also try the human-readable name from the disk cache for this ID
+                        if sunsky_cat_id:
+                            _dcname = (bfs_meta.get(sunsky_cat_id) or {}).get("name", "")
+                            if not _dcname:
+                                _dcname = (p2_cat_cache.get(sunsky_cat_id) if 'p2_cat_cache' in dir() else None or {}).get("name", "")
+                            if _dcname and _dcname not in _sync_candidates:
+                                _sync_candidates.append(_dcname)
+
+                        _smapping = None
+                        _skey = None
+                        for _cand in _sync_candidates:
+                            # Case-insensitive match so "mobile accessories" == "Mobile Accessories"
+                            _smapping = (await db.execute(
+                                _ssel_scm(_SSCM).where(
+                                    _SSCM.store_id == store_id,
+                                    _SSCM.sunsky_cat.ilike(_cand),
+                                )
+                            )).scalar_one_or_none()
+                            if _smapping:
+                                _skey = _cand
+                                break
+
+                        if _smapping:
+                            if _smapping.woo_cats_json:
+                                import json as _sjson
+                                _sm_cats = _sjson.loads(_smapping.woo_cats_json)
+                                woo_cat_ids = [c["id"] for c in _sm_cats if c.get("id")]
+                            elif _smapping.woo_cat_id:
+                                woo_cat_ids = [_smapping.woo_cat_id]
+                            if woo_cat_ids:
+                                woo_cat_source = f"SunskyCategoryMapping ({_skey!r})"
+                    except Exception as _sme:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  {prod.sku}: SunskyCategoryMapping lookup failed — {_sme}")
+
+                if woo_cat_ids:
+                    try:
+                        await woo_client.set_product_categories(
+                            store, prod.woo_product_id, woo_cat_ids
+                        )
                         products_updated += 1
                         cat_ok += 1
                         await _log(db, job.id, LogLevel.info,
                                    f"  ✓ {prod.sku} (woo #{prod.woo_product_id}) "
-                                   f"→ category #{woo_cat_id} (Sunsky {sunsky_cat_id})")
-                    else:
-                        cat_miss += 1
-                        reason = (
-                            "no categoryId in Sunsky data"
-                            if not sunsky_cat_id
-                            else f"Sunsky ID {sunsky_cat_id!r} not found in tree"
-                        )
+                                   f"→ category {woo_cat_ids} via {woo_cat_source}")
+                    except Exception as e:
                         await _log(db, job.id, LogLevel.warn,
-                                   f"  ✗ {prod.sku} (woo #{prod.woo_product_id}): {reason} "
-                                   f"— categories cleared")
-                except Exception as e:
+                                   f"  ✗ {prod.sku}: set_categories failed — {e}")
+                else:
+                    cat_miss += 1
+                    candidates_str = ", ".join(
+                        str(raw_p.get(f) or "") for f in ("catName","categoryName","categoryId","catId")
+                        if raw_p.get(f)
+                    ) or sunsky_cat_id or "none"
                     await _log(db, job.id, LogLevel.warn,
-                               f"  ✗ {prod.sku}: set_categories failed — {e}")
+                               f"  ✗ {prod.sku}: no category mapping found "
+                               f"(tried candidates: {candidates_str}) — existing category preserved")
 
             await _log(db, job.id, LogLevel.info,
-                       f"  Category assignment: {cat_ok} assigned ✓  |  {cat_miss} cleared (no mapping)")
+                       f"  Category assignment: {cat_ok} assigned ✓  |  {cat_miss} skipped (no mapping)")
 
     # ─────────────────────────────────────────────────────────────────────────
     # STEP B: Sync product attributes → WooCommerce
