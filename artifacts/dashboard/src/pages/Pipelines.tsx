@@ -333,6 +333,11 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
   const [saving, setSaving] = useState(false);
   const [openTree, setOpenTree] = useState<string | null>(null);
 
+  // "All Products" mode — one selection applied to every Sunsky category
+  const [applyAll, setApplyAll] = useState(false);
+  const [allSel, setAllSel] = useState<RowSel>({ woo_cats: [], primary_id: null, save_as_rule: true });
+  const [allTreeOpen, setAllTreeOpen] = useState(false);
+
   useEffect(() => {
     fetch(`/api/pipelines/${pl.id}/map-data`)
       .then(r => r.ok ? r.json() : Promise.reject())
@@ -387,17 +392,49 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
     setSel(prev => ({ ...prev, [sunsky_cat]: { ...prev[sunsky_cat], primary_id: id } }));
   }
 
+  function toggleAllWooCat(opt: WooOpt) {
+    setAllSel(prev => {
+      const already = prev.woo_cats.some(c => c.id === opt.id);
+      let woo_cats: WooCatEntry[];
+      let primary_id = prev.primary_id;
+      if (already) {
+        woo_cats = prev.woo_cats.filter(c => c.id !== opt.id);
+        if (primary_id === opt.id) primary_id = woo_cats[0]?.id ?? null;
+      } else {
+        woo_cats = [...prev.woo_cats, { id: opt.id, name: opt.name }];
+        if (!primary_id) primary_id = opt.id;
+      }
+      return { ...prev, woo_cats, primary_id };
+    });
+  }
+
   const handleConfirmResume = async () => {
     setSaving(true);
     try {
-      const mappings = Object.entries(sel)
-        .filter(([, v]) => v.woo_cats.length > 0)
-        .map(([sunsky_cat, v]) => ({
-          sunsky_cat,
-          woo_cats: v.woo_cats,
-          primary_woo_cat_id: v.primary_id,
-          save_as_rule: v.save_as_rule,
+      let mappings: any[];
+      if (applyAll) {
+        // Apply the same selection to every Sunsky category in this pipeline
+        if (!allSel.woo_cats.length) {
+          toast({ title: "Select at least one WooCommerce category first", variant: "destructive" });
+          setSaving(false);
+          return;
+        }
+        mappings = cats.map(c => ({
+          sunsky_cat: c.sunsky_cat,
+          woo_cats: allSel.woo_cats,
+          primary_woo_cat_id: allSel.primary_id,
+          save_as_rule: allSel.save_as_rule,
         }));
+      } else {
+        mappings = Object.entries(sel)
+          .filter(([, v]) => v.woo_cats.length > 0)
+          .map(([sunsky_cat, v]) => ({
+            sunsky_cat,
+            woo_cats: v.woo_cats,
+            primary_woo_cat_id: v.primary_id,
+            save_as_rule: v.save_as_rule,
+          }));
+      }
       const r = await fetch(`/api/pipelines/${pl.id}/map-confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -432,13 +469,115 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
 
   return (
     <div className="p-4 space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <Tag className="w-4 h-4 text-amber-400" />
-        <span className="text-sm font-medium text-amber-400">Category Mapping</span>
-        <span className="text-xs text-muted-foreground">{cats.length} Sunsky {cats.length === 1 ? "category" : "categories"}</span>
+      {/* Header + mode toggle */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <Tag className="w-4 h-4 text-amber-400 shrink-0" />
+          <span className="text-sm font-medium text-amber-400">Category Mapping</span>
+          <span className="text-xs text-muted-foreground">{cats.length} Sunsky {cats.length === 1 ? "category" : "categories"}</span>
+        </div>
+        {/* Mode switcher */}
+        <div className="flex rounded-lg border border-border/40 overflow-hidden text-xs shrink-0">
+          <button
+            onClick={() => setApplyAll(false)}
+            className={cn(
+              "px-3 py-1.5 font-medium transition-colors",
+              !applyAll ? "bg-amber-500/15 text-amber-400" : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            Per Category
+          </button>
+          <button
+            onClick={() => setApplyAll(true)}
+            className={cn(
+              "px-3 py-1.5 font-medium transition-colors border-l border-border/40",
+              applyAll ? "bg-amber-500/15 text-amber-400" : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            All Products
+          </button>
+        </div>
       </div>
 
+      {/* ── All Products mode ── */}
+      {applyAll && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 space-y-0 overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-amber-500/20 flex items-center gap-2">
+            <Tag className="w-3.5 h-3.5 text-amber-400" />
+            <span className="text-xs font-semibold text-amber-400">Apply one category to all {cats.reduce((s, c) => s + c.product_count, 0)} products</span>
+            <span className="text-xs text-muted-foreground ml-auto">{cats.length} Sunsky {cats.length === 1 ? "category" : "categories"} → same WooCommerce destination</span>
+          </div>
+
+          {/* Selected chips */}
+          {allSel.woo_cats.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 px-4 py-2.5 border-b border-amber-500/20">
+              {allSel.woo_cats.map(c => (
+                <span
+                  key={c.id}
+                  title={c.id === allSel.primary_id ? "Primary — click another to change" : "Click to set as primary"}
+                  onClick={() => c.id !== allSel.primary_id && setAllSel(prev => ({ ...prev, primary_id: c.id }))}
+                  className={cn(
+                    "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border cursor-pointer select-none",
+                    c.id === allSel.primary_id
+                      ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                      : "bg-blue-500/15 text-blue-400 border-blue-500/30"
+                  )}
+                >
+                  {c.id === allSel.primary_id && <span className="text-[10px]">★</span>}
+                  {c.name}
+                  <button
+                    onClick={e => { e.stopPropagation(); toggleAllWooCat({ id: c.id, name: c.name, parent_id: 0 }); }}
+                    className="ml-0.5 hover:text-red-400 leading-none"
+                  >×</button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {allSel.woo_cats.length > 0 && (
+            <div className="px-4 pb-2 pt-1">
+              <CatResultSummary rowSel={allSel} wooById={wooById} />
+            </div>
+          )}
+
+          <div className="px-4 py-2.5">
+            <button
+              onClick={() => setAllTreeOpen(o => !o)}
+              className="flex items-center gap-1 text-xs text-primary hover:text-primary/80"
+            >
+              {allTreeOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+              {allTreeOpen ? "Close selector" : allSel.woo_cats.length > 0 ? "Edit selection" : "Select WooCommerce category"}
+            </button>
+            {allTreeOpen && (
+              <div className="mt-2">
+                <WooCatTree
+                  tree={wooTree}
+                  selected={allSel.woo_cats}
+                  primaryId={allSel.primary_id}
+                  onToggle={toggleAllWooCat}
+                  onSetPrimary={id => setAllSel(prev => ({ ...prev, primary_id: id }))}
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="px-4 pb-3 flex items-center gap-1.5">
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={allSel.save_as_rule}
+                onChange={e => setAllSel(prev => ({ ...prev, save_as_rule: e.target.checked }))}
+                className="w-3 h-3 rounded accent-primary"
+              />
+              Save as rule for each Sunsky category
+            </label>
+          </div>
+        </div>
+      )}
+
+      {/* ── Per Category mode ── */}
+      {!applyAll && (
+        <>
       {/* State A — all known, one-click confirm */}
       {isStateA && (
         <div className="flex items-start gap-2 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-xs text-emerald-400">
@@ -589,10 +728,40 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
           })}
         </div>
       )}
+        </>
+      )}
 
       {/* ── Pipeline Summary ── */}
       {(() => {
         const totalProducts = data?.total_products ?? cats.reduce((s: number, c: CategoryRow) => s + c.product_count, 0);
+        if (applyAll) {
+          const ready = allSel.woo_cats.length > 0;
+          return (
+            <div className="rounded-xl border border-border/40 bg-secondary/20 overflow-hidden">
+              <div className="px-4 py-2.5 border-b border-border/30 flex items-center justify-between">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Pipeline Summary</span>
+                {ready && (
+                  <span className="flex items-center gap-1 text-xs text-emerald-400 font-medium">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Ready for Upload
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-2 divide-x divide-border/30">
+                <div className="px-4 py-3">
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Products</div>
+                  <div className="text-lg font-bold text-foreground">{totalProducts}</div>
+                </div>
+                <div className="px-4 py-3">
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-0.5">Category Selected</div>
+                  <div className={cn("text-lg font-bold", ready ? "text-emerald-400" : "text-amber-400")}>
+                    {ready ? allSel.woo_cats.length : "None"}
+                  </div>
+                  {ready && <div className="text-[10px] text-muted-foreground">applied to all products</div>}
+                </div>
+              </div>
+            </div>
+          );
+        }
         const autoMappedCats = knownCats.length;
         const autoMappedProds = knownCats.reduce((s: number, c: CategoryRow) => s + c.product_count, 0);
         const newAssigned = newCats.filter(c => (sel[c.sunsky_cat]?.woo_cats?.length ?? 0) > 0).length;
@@ -642,9 +811,13 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
           Confirm &amp; Resume
         </button>
         <span className="text-xs text-muted-foreground">
-          {isStateA
-            ? "All categories already saved — one click to upload"
-            : `${newCats.filter(c => (sel[c.sunsky_cat]?.woo_cats?.length ?? 0) > 0).length}/${newCats.length} new categories assigned`}
+          {applyAll
+            ? allSel.woo_cats.length > 0
+              ? `"${allSel.woo_cats.find(c => c.id === allSel.primary_id)?.name ?? allSel.woo_cats[0]?.name}" → all products`
+              : "Select a category first"
+            : isStateA
+              ? "All categories already saved — one click to upload"
+              : `${newCats.filter(c => (sel[c.sunsky_cat]?.woo_cats?.length ?? 0) > 0).length}/${newCats.length} new categories assigned`}
         </span>
       </div>
     </div>
@@ -667,7 +840,22 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
   const [normEdits, setNormEdits] = useState<Record<string, Record<string, string>>>({});
   // nameEdits: keyed by attribute name (not row ID) so all rows for same attr share one rename
   const [nameEdits, setNameEdits] = useState<Record<string, string>>({});
+  // bulkNormEdits: keyed by attribute name — applies to ALL products when set
+  const [bulkNormEdits, setBulkNormEdits] = useState<Record<string, string>>({});
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Unique attribute names across all products (order preserved)
+  const uniqueAttrNames = useMemo<string[]>(() => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const p of enrichData?.products ?? []) {
+      for (const a of p.attrs ?? []) {
+        if (!seen.has(a.attribute)) { seen.add(a.attribute); result.push(a.attribute); }
+      }
+    }
+    return result;
+  }, [enrichData]);
 
   useEffect(() => {
     setEnrichError(null);
@@ -699,7 +887,12 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
       const attrs: any[] = [];
       (enrichData?.products ?? []).forEach((p: any) => {
         (p.attrs ?? []).forEach((a: any) => {
-          const normVal = normEdits[a.id]?.value ?? a.normalised_value ?? a.raw_value;
+          // bulkNormEdits[attrName] wins > per-row edit > existing normalised > raw
+          const normVal =
+            bulkNormEdits[a.attribute] ??
+            normEdits[a.id]?.value ??
+            a.normalised_value ??
+            a.raw_value;
           const wooAttrName = nameEdits[a.attribute]?.trim() || undefined;
           attrs.push({
             product_id: p.product_id,
@@ -728,8 +921,30 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
         }
       });
 
-      // Also persist attr-name-only renames (even when value wasn't changed)
+      // Persist bulk normalised value overrides (cover every raw_value for that attr)
       const enrichedAttrIds = new Set(new_norm_entries.map(e => `${e.attribute}||${e.raw_value}`));
+      Object.entries(bulkNormEdits).forEach(([attrName, bulkVal]) => {
+        if (!bulkVal?.trim()) return;
+        const wooAttrName = nameEdits[attrName]?.trim() || undefined;
+        for (const p of (enrichData?.products ?? [])) {
+          for (const a of (p.attrs ?? [])) {
+            if (a.attribute === attrName) {
+              const key = `${a.attribute}||${a.raw_value}`;
+              if (!enrichedAttrIds.has(key)) {
+                enrichedAttrIds.add(key);
+                new_norm_entries.push({
+                  attribute: a.attribute,
+                  raw_value: a.raw_value,
+                  woo_term: bulkVal.trim(),
+                  woo_attr_name: wooAttrName,
+                });
+              }
+            }
+          }
+        }
+      });
+
+      // Also persist attr-name-only renames (even when value wasn't changed)
       Object.entries(nameEdits).forEach(([attrName, wooName]) => {
         if (!wooName?.trim() || wooName.trim() === attrName) return;
         const allProducts = enrichData?.products ?? [];
@@ -742,7 +957,7 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
                 new_norm_entries.push({
                   attribute: a.attribute,
                   raw_value: a.raw_value,
-                  woo_term: normEdits[a.id]?.value ?? a.normalised_value ?? a.raw_value,
+                  woo_term: bulkNormEdits[a.attribute] ?? normEdits[a.id]?.value ?? a.normalised_value ?? a.raw_value,
                   woo_attr_name: wooName.trim(),
                 });
               }
@@ -823,7 +1038,85 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
         ) : !enrichData?.products?.length ? (
           <div className="py-3 text-sm text-muted-foreground italic">No attributes extracted yet.</div>
         ) : (
-          <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+          <div className="space-y-3">
+            {/* ── Bulk Edit panel ── */}
+            {uniqueAttrNames.length > 0 && (
+              <div className="rounded-xl border border-orange-500/25 bg-orange-500/5 overflow-hidden">
+                <button
+                  onClick={() => setBulkOpen(o => !o)}
+                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-orange-400 hover:bg-orange-500/10 transition-colors"
+                >
+                  {bulkOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  <Layers className="w-3.5 h-3.5" />
+                  Bulk Edit — apply to ALL products
+                  <span className="ml-auto text-[10px] font-normal text-muted-foreground">
+                    {Object.keys(bulkNormEdits).filter(k => bulkNormEdits[k]?.trim()).length > 0
+                      ? `${Object.keys(bulkNormEdits).filter(k => bulkNormEdits[k]?.trim()).length} overrides active`
+                      : "set once, apply to every product"}
+                  </span>
+                </button>
+                {bulkOpen && (
+                  <div className="border-t border-orange-500/20">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-secondary/30">
+                          <th className="px-3 py-1.5 text-left text-[10px] font-medium text-muted-foreground/70 w-28">Sunsky Attr</th>
+                          <th className="px-3 py-1.5 text-left text-[10px] font-medium text-orange-400/80 w-36">WooCommerce Name <span className="text-muted-foreground/50">(all products)</span></th>
+                          <th className="px-3 py-1.5 text-left text-[10px] font-medium text-blue-400/80">Normalised Value Override <span className="text-muted-foreground/50">(all products)</span></th>
+                          <th className="px-2 py-1.5 w-6" />
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {uniqueAttrNames.map(attrName => {
+                          const bulk = bulkNormEdits[attrName] ?? "";
+                          return (
+                            <tr key={attrName} className="border-t border-border/20">
+                              <td className="px-3 py-1.5 text-muted-foreground w-28">{attrName}</td>
+                              <td className="px-3 py-1.5 w-36">
+                                <input
+                                  type="text"
+                                  placeholder={nameEdits[attrName] || attrName}
+                                  value={nameEdits[attrName] ?? ""}
+                                  onChange={e => setNameEdits(prev => ({ ...prev, [attrName]: e.target.value }))}
+                                  className="w-full bg-transparent border-b border-orange-400/25 focus:border-orange-400/70 outline-none py-0.5 text-orange-300 placeholder:text-muted-foreground/40 text-xs"
+                                />
+                              </td>
+                              <td className="px-3 py-1.5">
+                                <input
+                                  type="text"
+                                  placeholder="Leave blank to keep per-product values"
+                                  value={bulk}
+                                  onChange={e => setBulkNormEdits(prev => ({ ...prev, [attrName]: e.target.value }))}
+                                  className={cn(
+                                    "w-full bg-transparent border-b outline-none py-0.5 text-xs placeholder:text-muted-foreground/40",
+                                    bulk ? "border-blue-400/60 text-blue-300" : "border-blue-400/20 focus:border-blue-400/60 text-blue-300"
+                                  )}
+                                />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                {bulk && (
+                                  <button
+                                    onClick={() => setBulkNormEdits(prev => { const n = { ...prev }; delete n[attrName]; return n; })}
+                                    className="text-muted-foreground hover:text-red-400 text-[10px]"
+                                    title="Clear override"
+                                  >×</button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                    <div className="px-4 py-2 text-[10px] text-muted-foreground border-t border-orange-500/15">
+                      WooCommerce Name is shared across all rows for that attribute. Normalised Value override replaces per-product values when set. Leave blank to keep individual edits below.
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Per-product attribute list */}
+            <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
             {enrichData.products.map((p: any) => (
               <div key={p.product_id} className="rounded-xl border border-border/30 bg-secondary/20 overflow-hidden">
                 <div className="px-3 py-2 bg-secondary/40 text-xs font-medium text-foreground truncate">
@@ -842,7 +1135,7 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
                   </thead>
                   <tbody>
                     {(p.attrs ?? []).map((a: any) => (
-                      <tr key={a.id} className="border-t border-border/20">
+                      <tr key={a.id} className={cn("border-t border-border/20", bulkNormEdits[a.attribute] ? "opacity-60" : "")}>
                         <td className="px-3 py-1.5 text-muted-foreground w-28 shrink-0">{a.attribute}</td>
                         <td className="px-3 py-1.5 w-32">
                           <input
@@ -872,6 +1165,7 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
                 </table>
               </div>
             ))}
+            </div>
           </div>
         )
       )}
