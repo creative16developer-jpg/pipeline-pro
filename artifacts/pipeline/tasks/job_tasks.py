@@ -790,8 +790,15 @@ async def _run_upload(db, job):
                                 woo_cat_ids = [c["id"] for c in _woo_cats if c.get("id")]
                             elif mapping.woo_cat_id:
                                 woo_cat_ids = [mapping.woo_cat_id]
-            except Exception:
-                pass
+                            if woo_cat_ids:
+                                await _log(db, job.id, LogLevel.info,
+                                           f"  {product.sku}: category mapping {sunsky_cat!r} → woo ids {woo_cat_ids}")
+                        else:
+                            await _log(db, job.id, LogLevel.warning,
+                                       f"  {product.sku}: no category mapping for {sunsky_cat!r} — product will have no category")
+            except Exception as _cat_err:
+                await _log(db, job.id, LogLevel.warning,
+                           f"  {product.sku}: category lookup error — {_cat_err}")
 
             payload = {
                 "name":              product.name,

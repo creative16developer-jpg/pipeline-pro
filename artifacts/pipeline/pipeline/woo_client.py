@@ -205,8 +205,13 @@ async def create_product(store: Store, product_data: dict) -> dict:
         elif isinstance(img, str) and img.startswith("http"):
             images.append({"src": img})
 
-    raw_cats = product_data.get("category_ids", [])
-    categories = [{"id": int(cid)} for cid in raw_cats if cid]
+    # Accept {id[, name]} dicts under "categories" OR plain ints under "category_ids"
+    _cats_dicts = product_data.get("categories", [])
+    _cats_ids   = product_data.get("category_ids", [])
+    if _cats_dicts:
+        categories = [{"id": int(c["id"])} for c in _cats_dicts if c.get("id")]
+    else:
+        categories = [{"id": int(cid)} for cid in _cats_ids if cid]
 
     payload = {
         "name": product_data.get("name", "") or "Unnamed Product",
@@ -307,8 +312,13 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
         elif isinstance(img, str) and img.startswith("http"):
             images.append({"src": img})
 
-    raw_cats = product_data.get("category_ids", [])
-    categories = [{"id": int(cid)} for cid in raw_cats if cid]
+    # Accept {id[, name]} dicts under "categories" OR plain ints under "category_ids"
+    _cats_dicts = product_data.get("categories", [])
+    _cats_ids   = product_data.get("category_ids", [])
+    if _cats_dicts:
+        categories = [{"id": int(c["id"])} for c in _cats_dicts if c.get("id")]
+    else:
+        categories = [{"id": int(cid)} for cid in _cats_ids if cid]
 
     payload: dict = {}
     if "name" in product_data:
