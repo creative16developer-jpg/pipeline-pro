@@ -1169,34 +1169,53 @@ async def _run_upload(db, job):
 
             # Fallback 2: persistent SunskyCategoryMapping set via Map panel
             # This is the user's manual mapping — highest-quality fallback.
+            # Try all possible Sunsky identifiers so name-saved vs ID-saved mappings
+            # both match regardless of which field raw_data carries.
             if not cat_woo_ids and job.store_id:
                 try:
                     from models.models import SunskyCategoryMapping as _SCM2
                     from sqlalchemy import select as _sel_scm
-                    _p2_sunsky_cat = (
-                        str(raw.get("catName") or raw.get("categoryName") or
-                            raw.get("categoryId") or raw.get("catId") or "").strip()
-                    )
-                    if _p2_sunsky_cat:
+                    # Build a deduplicated list of candidate lookup keys to try
+                    _scm_candidates: list[str] = []
+                    for _fld in ("catName", "categoryName", "categoryId", "catId"):
+                        _v = str(raw.get(_fld) or "").strip()
+                        if _v and _v not in _scm_candidates:
+                            _scm_candidates.append(_v)
+                    if sunsky_cat_id and sunsky_cat_id not in _scm_candidates:
+                        _scm_candidates.append(sunsky_cat_id)
+                    if cat_name_direct and cat_name_direct not in _scm_candidates:
+                        _scm_candidates.append(cat_name_direct)
+
+                    _mapping2 = None
+                    _matched_key = None
+                    for _cand in _scm_candidates:
                         _mapping2 = (await db.execute(
                             _sel_scm(_SCM2).where(
                                 _SCM2.store_id == job.store_id,
-                                _SCM2.sunsky_cat == _p2_sunsky_cat,
+                                _SCM2.sunsky_cat == _cand,
                             )
                         )).scalar_one_or_none()
                         if _mapping2:
-                            if _mapping2.woo_cats_json:
-                                import json as _json_m2
-                                _m2_cats = _json_m2.loads(_mapping2.woo_cats_json)
-                                cat_woo_ids = [c["id"] for c in _m2_cats if c.get("id")]
-                                cat_names   = [c.get("name", "") for c in _m2_cats if c.get("id")]
-                            elif _mapping2.woo_cat_id:
-                                cat_woo_ids = [_mapping2.woo_cat_id]
-                                cat_names   = [_mapping2.woo_cat_name or _p2_sunsky_cat]
-                            if cat_woo_ids:
-                                await _log(db, job.id, LogLevel.info,
-                                           f"  {prod.sku}: SunskyCategoryMapping "
-                                           f"{_p2_sunsky_cat!r} → {cat_woo_ids}")
+                            _matched_key = _cand
+                            break
+
+                    if _mapping2:
+                        if _mapping2.woo_cats_json:
+                            import json as _json_m2
+                            _m2_cats = _json_m2.loads(_mapping2.woo_cats_json)
+                            cat_woo_ids = [c["id"] for c in _m2_cats if c.get("id")]
+                            cat_names   = [c.get("name", "") for c in _m2_cats if c.get("id")]
+                        elif _mapping2.woo_cat_id:
+                            cat_woo_ids = [_mapping2.woo_cat_id]
+                            cat_names   = [_mapping2.woo_cat_name or _matched_key or ""]
+                        if cat_woo_ids:
+                            await _log(db, job.id, LogLevel.info,
+                                       f"  {prod.sku}: SunskyCategoryMapping "
+                                       f"{_matched_key!r} → {cat_woo_ids}")
+                    else:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  {prod.sku}: no SunskyCategoryMapping found for "
+                                   f"candidates {_scm_candidates} — category not assigned")
                 except Exception as _scm_e:
                     await _log(db, job.id, LogLevel.warn,
                                f"  {prod.sku}: SunskyCategoryMapping lookup failed — {_scm_e}")
@@ -1283,17 +1302,33 @@ async def _run_upload(db, job):
             # AI-extracted enrich attributes (Enrich step output)
             # Applied after Sunsky attrs so they don't overwrite existing entries;
             # normalisation dict values take priority over raw AI values.
-            if job.pipeline_job_id:
+            # NOTE: We query by product_id only (not pipeline_job_id) so that attrs
+            # confirmed in a *previous* pipeline run are still applied — the common
+            # case when re-running upload after an earlier Enrich+Confirm step.
+            if job.pipeline_job_id or True:  # always attempt for every product
                 try:
                     from models.models import ProductEnrichAttr as _PEA
-                    from sqlalchemy import select as _sel_ea
+                    from sqlalchemy import select as _sel_ea, desc as _desc_ea
+                    # First try: attrs confirmed in *this* pipeline (most authoritative)
                     _enrich_attrs = (await db.execute(
                         _sel_ea(_PEA).where(
                             _PEA.pipeline_job_id == job.pipeline_job_id,
                             _PEA.product_id == prod.id,
-                            _PEA.confirmed == True,  # noqa: E712 — only user-approved attrs
+                            _PEA.confirmed == True,  # noqa: E712
                         )
                     )).scalars().all()
+                    # Fallback: any confirmed attrs for this product (across all pipelines)
+                    if not _enrich_attrs:
+                        _enrich_attrs = (await db.execute(
+                            _sel_ea(_PEA).where(
+                                _PEA.product_id == prod.id,
+                                _PEA.confirmed == True,  # noqa: E712
+                            ).order_by(_desc_ea(_PEA.id))
+                        )).scalars().all()
+                        if _enrich_attrs:
+                            await _log(db, job.id, LogLevel.info,
+                                       f"  {prod.sku}: using enrich attrs from a previous pipeline "
+                                       f"({len(_enrich_attrs)} confirmed)")
 
                     if _enrich_attrs:
                         # Build a name-level dedup set from attrs already queued
