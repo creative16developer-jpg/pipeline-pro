@@ -31,12 +31,46 @@ async def get_categories(parent_id: str = Query(default="0")):
 @router.post("/fetch", response_model=SunskyFetchResult)
 async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(get_db)):
     """
-    Immediately fetch products from Sunsky (synchronous, in-request).
-    For large imports use the /api/jobs endpoint to queue a background Fetch job instead.
+    Fetch products from Sunsky using one or more criteria (OR logic).
+    Supported criteria: category, keyword, comma-separated SKU/SPU list.
+    All active criteria are searched in parallel and results are deduplicated.
     """
+    import asyncio
     from sqlalchemy import select
     from models.models import Product
 
+    # ── Parse SKU list ───────────────────────────────────────────────────────
+    sku_list = [s.strip() for s in (body.skus or "").split(",") if s.strip()]
+
+    # ── Build parallel search tasks ──────────────────────────────────────────
+    # Each task returns either a list[dict] (SPU path) or a search-result dict
+    async def _cat_search():
+        return await sunsky_client.search_products(
+            category_id=body.category_id,
+            page=body.page,
+            page_size=body.limit,
+        )
+
+    async def _kw_search():
+        return await sunsky_client.search_products(
+            keyword=body.keyword,
+            page=body.page,
+            page_size=body.limit,
+        )
+
+    tasks = []
+    if body.category_id:
+        tasks.append(_cat_search())
+    if body.keyword:
+        tasks.append(_kw_search())
+    if sku_list:
+        tasks.append(sunsky_client.get_products_by_spus(sku_list))
+
+    # Fall back to a plain (unconstrained) page fetch if no criteria given
+    if not tasks:
+        tasks.append(_cat_search())
+
+    # ── Record job ───────────────────────────────────────────────────────────
     job = Job(
         type=JobType.fetch,
         status=JobStatus.running,
@@ -45,8 +79,9 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
         config={
             "category_id": body.category_id,
             "keyword":     body.keyword,
+            "skus":        sku_list or None,
             "page_size":   body.limit,
-            "max_pages":   1,
+            "page":        body.page,
         },
     )
     db.add(job)
@@ -54,12 +89,7 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
     await db.refresh(job)
 
     try:
-        result = await sunsky_client.search_products(
-            category_id=body.category_id,
-            keyword=body.keyword,
-            page=body.page,
-            page_size=body.limit,
-        )
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
     except Exception as e:
         job.status = JobStatus.failed
         job.error_message = str(e)
@@ -67,7 +97,29 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
         await db.commit()
         raise HTTPException(502, f"Sunsky API error: {e}")
 
-    products = result.get("products", [])
+    # ── Merge + deduplicate ───────────────────────────────────────────────────
+    seen_ids: set[str] = set()
+    products: list[dict] = []
+    errors: list[str] = []
+    for r in raw_results:
+        if isinstance(r, Exception):
+            errors.append(str(r))
+            continue
+        batch: list[dict] = r if isinstance(r, list) else r.get("products", [])
+        for p in batch:
+            pid = str(p.get("id", ""))
+            if pid and pid not in seen_ids:
+                seen_ids.add(pid)
+                products.append(p)
+
+    if errors and not products:
+        job.status = JobStatus.failed
+        job.error_message = "; ".join(errors)
+        job.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+        raise HTTPException(502, f"Sunsky API error(s): {'; '.join(errors)}")
+
+    # ── Persist products ─────────────────────────────────────────────────────
     saved = skipped = updated = 0
 
     for p in products:
@@ -94,7 +146,7 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
             else:
                 skipped += 1
         else:
-            product = Product(
+            db.add(Product(
                 sunsky_id=sunsky_id,
                 sku=p["sku"],
                 name=p["name"],
@@ -106,8 +158,7 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
                 raw_data=raw_data,
                 status=ProductStatus.pending,
                 fetch_job_id=job.id,
-            )
-            db.add(product)
+            ))
             saved += 1
 
     job.status = JobStatus.completed

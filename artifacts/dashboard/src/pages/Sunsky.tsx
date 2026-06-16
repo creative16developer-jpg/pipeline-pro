@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { CloudDownload, Info, Search, ChevronRight, Upload, Trash2, FileText, CheckCircle2 } from "lucide-react";
+import { CloudDownload, Info, Search, ChevronRight, Upload, Trash2, FileText, CheckCircle2, Hash, Tag } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 type Category = { id: string; name: string };
@@ -42,6 +42,7 @@ export default function Sunsky() {
   const [parentId, setParentId] = useState("");
   const [childId, setChildId] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [skus, setSkus] = useState("");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(50);
   const [lastResult, setLastResult] = useState<any>(null);
@@ -122,7 +123,8 @@ export default function Sunsky() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           category_id: effectiveCategoryId || undefined,
-          keyword: keyword || undefined,
+          keyword: keyword.trim() || undefined,
+          skus: skus.trim() || undefined,
           page,
           limit,
           store_id: storeId ? parseInt(storeId) : undefined,
@@ -350,57 +352,107 @@ export default function Sunsky() {
               </select>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Parent Category</label>
-                <select
-                  value={parentId}
-                  onChange={(e) => handleParentChange(e.target.value)}
-                  className={inputClass}
-                  disabled={parentLoading}
-                >
-                  <option value="">{parentLoading ? "Loading…" : "— All Categories —"}</option>
-                  {parentCats.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            {/* ── Criteria note ─────────────────────────────────────── */}
+            <p className="text-xs text-muted-foreground -mt-2">
+              Fill one or more criteria below. All active criteria are searched in parallel and results are merged (OR logic).
+            </p>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground flex items-center gap-1">
-                  <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
-                  Sub-Category
-                  {childLoading && (
-                    <span className="ml-2 w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin inline-block" />
-                  )}
+            {/* ── Criteria block: Category ───────────────────────── */}
+            <div className="rounded-xl border border-border/60 bg-secondary/20 p-4 space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <ChevronRight className="w-3.5 h-3.5" /> Category
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground">Parent Category</label>
+                  <select
+                    value={parentId}
+                    onChange={(e) => handleParentChange(e.target.value)}
+                    className={inputClass}
+                    disabled={parentLoading}
+                  >
+                    <option value="">{parentLoading ? "Loading…" : "— All Categories —"}</option>
+                    {parentCats.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs text-muted-foreground flex items-center gap-1">
+                    Sub-Category
+                    {childLoading && (
+                      <span className="w-3 h-3 border-2 border-primary border-t-transparent rounded-full animate-spin inline-block" />
+                    )}
+                  </label>
+                  <select
+                    value={childId}
+                    onChange={(e) => setChildId(e.target.value)}
+                    className={inputClass}
+                    disabled={!parentId || childLoading || childCats.length === 0}
+                  >
+                    <option value="">
+                      {!parentId ? "Select parent first" : childLoading ? "Loading…" : childCats.length === 0 ? "No sub-categories" : "— All in parent —"}
+                    </option>
+                    {childCats.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              {effectiveCategoryId && (
+                <p className="text-xs text-muted-foreground">
+                  Category ID: <span className="font-mono text-primary">{effectiveCategoryId}</span>
+                </p>
+              )}
+            </div>
+
+            {/* ── OR divider ─────────────────────────────────────── */}
+            <div className="flex items-center gap-3">
+              <div className="flex-1 border-t border-border/50" />
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-primary/10 text-primary border border-primary/20">OR</span>
+              <div className="flex-1 border-t border-border/50" />
+            </div>
+
+            {/* ── Criteria block: SKU / SPU ──────────────────────── */}
+            <div className="rounded-xl border border-border/60 bg-secondary/20 p-4 space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Hash className="w-3.5 h-3.5" /> SKU / SPU Numbers
+              </p>
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">
+                  Paste comma-separated Sunsky SPU / item numbers
                 </label>
-                <select
-                  value={childId}
-                  onChange={(e) => setChildId(e.target.value)}
-                  className={inputClass}
-                  disabled={!parentId || childLoading || childCats.length === 0}
-                >
-                  <option value="">
-                    {!parentId
-                      ? "Select parent first"
-                      : childLoading
-                      ? "Loading…"
-                      : childCats.length === 0
-                      ? "No sub-categories"
-                      : "— All in parent —"}
-                  </option>
-                  {childCats.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                <textarea
+                  value={skus}
+                  onChange={(e) => setSkus(e.target.value)}
+                  placeholder={"SPU-12345, SPU-67890, SPU-11111"}
+                  rows={3}
+                  className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all text-sm font-mono resize-none"
+                />
+                {skus.trim() && (
+                  <p className="text-xs text-muted-foreground">
+                    {skus.split(",").filter((s) => s.trim()).length} SKU
+                    {skus.split(",").filter((s) => s.trim()).length !== 1 ? "s" : ""} — each fetched individually via{" "}
+                    <span className="font-mono">product!detail.do</span>
+                  </p>
+                )}
               </div>
+            </div>
 
-              <div className="space-y-2 sm:col-span-2">
-                <label className="text-sm font-medium text-foreground">Keyword Filter</label>
+            {/* ── OR divider ─────────────────────────────────────── */}
+            <div className="flex items-center gap-3">
+              <div className="flex-1 border-t border-border/50" />
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-primary/10 text-primary border border-primary/20">OR</span>
+              <div className="flex-1 border-t border-border/50" />
+            </div>
+
+            {/* ── Criteria block: Keyword ────────────────────────── */}
+            <div className="rounded-xl border border-border/60 bg-secondary/20 p-4 space-y-3">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5" /> Keyword
+              </p>
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">Search Sunsky catalog by keyword</label>
                 <div className="relative">
                   <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                   <input
@@ -412,9 +464,12 @@ export default function Sunsky() {
                   />
                 </div>
               </div>
+            </div>
 
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">API Page</label>
+            {/* ── Pagination ────────────────────────────────────── */}
+            <div className="grid grid-cols-2 gap-4 pt-1">
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">API Page <span className="text-muted-foreground/60">(category &amp; keyword)</span></label>
                 <input
                   type="number"
                   min="1"
@@ -423,9 +478,8 @@ export default function Sunsky() {
                   className={inputClass}
                 />
               </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">Items per Page</label>
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">Items per Page</label>
                 <input
                   type="number"
                   min="1"
@@ -435,11 +489,6 @@ export default function Sunsky() {
                   className={inputClass}
                 />
               </div>
-            </div>
-
-            <div className="text-xs text-muted-foreground">
-              Selected category:{" "}
-              <span className="font-mono text-primary">{effectiveCategoryId || "all"}</span>
             </div>
 
             <div className="pt-2">
@@ -467,9 +516,16 @@ export default function Sunsky() {
             <ol className="text-sm text-muted-foreground leading-relaxed space-y-2 list-decimal list-inside">
               <li>Upload CSV mappings (optional)</li>
               <li>Optionally pick a target store</li>
-              <li>Pick a parent category</li>
-              <li>Optionally pick a sub-category</li>
-              <li>Fetch with page/limit</li>
+              <li>Fill <strong className="text-foreground">one or more</strong> criteria:</li>
+            </ol>
+            <ul className="text-sm text-muted-foreground ml-5 mt-1 space-y-1 list-disc">
+              <li><span className="text-foreground font-medium">Category</span> — browse parent → sub</li>
+              <li><span className="text-foreground font-medium">SKU / SPU</span> — paste comma-separated item numbers</li>
+              <li><span className="text-foreground font-medium">Keyword</span> — free-text search</li>
+            </ul>
+            <ol className="text-sm text-muted-foreground leading-relaxed space-y-2 list-decimal list-inside mt-2" start={4}>
+              <li>All active criteria run in parallel (OR logic) — results are merged &amp; deduplicated</li>
+              <li>Set page &amp; limit for category/keyword results</li>
             </ol>
           </div>
 

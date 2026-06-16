@@ -257,6 +257,21 @@ async def _post_binary(endpoint: str, params: dict) -> Optional[bytes]:
         return resp.content
 
 
+async def get_products_by_spus(spus: list[str]) -> list[dict]:
+    """
+    Fetch multiple products by SPU / itemNo in parallel using product!detail.do.
+    Returns a flat list of normalised product dicts (skips any that 404 or error).
+    """
+    import asyncio
+
+    clean = [s.strip() for s in spus if s.strip()]
+    if not clean:
+        return []
+    tasks = [get_product_detail(spu) for spu in clean]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [r for r in results if isinstance(r, dict)]
+
+
 async def get_product_detail(item_no: str) -> Optional[dict]:
     """
     Fetch full product information using the correct endpoint:

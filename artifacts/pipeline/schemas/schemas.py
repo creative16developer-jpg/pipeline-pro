@@ -176,6 +176,7 @@ class DashboardStats(BaseModel):
 class SunskyFetchRequest(BaseModel):
     category_id: Optional[str] = None
     keyword: Optional[str] = None
+    skus: Optional[str] = None          # comma-separated SPU / itemNo values
     page: int = 1
     limit: int = 50
     store_id: Optional[int] = None
