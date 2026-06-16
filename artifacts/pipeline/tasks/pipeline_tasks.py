@@ -519,6 +519,191 @@ async def _enrich_resume_pipeline(pipeline_job_id: int):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Continue execution from a specific step (cancelled/failed pipeline)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _continue_pipeline(pipeline_job_id: int, from_step: str):
+    """Re-execute a cancelled/failed pipeline in-place from a specific step."""
+    from database import make_session_factory
+    from models.models import PipelineJob, Job, JobType, JobStatus
+    from sqlalchemy import select
+
+    STEP_ORDER = ["process", "enrich", "generate", "review", "upload", "sync"]
+    try:
+        from_idx = STEP_ORDER.index(from_step)
+    except ValueError:
+        from_idx = 0
+
+    CelerySession, celery_engine = make_session_factory()
+    try:
+        async with CelerySession() as db:
+            pl = await db.get(PipelineJob, pipeline_job_id)
+            if not pl or pl.status != "running":
+                return
+
+            cfg = pl.config or {}
+            force_rerun = cfg.get("force_rerun", False)
+            await _plog(db, pl.id, None, "info",
+                        f"{_make_pl_id(pl.id)} continuing from step '{from_step}'")
+
+            try:
+                process_job = None
+
+                # ── Process ────────────────────────────────────────────────
+                if from_idx == 0:
+                    pl.current_step = "process"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    from tasks.job_tasks import _run_process  # noqa
+                    process_job = Job(
+                        type=JobType.process,
+                        status=JobStatus.pending,
+                        store_id=pl.store_id,
+                        config={**cfg.get("process_config", {}), "force_rerun": force_rerun},
+                        source_job_id=pl.fetch_job_id,
+                        pipeline_job_id=pl.id,
+                        started_at=datetime.now(timezone.utc),
+                    )
+                    db.add(process_job)
+                    await db.commit()
+                    await db.refresh(process_job)
+                    await _plog(db, pl.id, "process", "info", f"Process job #{process_job.id} created")
+                    await _run_step(db, pl.id, "process", process_job, _run_process)
+                    if await _is_cancelled(db, pl.id):
+                        return
+                else:
+                    # Locate the most recent process job from this pipeline
+                    process_job = (await db.execute(
+                        select(Job).where(
+                            Job.pipeline_job_id == pl.id,
+                            Job.type == JobType.process,
+                        ).order_by(Job.id.desc()).limit(1)
+                    )).scalar_one_or_none()
+
+                # ── Enrich (optional) ──────────────────────────────────────
+                include_enrich = cfg.get("include_enrich", False)
+                if from_idx <= 1 and include_enrich:
+                    pl.current_step = "enrich"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _plog(db, pl.id, "enrich", "info",
+                                "Enrich step: AI attribute extraction starting…")
+                    enrich_count = await _run_enrich_extraction(db, pl, cfg)
+                    await _plog(db, pl.id, "enrich", "info",
+                                f"Attribute extraction complete — {enrich_count} attrs extracted. "
+                                f"Pausing for review.")
+                    pl.status = "enrich_review"
+                    pl.current_step = "enrich"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    return  # Resumed by enrich confirm
+
+                # ── Generate (optional) ────────────────────────────────────
+                include_generate = cfg.get("include_generate", False)
+                if from_idx <= 2 and include_generate:
+                    pl.current_step = "generate"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _plog(db, pl.id, "generate", "info", "Content generation starting…")
+                    stats = await _run_generate(db, pl, cfg)
+                    pl.stats_json = stats
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    if await _is_cancelled(db, pl.id):
+                        return
+                elif from_idx <= 2:
+                    if process_job:
+                        pl.stats_json = {
+                            "total":    process_job.total_items,
+                            "ok":       (process_job.processed_items - process_job.failed_items),
+                            "fallback": 0,
+                            "failed":   process_job.failed_items,
+                            "note":     "Content generation skipped",
+                        }
+                        pl.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+
+                # ── Review pause (if we haven't reached upload yet) ────────
+                if from_idx < 4:
+                    pl.status = "review"
+                    pl.current_step = "review"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    stats = pl.stats_json or {}
+                    await _plog(db, pl.id, "review", "info",
+                        f"Pipeline paused for review — "
+                        f"{stats.get('total', 0)} total | "
+                        f"{stats.get('ok', 0)} OK | "
+                        f"{stats.get('fallback', 0)} fallback | "
+                        f"{stats.get('failed', 0)} failed. "
+                        f"Confirm category mapping and click Resume.")
+                    return  # Resumed by _resume_pipeline after user confirms
+
+                # ── Upload ────────────────────────────────────────────────
+                source_for_upload = process_job.id if process_job else pl.fetch_job_id
+                pl.current_step = "upload"
+                pl.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                from tasks.job_tasks import _run_upload  # noqa
+                upload_job = Job(
+                    type=JobType.upload,
+                    status=JobStatus.pending,
+                    store_id=pl.store_id,
+                    config={**cfg.get("upload_config", {}), "force_rerun": force_rerun},
+                    source_job_id=source_for_upload,
+                    pipeline_job_id=pl.id,
+                    started_at=datetime.now(timezone.utc),
+                )
+                db.add(upload_job)
+                await db.commit()
+                await db.refresh(upload_job)
+                await _plog(db, pl.id, "upload", "info",
+                            f"Upload job #{upload_job.id} created (source: #{source_for_upload})")
+                await _run_step(db, pl.id, "upload", upload_job, _run_upload)
+                if await _is_cancelled(db, pl.id):
+                    return
+
+                # ── Sync ──────────────────────────────────────────────────
+                pl.current_step = "sync"
+                pl.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                from tasks.job_tasks import _run_sync  # noqa
+                sync_job = Job(
+                    type=JobType.sync,
+                    status=JobStatus.pending,
+                    store_id=pl.store_id,
+                    config={**cfg.get("sync_config", {}), "force_rerun": force_rerun},
+                    source_job_id=upload_job.id,
+                    pipeline_job_id=pl.id,
+                    started_at=datetime.now(timezone.utc),
+                )
+                db.add(sync_job)
+                await db.commit()
+                await db.refresh(sync_job)
+                await _plog(db, pl.id, "sync", "info", f"Sync job #{sync_job.id} created")
+                await _run_step(db, pl.id, "sync", sync_job, _run_sync)
+
+                # ── Complete ─────────────────────────────────────────────
+                pl.status = "completed"
+                pl.current_step = None
+                pl.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                await _plog(db, pl.id, None, "info",
+                            f"{_make_pl_id(pl.id)} completed successfully!")
+
+            except Exception as e:
+                pl.status = "failed"
+                pl.error_message = str(e)
+                pl.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                await _plog(db, pl.id, pl.current_step or "continue", "error",
+                            f"Pipeline failed during continue: {e}")
+                await _advance_queue(db, pl.store_id, pl.id)
+    finally:
+        await celery_engine.dispose()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Phase 2 execution (resume from Review): Upload → Sync
 # ─────────────────────────────────────────────────────────────────────────────
 

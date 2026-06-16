@@ -269,7 +269,7 @@ function WooCatTree({ tree, selected, primaryId, onToggle, onSetPrimary }: {
           {isChecked && !isPrimary && (
             <button
               onClick={() => onSetPrimary(node.opt.id)}
-              className="text-[10px] text-muted-foreground hover:text-emerald-400 opacity-0 group-hover:opacity-100 px-1 shrink-0 transition-opacity"
+              className="text-[10px] text-blue-400/70 hover:text-emerald-400 px-1 shrink-0 transition-colors"
             >
               Set primary
             </button>
@@ -1358,14 +1358,31 @@ function PipelineRow({
               </button>
             )}
 
-            {/* Retry (failed | cancelled) */}
+            {/* Continue / Retry (failed | cancelled) */}
             {["failed", "cancelled"].includes(pl.status) && (
-              <button
-                onClick={() => onAction("retry", pl.id)}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" /> Retry
-              </button>
+              <>
+                <button
+                  onClick={() => onAction("continue", pl.id)}
+                  title={
+                    pl.current_step === "review" ? "Return to Category Mapping review" :
+                    pl.current_step === "enrich" ? "Return to Attribute review" :
+                    `Resume from ${pl.current_step ?? "last"} step — keeps same pipeline ID`
+                  }
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-colors"
+                >
+                  <Play className="w-3 h-3 fill-current" />
+                  {pl.current_step === "review" ? "Back to Review" :
+                   pl.current_step === "enrich"  ? "Back to Review" :
+                   "Continue"}
+                </button>
+                <button
+                  onClick={() => onAction("retry", pl.id)}
+                  title="Start a brand-new pipeline from the beginning"
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <RotateCcw className="w-3 h-3" /> Retry
+                </button>
+              </>
             )}
           </div>
         </td>
@@ -1498,7 +1515,16 @@ export default function Pipelines() {
       if (!r.ok) throw new Error(await r.text());
       if (action === "retry") {
         const d = await r.json();
-        toast({ title: "Retry started", description: `New pipeline ${d.pl_id} created` });
+        toast({ title: "Retry started", description: `New pipeline ${d.pl_id} created from scratch` });
+      } else if (action === "continue") {
+        const d = await r.json();
+        const step = d.current_step ?? d.status;
+        const desc =
+          d.status === "review"        ? "Returned to category mapping review" :
+          d.status === "enrich_review" ? "Returned to attribute review" :
+          d.status === "queued"        ? "Queued — will continue when slot is free" :
+          `Continuing from '${step}' step`;
+        toast({ title: `${d.pl_id} continuing`, description: desc });
       } else if (action === "resume") {
         toast({ title: "Pipeline resumed", description: "Upload step is starting…" });
       } else if (action === "cancel") {

@@ -232,6 +232,56 @@ async def cancel_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
 
 # ── Retry (creates a fresh run with same config) ──────────────────────────────
 
+@router.post("/{pl_id}/continue")
+async def continue_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
+    """Resume a cancelled/failed pipeline in-place from the step it was on."""
+    pl = await db.get(PipelineJob, pl_id)
+    if not pl:
+        raise HTTPException(404, f"Pipeline #{pl_id} not found")
+    if pl.status not in ("failed", "cancelled"):
+        raise HTTPException(400, "Only failed or cancelled pipelines can be continued")
+
+    current_step = pl.current_step or "process"
+
+    # Review / enrich states — just flip status back so the review UI reappears
+    if current_step == "review":
+        pl.status = "review"
+        pl.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        return _pl_dict(pl)
+
+    if current_step == "enrich":
+        pl.status = "enrich_review"
+        pl.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        return _pl_dict(pl)
+
+    # All other steps — re-execute in-place from current_step
+    active = (
+        await db.execute(
+            select(PipelineJob)
+            .where(
+                PipelineJob.store_id == pl.store_id,
+                PipelineJob.status.in_(list(ACTIVE_STATUSES)),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if active:
+        pl.status = "queued"
+    else:
+        pl.status = "running"
+    pl.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    if pl.status == "running":
+        from tasks.pipeline_tasks import _continue_pipeline
+        asyncio.create_task(_continue_pipeline(pl.id, current_step))
+
+    return _pl_dict(pl)
+
+
 @router.post("/{pl_id}/retry")
 async def retry_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
     pl = await db.get(PipelineJob, pl_id)
