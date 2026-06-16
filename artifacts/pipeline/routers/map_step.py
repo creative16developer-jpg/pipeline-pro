@@ -16,7 +16,10 @@ import json
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import csv
+import io
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -331,6 +334,136 @@ async def update_category_mappings(
         await db.execute(stmt)
     await db.commit()
     return {"ok": True, "saved": len(entries)}
+
+
+@router.post("/stores/{store_id}/category-mappings/import")
+async def import_category_mappings_file(
+    store_id: int,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Import category mappings from an Excel (.xlsx) or CSV file.
+
+    Required columns (case-insensitive header matching):
+      - "Sunsky Category"  — the Sunsky category ID or name
+      - "Woo Category"     — the WooCommerce category name (must already be synced)
+
+    Multiple Woo categories per Sunsky category can be specified by repeating
+    the Sunsky Category value on consecutive rows — all rows for the same
+    Sunsky category are merged into a single multi-category mapping.
+    """
+    content = await file.read()
+    filename = (file.filename or "").lower()
+
+    # ── Parse rows from file ─────────────────────────────────────────────────
+    raw_rows: list[tuple[str, str]] = []   # (sunsky_cat, woo_name)
+    parse_error: Optional[str] = None
+
+    if filename.endswith(".xlsx") or filename.endswith(".xls"):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            ws = wb.active
+            headers = [str(cell.value or "").strip().lower() for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+            sunsky_col = next((i for i, h in enumerate(headers) if "sunsky" in h), None)
+            woo_col    = next((i for i, h in enumerate(headers) if "woo" in h), None)
+            if sunsky_col is None or woo_col is None:
+                parse_error = "Excel must have columns 'Sunsky Category' and 'Woo Category'"
+            else:
+                for row in ws.iter_rows(min_row=2, values_only=True):
+                    s = str(row[sunsky_col] or "").strip()
+                    w = str(row[woo_col]    or "").strip()
+                    if s and w:
+                        raw_rows.append((s, w))
+        except Exception as exc:
+            parse_error = f"Could not read Excel file: {exc}"
+    elif filename.endswith(".csv"):
+        try:
+            reader = csv.reader(io.StringIO(content.decode("utf-8-sig")))
+            headers = [h.strip().lower() for h in next(reader, [])]
+            sunsky_col = next((i for i, h in enumerate(headers) if "sunsky" in h), None)
+            woo_col    = next((i for i, h in enumerate(headers) if "woo" in h), None)
+            if sunsky_col is None or woo_col is None:
+                parse_error = "CSV must have columns 'Sunsky Category' and 'Woo Category'"
+            else:
+                for row in reader:
+                    if len(row) > max(sunsky_col, woo_col):
+                        s = row[sunsky_col].strip()
+                        w = row[woo_col].strip()
+                        if s and w:
+                            raw_rows.append((s, w))
+        except Exception as exc:
+            parse_error = f"Could not read CSV file: {exc}"
+    else:
+        parse_error = "Unsupported file type — upload .xlsx or .csv"
+
+    if parse_error:
+        raise HTTPException(400, parse_error)
+
+    if not raw_rows:
+        raise HTTPException(400, "No data rows found in the file")
+
+    # ── Load WooCommerce categories for matching ──────────────────────────────
+    woo_cats = (
+        await db.execute(select(WooCategory).where(WooCategory.store_id == store_id))
+    ).scalars().all()
+    woo_by_name: dict[str, WooCategory] = {c.name.strip().lower(): c for c in woo_cats}
+
+    # ── Group rows by Sunsky category (support multi-Woo-cat per Sunsky cat) ─
+    from collections import OrderedDict
+    grouped: dict[str, list[WooCategory]] = OrderedDict()
+    skipped: list[str] = []
+
+    for sunsky_cat, woo_name in raw_rows:
+        woo_cat = woo_by_name.get(woo_name.strip().lower())
+        if not woo_cat:
+            skipped.append(f"Row skipped — Woo category '{woo_name}' not found for Sunsky '{sunsky_cat}'")
+            continue
+        if sunsky_cat not in grouped:
+            grouped[sunsky_cat] = []
+        # Avoid duplicate Woo cats for the same Sunsky cat
+        if not any(c.woo_id == woo_cat.woo_id for c in grouped[sunsky_cat]):
+            grouped[sunsky_cat].append(woo_cat)
+
+    # ── Upsert mappings ───────────────────────────────────────────────────────
+    imported = 0
+    for sunsky_cat, woo_cat_list in grouped.items():
+        primary_cat = woo_cat_list[0]
+        cats_json = json.dumps([{"id": c.woo_id, "name": c.name} for c in woo_cat_list])
+        stmt = (
+            pg_insert(SunskyCategoryMapping)
+            .values(
+                store_id=store_id,
+                sunsky_cat=sunsky_cat,
+                woo_cat_id=primary_cat.woo_id,
+                woo_cat_name=primary_cat.name,
+                woo_cats_json=cats_json,
+                primary_woo_cat_id=primary_cat.woo_id,
+                times_used=0,
+                updated_at=datetime.now(timezone.utc),
+            )
+            .on_conflict_do_update(
+                index_elements=["store_id", "sunsky_cat"],
+                set_={
+                    "woo_cat_id":         primary_cat.woo_id,
+                    "woo_cat_name":       primary_cat.name,
+                    "woo_cats_json":      cats_json,
+                    "primary_woo_cat_id": primary_cat.woo_id,
+                    "updated_at":         datetime.now(timezone.utc),
+                },
+            )
+        )
+        await db.execute(stmt)
+        imported += 1
+
+    await db.commit()
+    return {
+        "ok":         True,
+        "imported":   imported,
+        "skipped":    skipped,
+        "total_rows": len(raw_rows),
+    }
 
 
 @router.delete("/stores/{store_id}/category-mappings/{mapping_id}")

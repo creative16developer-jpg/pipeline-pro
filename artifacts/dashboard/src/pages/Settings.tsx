@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Settings as SettingsIcon, Key, Eye, EyeOff, CheckCircle2,
   XCircle, Save, Trash2, Loader2, Info, Sparkles, ExternalLink,
-  RefreshCw, Tag, Search, ChevronDown, ChevronRight, Edit2, X, Plus
+  RefreshCw, Tag, Search, ChevronDown, ChevronRight, Edit2, X, Plus,
+  Upload, FileSpreadsheet, AlertCircle
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -101,6 +102,18 @@ function MiniCatTree({ tree, selected, primaryId, onToggle, onSetPrimary }: {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const selIds = useMemo(() => new Set(selected.map(c => c.id)), [selected]);
 
+  // Auto-expand all parent nodes whenever the tree changes
+  useEffect(() => {
+    const ids = new Set<number>();
+    function collect(nodes: TreeNode[]) {
+      for (const n of nodes) {
+        if (n.children.length > 0) { ids.add(n.opt.id); collect(n.children); }
+      }
+    }
+    collect(tree);
+    setExpanded(ids);
+  }, [tree]);
+
   function renderNode(node: TreeNode): React.ReactNode {
     const checked = selIds.has(node.opt.id);
     const isPrimary = node.opt.id === primaryId;
@@ -128,7 +141,7 @@ function MiniCatTree({ tree, selected, primaryId, onToggle, onSetPrimary }: {
             {node.opt.name}
           </span>
           {checked && !isPrimary && (
-            <button onClick={() => onSetPrimary(node.opt.id)} className="text-[10px] text-muted-foreground hover:text-emerald-400 opacity-0 group-hover:opacity-100 px-1 shrink-0">Set primary</button>
+            <button onClick={() => onSetPrimary(node.opt.id)} className="text-[10px] text-blue-400/70 hover:text-emerald-400 px-1 shrink-0 transition-colors">Set primary</button>
           )}
           {checked && isPrimary && <span className="text-[10px] text-emerald-400 shrink-0 px-1">Primary</span>}
         </div>
@@ -174,6 +187,11 @@ function CategoryMappingDictionary() {
   const [newSunskyCat, setNewSunskyCat] = useState("");
   const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null }>({ woo_cats: [], primary_id: null });
 
+  // Import Mapping state
+  const importRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ imported: number; skipped: string[] } | null>(null);
+
   const wooTree = useMemo(() => buildTree(wooOpts), [wooOpts]);
 
   useEffect(() => {
@@ -211,6 +229,33 @@ function CategoryMappingDictionary() {
       .then(d => setMappings(d.mappings ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
+  };
+
+  const handleImport = async (file: File) => {
+    if (!storeId || !file) return;
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const r = await fetch(`/api/stores/${storeId}/category-mappings/import`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.detail || `Import failed (${r.status})`);
+      setImportResult({ imported: data.imported, skipped: data.skipped ?? [] });
+      toast({
+        title: "Import complete",
+        description: `${data.imported} mapping${data.imported !== 1 ? "s" : ""} imported${data.skipped?.length ? `, ${data.skipped.length} rows skipped` : ""}`,
+      });
+      reload();
+    } catch (e: any) {
+      toast({ title: "Import failed", description: e.message, variant: "destructive" });
+    } finally {
+      setImporting(false);
+      if (importRef.current) importRef.current.value = "";
+    }
   };
 
   const startEdit = (m: CatMapping) => {
@@ -315,17 +360,24 @@ function CategoryMappingDictionary() {
 
   return (
     <div className="space-y-4">
-      {/* Store selector + search */}
+      {/* Hidden file input for import */}
+      <input
+        ref={importRef}
+        type="file"
+        accept=".xlsx,.xls,.csv"
+        className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) handleImport(f); }}
+      />
+
+      {/* Store selector + search + actions */}
       <div className="flex flex-col sm:flex-row gap-3">
-        {stores.length > 1 && (
-          <select
-            value={storeId ?? ""}
-            onChange={e => setStoreId(Number(e.target.value))}
-            className="bg-background border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-primary w-full sm:w-56"
-          >
-            {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        )}
+        <select
+          value={storeId ?? ""}
+          onChange={e => setStoreId(Number(e.target.value))}
+          className="bg-background border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-primary w-full sm:w-56 shrink-0"
+        >
+          {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <input
@@ -336,8 +388,17 @@ function CategoryMappingDictionary() {
             className="w-full bg-background border border-border rounded-xl pl-10 pr-4 py-2 text-sm focus:outline-none focus:border-primary"
           />
         </div>
-        <button onClick={reload} disabled={loading} className="p-2 rounded-xl border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+        <button onClick={reload} disabled={loading} className="p-2 rounded-xl border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors" title="Refresh">
           <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+        </button>
+        <button
+          onClick={() => importRef.current?.click()}
+          disabled={importing || !storeId}
+          title="Import mappings from Excel or CSV"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border bg-secondary/50 hover:bg-secondary text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50 shrink-0 transition-colors"
+        >
+          {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+          Import
         </button>
         <button
           onClick={() => { setAddingNew(true); setNewSunskyCat(""); setNewSel({ woo_cats: [], primary_id: null }); }}
@@ -347,6 +408,27 @@ function CategoryMappingDictionary() {
           <Plus className="w-4 h-4" /> Add Mapping
         </button>
       </div>
+
+      {/* Import result banner */}
+      {importResult && (
+        <div className="rounded-xl border border-border/60 bg-secondary/30 p-3 space-y-1.5">
+          <div className="flex items-center gap-2 text-sm">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span className="font-medium text-emerald-400">{importResult.imported} mapping{importResult.imported !== 1 ? "s" : ""} imported</span>
+            {importResult.skipped.length > 0 && (
+              <span className="text-amber-400 text-xs">· {importResult.skipped.length} rows skipped</span>
+            )}
+            <button onClick={() => setImportResult(null)} className="ml-auto text-muted-foreground hover:text-foreground"><X className="w-3.5 h-3.5" /></button>
+          </div>
+          {importResult.skipped.length > 0 && (
+            <ul className="text-xs text-muted-foreground pl-6 space-y-0.5 max-h-28 overflow-y-auto">
+              {importResult.skipped.map((s, i) => (
+                <li key={i} className="flex items-start gap-1"><AlertCircle className="w-3 h-3 text-amber-400 shrink-0 mt-0.5" />{s}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Inline "Add new mapping" form */}
       {addingNew && (
