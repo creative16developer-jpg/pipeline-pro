@@ -215,7 +215,11 @@ function CategoryMappingDictionary() {
       .then(([mapData, catData]) => {
         setMappings(mapData.mappings ?? []);
         const cats = Array.isArray(catData) ? catData : (catData.categories ?? []);
-        setWooOpts(cats.map((c: any) => ({ id: c.woo_id ?? c.id, name: c.name, parent_id: c.parent_id ?? 0 })));
+        setWooOpts(cats.map((c: any) => ({
+          id: c.wooId ?? c.woo_id ?? c.id,
+          name: c.name,
+          parent_id: c.parentId ?? c.parent_id ?? 0,
+        })));
       })
       .catch(() => toast({ title: "Failed to load mappings", variant: "destructive" }))
       .finally(() => setLoading(false));
