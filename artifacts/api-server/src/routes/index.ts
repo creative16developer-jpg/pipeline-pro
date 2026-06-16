@@ -9,6 +9,7 @@ import pipelinesRouter from "./pipelines";
 import csvRouter from "./csv";
 import generateRouter from "./generate";
 import settingsRouter from "./settings";
+import { attrRulesRouter, attrProfilesRouter } from "./attr-proxy";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,7 @@ router.use("/pipelines", pipelinesRouter);
 router.use("/csv", csvRouter);
 router.use("/generate", generateRouter);
 router.use("/settings", settingsRouter);
+router.use("/attr-rules", attrRulesRouter);
+router.use("/attr-profiles", attrProfilesRouter);
 
 export default router;

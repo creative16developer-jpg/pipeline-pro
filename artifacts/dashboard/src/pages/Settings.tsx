@@ -646,12 +646,735 @@ function CategoryMappingDictionary() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// AI Extraction Rules tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ExtractionRule {
+  id: number;
+  woo_attr_name: string;
+  source_fields: string;
+  instruction: string;
+  confidence_threshold: number;
+  if_not_found: string;
+  default_value: string | null;
+  sort_order: number;
+}
+
+const SOURCE_OPTS = [
+  { value: "both",  label: "Title + Specs" },
+  { value: "title", label: "Title only" },
+  { value: "specs", label: "Specs only" },
+];
+const IF_NOT_FOUND_OPTS = [
+  { value: "flag",        label: "Flag for review" },
+  { value: "leave_blank", label: "Leave blank" },
+  { value: "use_default", label: "Use default value" },
+];
+
+function AIExtractionRulesTab() {
+  const { toast } = useToast();
+  const [rules, setRules] = useState<ExtractionRule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<number | "new" | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<number | null>(null);
+
+  const emptyForm = (): Omit<ExtractionRule, "id"> => ({
+    woo_attr_name: "",
+    source_fields: "both",
+    instruction: "",
+    confidence_threshold: 0.7,
+    if_not_found: "flag",
+    default_value: null,
+    sort_order: 0,
+  });
+  const [form, setForm] = useState(emptyForm());
+
+  const load = () => {
+    setLoading(true);
+    fetch("/api/attr-rules")
+      .then(r => r.json())
+      .then(d => setRules(d.rules ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const startNew = () => { setForm(emptyForm()); setEditingId("new"); };
+  const startEdit = (r: ExtractionRule) => {
+    setForm({
+      woo_attr_name: r.woo_attr_name,
+      source_fields: r.source_fields,
+      instruction: r.instruction,
+      confidence_threshold: r.confidence_threshold,
+      if_not_found: r.if_not_found,
+      default_value: r.default_value,
+      sort_order: r.sort_order,
+    });
+    setEditingId(r.id);
+  };
+
+  const handleSave = async () => {
+    if (!form.woo_attr_name.trim()) return;
+    setSaving(true);
+    try {
+      const isNew = editingId === "new";
+      const url = isNew ? "/api/attr-rules" : `/api/attr-rules/${editingId}`;
+      const r = await fetch(url, {
+        method: isNew ? "POST" : "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "Save failed"); }
+      toast({ title: isNew ? "Rule created" : "Rule updated" });
+      setEditingId(null);
+      load();
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    setDeleting(id);
+    try {
+      await fetch(`/api/attr-rules/${id}`, { method: "DELETE" });
+      toast({ title: "Rule deleted" });
+      setRules(prev => prev.filter(r => r.id !== id));
+    } catch {
+      toast({ title: "Delete failed", variant: "destructive" });
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  const RuleForm = () => (
+    <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold text-foreground">
+          {editingId === "new" ? "New Extraction Rule" : "Edit Rule"}
+        </span>
+        <button onClick={() => setEditingId(null)} className="text-muted-foreground hover:text-foreground">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="col-span-2 space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">WooCommerce Attribute Name *</label>
+          <input
+            type="text"
+            placeholder="e.g. Color, Brand, Material"
+            value={form.woo_attr_name}
+            onChange={e => setForm(f => ({ ...f, woo_attr_name: e.target.value }))}
+            className={inputCls}
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">Source Fields</label>
+          <select
+            value={form.source_fields}
+            onChange={e => setForm(f => ({ ...f, source_fields: e.target.value }))}
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+          >
+            {SOURCE_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">If Not Found</label>
+          <select
+            value={form.if_not_found}
+            onChange={e => setForm(f => ({ ...f, if_not_found: e.target.value }))}
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+          >
+            {IF_NOT_FOUND_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+
+        <div className="col-span-2 space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">AI Instruction</label>
+          <textarea
+            rows={2}
+            placeholder="Natural-language guidance for the AI, e.g. 'Extract the primary color. Ignore background colors.'"
+            value={form.instruction}
+            onChange={e => setForm(f => ({ ...f, instruction: e.target.value }))}
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary resize-none placeholder:text-muted-foreground"
+          />
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">Confidence Threshold (0–1)</label>
+          <input
+            type="number"
+            min={0} max={1} step={0.05}
+            value={form.confidence_threshold}
+            onChange={e => setForm(f => ({ ...f, confidence_threshold: parseFloat(e.target.value) || 0.7 }))}
+            className={inputCls}
+          />
+        </div>
+
+        {form.if_not_found === "use_default" && (
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Default Value</label>
+            <input
+              type="text"
+              placeholder="Fallback value when AI can't find it"
+              value={form.default_value ?? ""}
+              onChange={e => setForm(f => ({ ...f, default_value: e.target.value || null }))}
+              className={inputCls}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          onClick={handleSave}
+          disabled={saving || !form.woo_attr_name.trim()}
+          className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50"
+        >
+          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+          Save Rule
+        </button>
+        <button onClick={() => setEditingId(null)} className="px-4 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground">
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Sparkles className="w-4 h-4 text-violet-400" />
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">AI Extraction Rules</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={load} disabled={loading} className="p-2 rounded-xl border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+          </button>
+          <button
+            onClick={startNew}
+            disabled={editingId !== null}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+          >
+            <Plus className="w-4 h-4" /> Add Rule
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-secondary/40 border border-border/40 text-xs text-muted-foreground">
+        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+        <span>
+          Each rule controls how the AI extracts one WooCommerce attribute. Rules are applied during the <strong className="text-foreground">Enrich</strong> step of every pipeline. If no rules exist, the default attribute list is used.
+        </span>
+      </div>
+
+      {editingId === "new" && <RuleForm />}
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-12 justify-center text-muted-foreground text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading rules…
+        </div>
+      ) : rules.length === 0 && editingId === null ? (
+        <div className="bg-card border border-border/50 rounded-2xl p-8 text-center text-muted-foreground text-sm">
+          No extraction rules yet — click <strong className="text-foreground">Add Rule</strong> to create your first.
+        </div>
+      ) : (
+        <div className="bg-card border border-border/50 rounded-2xl overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/40 border-b border-border/50">
+              <tr>
+                <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Attribute</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Source</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">If Missing</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Threshold</th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-muted-foreground w-24">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/40">
+              {rules.map(r => (
+                <tr key={r.id} className="hover:bg-secondary/10 transition-colors">
+                  {editingId === r.id ? (
+                    <td colSpan={5} className="p-4"><RuleForm /></td>
+                  ) : (
+                    <>
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-foreground text-sm">{r.woo_attr_name}</div>
+                        {r.instruction && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{r.instruction}</div>}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                        {SOURCE_OPTS.find(o => o.value === r.source_fields)?.label ?? r.source_fields}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">
+                        {IF_NOT_FOUND_OPTS.find(o => o.value === r.if_not_found)?.label ?? r.if_not_found}
+                        {r.if_not_found === "use_default" && r.default_value && (
+                          <span className="ml-1 font-mono text-foreground">({r.default_value})</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{(r.confidence_threshold * 100).toFixed(0)}%</td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-2">
+                          <button onClick={() => startEdit(r)} className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors" title="Edit">
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(r.id)}
+                            disabled={deleting === r.id}
+                            className="p-1.5 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                            title="Delete"
+                          >
+                            {deleting === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Attribute Profiles tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface ProfileAttr { woo_attr_name: string; required: boolean; sort_order: number; }
+interface AttrProfile { id: number; name: string; description: string | null; attributes: ProfileAttr[]; }
+
+function AttributeProfilesTab() {
+  const { toast } = useToast();
+  const [profiles, setProfiles] = useState<AttrProfile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<number | "new" | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+
+  const emptyForm = () => ({ name: "", description: "", attributes: [] as ProfileAttr[] });
+  const [form, setForm] = useState(emptyForm());
+  const [newAttrName, setNewAttrName] = useState("");
+
+  const load = () => {
+    setLoading(true);
+    fetch("/api/attr-profiles")
+      .then(r => r.json())
+      .then(d => setProfiles(d.profiles ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const startNew = () => { setForm(emptyForm()); setNewAttrName(""); setEditingId("new"); };
+  const startEdit = (p: AttrProfile) => {
+    setForm({ name: p.name, description: p.description ?? "", attributes: p.attributes.map(a => ({ ...a })) });
+    setNewAttrName("");
+    setEditingId(p.id);
+  };
+
+  const addAttr = () => {
+    const trimmed = newAttrName.trim();
+    if (!trimmed || form.attributes.some(a => a.woo_attr_name.toLowerCase() === trimmed.toLowerCase())) return;
+    setForm(f => ({
+      ...f,
+      attributes: [...f.attributes, { woo_attr_name: trimmed, required: true, sort_order: f.attributes.length }],
+    }));
+    setNewAttrName("");
+  };
+
+  const removeAttr = (name: string) => setForm(f => ({ ...f, attributes: f.attributes.filter(a => a.woo_attr_name !== name) }));
+  const toggleRequired = (name: string) => setForm(f => ({
+    ...f,
+    attributes: f.attributes.map(a => a.woo_attr_name === name ? { ...a, required: !a.required } : a),
+  }));
+
+  const handleSave = async () => {
+    if (!form.name.trim()) return;
+    setSaving(true);
+    try {
+      const isNew = editingId === "new";
+      const url = isNew ? "/api/attr-profiles" : `/api/attr-profiles/${editingId}`;
+      const r = await fetch(url, {
+        method: isNew ? "POST" : "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: form.name.trim(), description: form.description || null, attributes: form.attributes }),
+      });
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "Save failed"); }
+      toast({ title: isNew ? "Profile created" : "Profile updated" });
+      setEditingId(null);
+      load();
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: number) => {
+    setDeleting(id);
+    try {
+      await fetch(`/api/attr-profiles/${id}`, { method: "DELETE" });
+      toast({ title: "Profile deleted" });
+      setProfiles(prev => prev.filter(p => p.id !== id));
+    } catch {
+      toast({ title: "Delete failed", variant: "destructive" });
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  const ProfileForm = () => (
+    <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-semibold">{editingId === "new" ? "New Attribute Profile" : "Edit Profile"}</span>
+        <button onClick={() => setEditingId(null)} className="text-muted-foreground hover:text-foreground"><X className="w-4 h-4" /></button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">Profile Name *</label>
+          <input type="text" placeholder="e.g. Electronics, Clothing" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className={inputCls} />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">Description</label>
+          <input type="text" placeholder="Optional note" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} className={inputCls} />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-xs font-medium text-muted-foreground">Attributes</label>
+        {form.attributes.length > 0 && (
+          <div className="space-y-1.5">
+            {form.attributes.map(a => (
+              <div key={a.woo_attr_name} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/50 border border-border/40">
+                <span className="flex-1 text-sm font-medium text-foreground">{a.woo_attr_name}</span>
+                <button
+                  onClick={() => toggleRequired(a.woo_attr_name)}
+                  className={cn("text-xs px-2 py-0.5 rounded-full border transition-colors",
+                    a.required
+                      ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                      : "bg-secondary text-muted-foreground border-border"
+                  )}
+                >
+                  {a.required ? "Required" : "Optional"}
+                </button>
+                <button onClick={() => removeAttr(a.woo_attr_name)} className="text-muted-foreground hover:text-red-400 p-1">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Add attribute name…"
+            value={newAttrName}
+            onChange={e => setNewAttrName(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && addAttr()}
+            className={inputCls}
+          />
+          <button onClick={addAttr} disabled={!newAttrName.trim()} className="flex items-center gap-1 px-3 py-2 rounded-lg border border-border bg-secondary hover:bg-secondary/80 text-sm disabled:opacity-50">
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <button onClick={handleSave} disabled={saving || !form.name.trim()} className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 disabled:opacity-50">
+          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+          Save Profile
+        </button>
+        <button onClick={() => setEditingId(null)} className="px-4 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground">Cancel</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Tag className="w-4 h-4 text-blue-400" />
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Attribute Profiles</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={load} disabled={loading} className="p-2 rounded-xl border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
+            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+          </button>
+          <button onClick={startNew} disabled={editingId !== null} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50">
+            <Plus className="w-4 h-4" /> New Profile
+          </button>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-secondary/40 border border-border/40 text-xs text-muted-foreground">
+        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+        <span>
+          Profiles define the expected WooCommerce attributes for a product category. Assign a profile to a Sunsky category mapping in the <strong className="text-foreground">Map step</strong> of a pipeline — the AI will extract those attributes for every product in that category.
+        </span>
+      </div>
+
+      {editingId === "new" && <ProfileForm />}
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-12 justify-center text-muted-foreground text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading profiles…
+        </div>
+      ) : profiles.length === 0 && editingId === null ? (
+        <div className="bg-card border border-border/50 rounded-2xl p-8 text-center text-muted-foreground text-sm">
+          No profiles yet — click <strong className="text-foreground">New Profile</strong> to create your first.
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {profiles.map(p => (
+            <div key={p.id}>
+              {editingId === p.id ? (
+                <ProfileForm />
+              ) : (
+                <div className="bg-card border border-border/50 rounded-2xl overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-border/40">
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <button
+                        onClick={() => setExpandedId(expandedId === p.id ? null : p.id)}
+                        className="text-muted-foreground hover:text-foreground shrink-0"
+                      >
+                        {expandedId === p.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                      </button>
+                      <div className="min-w-0">
+                        <span className="font-semibold text-sm text-foreground">{p.name}</span>
+                        {p.description && <span className="ml-2 text-xs text-muted-foreground">{p.description}</span>}
+                      </div>
+                      <span className="ml-auto text-xs text-muted-foreground shrink-0">{p.attributes.length} attr{p.attributes.length !== 1 ? "s" : ""}</span>
+                    </div>
+                    <div className="flex items-center gap-2 ml-4 shrink-0">
+                      <button onClick={() => startEdit(p)} className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors" title="Edit">
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => handleDelete(p.id)} disabled={deleting === p.id} className="p-1.5 rounded-lg text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-50" title="Delete">
+                        {deleting === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+                  {expandedId === p.id && (
+                    <div className="px-4 py-3 flex flex-wrap gap-1.5">
+                      {p.attributes.length === 0 ? (
+                        <span className="text-xs text-muted-foreground italic">No attributes</span>
+                      ) : p.attributes.map(a => (
+                        <span key={a.woo_attr_name} className={cn(
+                          "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border",
+                          a.required
+                            ? "bg-amber-500/10 text-amber-400 border-amber-500/25"
+                            : "bg-secondary text-muted-foreground border-border/50"
+                        )}>
+                          {a.woo_attr_name}
+                          {!a.required && <span className="opacity-60 text-[10px]">opt</span>}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inventory Mapping tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+const NULL_OPTS = [
+  { value: "leave_blank",  label: "Leave blank" },
+  { value: "use_default",  label: "Use default value" },
+  { value: "skip",         label: "Skip product" },
+];
+
+function InventoryMappingTab() {
+  const { toast } = useToast();
+  const [stores, setStores] = useState<any[]>([]);
+  const [storeId, setStoreId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [cfg, setCfg] = useState<any>(null);
+
+  useEffect(() => {
+    fetch("/api/stores")
+      .then(r => r.json())
+      .then(d => {
+        const list = Array.isArray(d) ? d : (d.stores ?? []);
+        setStores(list);
+        if (list.length > 0) setStoreId(list[0].id);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!storeId) return;
+    setLoading(true);
+    fetch(`/api/stores/${storeId}/inventory-mapping`)
+      .then(r => r.json())
+      .then(setCfg)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [storeId]);
+
+  const update = (key: string, val: string | null) => setCfg((c: any) => ({ ...c, [key]: val }));
+
+  const handleSave = async () => {
+    if (!storeId || !cfg) return;
+    setSaving(true);
+    try {
+      const r = await fetch(`/api/stores/${storeId}/inventory-mapping`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cfg),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Inventory mapping saved" });
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const Field = ({ label, fieldKey }: { label: string; fieldKey: string }) => {
+    const nullKey = `${fieldKey}_null`;
+    const defKey = `${fieldKey}_default`;
+    return (
+      <div className="rounded-xl border border-border/50 bg-secondary/20 p-4 space-y-3">
+        <span className="text-sm font-semibold text-foreground">{label}</span>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">If missing in Sunsky</label>
+            <select
+              value={cfg?.[nullKey] ?? "leave_blank"}
+              onChange={e => update(nullKey, e.target.value)}
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+            >
+              {NULL_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          {cfg?.[nullKey] === "use_default" && (
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Default value</label>
+              <input
+                type="text"
+                placeholder="e.g. 0.5"
+                value={cfg?.[defKey] ?? ""}
+                onChange={e => update(defKey, e.target.value || null)}
+                className={inputCls}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  if (stores.length === 0) return (
+    <div className="bg-card border border-border/50 rounded-2xl p-8 text-center text-muted-foreground text-sm">
+      No stores configured. Add a store first on the Stores page.
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <Tag className="w-4 h-4 text-emerald-400" />
+        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Inventory Mapping</h2>
+      </div>
+
+      <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-secondary/40 border border-border/40 text-xs text-muted-foreground">
+        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+        <span>
+          Controls how Sunsky weight and dimension values are mapped to WooCommerce shipping fields during the <strong className="text-foreground">Upload</strong> step.
+        </span>
+      </div>
+
+      <select
+        value={storeId ?? ""}
+        onChange={e => setStoreId(Number(e.target.value))}
+        className="bg-background border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-primary w-full sm:w-64"
+      >
+        {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
+
+      {loading ? (
+        <div className="flex items-center gap-2 py-12 justify-center text-muted-foreground text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+        </div>
+      ) : cfg && (
+        <div className="space-y-4">
+          {/* Units */}
+          <div className="rounded-xl border border-border/50 bg-secondary/20 p-4 space-y-3">
+            <span className="text-sm font-semibold text-foreground">Units</span>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Weight unit</label>
+                <select value={cfg.weight_unit ?? "kg"} onChange={e => update("weight_unit", e.target.value)} className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary">
+                  <option value="kg">kg</option>
+                  <option value="g">g</option>
+                  <option value="lbs">lbs</option>
+                  <option value="oz">oz</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Dimension unit</label>
+                <select value={cfg.dimension_unit ?? "cm"} onChange={e => update("dimension_unit", e.target.value)} className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary">
+                  <option value="cm">cm</option>
+                  <option value="m">m</option>
+                  <option value="mm">mm</option>
+                  <option value="in">in</option>
+                  <option value="yd">yd</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Per-field null handling */}
+          <Field label="Weight"        fieldKey="weight" />
+          <Field label="Length"        fieldKey="length" />
+          <Field label="Width"         fieldKey="width" />
+          <Field label="Height"        fieldKey="height" />
+
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-1.5 px-5 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            Save Configuration
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main Settings page
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function Settings() {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<"keys" | "mappings">("keys");
+  const [activeTab, setActiveTab] = useState<"keys" | "mappings" | "rules" | "profiles" | "inventory">("keys");
 
   const [statuses, setStatuses] = useState<Record<string, ProviderStatus>>({});
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
@@ -739,29 +1462,29 @@ export default function Settings() {
       </div>
 
       {/* Tab switcher */}
-      <div className="flex gap-1 p-1 bg-secondary/40 rounded-xl w-fit border border-border/30">
-        <button
-          onClick={() => setActiveTab("keys")}
-          className={cn(
-            "flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all",
-            activeTab === "keys"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-        >
-          <Sparkles className="w-3.5 h-3.5" /> AI Provider Keys
-        </button>
-        <button
-          onClick={() => setActiveTab("mappings")}
-          className={cn(
-            "flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium transition-all",
-            activeTab === "mappings"
-              ? "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-        >
-          <Tag className="w-3.5 h-3.5" /> Category Mappings
-        </button>
+      <div className="flex flex-wrap gap-1 p-1 bg-secondary/40 rounded-xl w-fit border border-border/30">
+        {(
+          [
+            { id: "keys",      icon: <Sparkles className="w-3.5 h-3.5" />, label: "AI Provider Keys" },
+            { id: "mappings",  icon: <Tag className="w-3.5 h-3.5" />,      label: "Category Mappings" },
+            { id: "rules",     icon: <Sparkles className="w-3.5 h-3.5" />, label: "Extraction Rules" },
+            { id: "profiles",  icon: <Tag className="w-3.5 h-3.5" />,      label: "Attribute Profiles" },
+            { id: "inventory", icon: <Tag className="w-3.5 h-3.5" />,      label: "Inventory Mapping" },
+          ] as const
+        ).map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all",
+              activeTab === tab.id
+                ? "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {tab.icon} {tab.label}
+          </button>
+        ))}
       </div>
 
       {activeTab === "keys" ? (
@@ -917,9 +1640,8 @@ export default function Settings() {
             </span>
           </div>
         </>
-      ) : (
+      ) : activeTab === "mappings" ? (
         <>
-          {/* Category Mapping Dictionary */}
           <div className="flex items-center gap-2 mb-1">
             <Tag className="w-4 h-4 text-primary" />
             <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Category Mapping Dictionary</h2>
@@ -933,6 +1655,12 @@ export default function Settings() {
           </div>
           <CategoryMappingDictionary />
         </>
+      ) : activeTab === "rules" ? (
+        <AIExtractionRulesTab />
+      ) : activeTab === "profiles" ? (
+        <AttributeProfilesTab />
+      ) : (
+        <InventoryMappingTab />
       )}
     </div>
   );

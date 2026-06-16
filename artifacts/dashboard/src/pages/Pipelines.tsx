@@ -189,17 +189,20 @@ function LogPanel({ plId, isLive }: { plId: number; isLive: boolean }) {
 
 interface WooOpt { id: number; name: string; parent_id: number }
 interface WooCatEntry { id: number; name: string }
+interface AttrProfileSummary { id: number; name: string; description: string | null; }
 interface CategoryRow {
   sunsky_cat: string;
   product_count: number;
   woo_cats: WooCatEntry[];
   primary_woo_cat_id: number | null;
+  profile_id: number | null;
   is_new: boolean;
   times_used: number;
 }
 interface RowSel {
   woo_cats: WooCatEntry[];
   primary_id: number | null;
+  profile_id: number | null;
   save_as_rule: boolean;
 }
 interface TreeNode { opt: WooOpt; children: TreeNode[]; depth: number }
@@ -335,7 +338,7 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
 
   // "All Products" mode — one selection applied to every Sunsky category
   const [applyAll, setApplyAll] = useState(false);
-  const [allSel, setAllSel] = useState<RowSel>({ woo_cats: [], primary_id: null, save_as_rule: true });
+  const [allSel, setAllSel] = useState<RowSel>({ woo_cats: [], primary_id: null, profile_id: null, save_as_rule: true });
   const [allTreeOpen, setAllTreeOpen] = useState(false);
 
   useEffect(() => {
@@ -349,6 +352,7 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
           init[c.sunsky_cat] = {
             woo_cats: cats,
             primary_id: c.primary_woo_cat_id ?? cats[0]?.id ?? null,
+            profile_id: c.profile_id ?? null,
             save_as_rule: true,
           };
         });
@@ -373,7 +377,7 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
 
   function toggleWooCat(sunsky_cat: string, opt: WooOpt) {
     setSel(prev => {
-      const row = prev[sunsky_cat] ?? { woo_cats: [], primary_id: null, save_as_rule: true };
+      const row = prev[sunsky_cat] ?? { woo_cats: [], primary_id: null, profile_id: null, save_as_rule: true };
       const already = row.woo_cats.some(c => c.id === opt.id);
       let woo_cats: WooCatEntry[];
       let primary_id = row.primary_id;
@@ -423,6 +427,7 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
           sunsky_cat: c.sunsky_cat,
           woo_cats: allSel.woo_cats,
           primary_woo_cat_id: allSel.primary_id,
+          profile_id: allSel.profile_id,
           save_as_rule: allSel.save_as_rule,
         }));
       } else {
@@ -432,6 +437,7 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
             sunsky_cat,
             woo_cats: v.woo_cats,
             primary_woo_cat_id: v.primary_id,
+            profile_id: v.profile_id,
             save_as_rule: v.save_as_rule,
           }));
       }
@@ -561,6 +567,28 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
             )}
           </div>
 
+          {/* Profile selector for "All Products" mode */}
+          {(data?.profiles ?? []).length > 0 && (
+            <div className="flex items-center gap-2 px-4 py-2.5 border-t border-amber-500/20">
+              <span className="text-xs text-muted-foreground shrink-0">Attribute profile:</span>
+              <select
+                value={allSel.profile_id ?? ""}
+                onChange={e => setAllSel(prev => ({ ...prev, profile_id: e.target.value ? Number(e.target.value) : null }))}
+                className="flex-1 min-w-0 bg-background border border-border rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-primary"
+              >
+                <option value="">— None —</option>
+                {(data?.profiles ?? []).map((p: AttrProfileSummary) => (
+                  <option key={p.id} value={p.id}>{p.name}{p.description ? ` · ${p.description}` : ""}</option>
+                ))}
+              </select>
+              {allSel.profile_id && (
+                <button onClick={() => setAllSel(prev => ({ ...prev, profile_id: null }))} className="text-muted-foreground hover:text-foreground shrink-0">
+                  <XIcon className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+
           <div className="px-4 pb-3 flex items-center gap-1.5">
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
               <input
@@ -612,6 +640,9 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
             const rowSel = sel[cat.sunsky_cat];
             const primary = rowSel?.woo_cats?.find(c => c.id === rowSel.primary_id);
             const others  = rowSel?.woo_cats?.filter(c => c.id !== rowSel.primary_id) ?? [];
+            const assignedProfile = rowSel?.profile_id
+              ? (data?.profiles ?? []).find((p: AttrProfileSummary) => p.id === rowSel.profile_id)
+              : null;
             return (
               <div key={cat.sunsky_cat} className="flex items-start gap-2 p-2 rounded-lg bg-secondary/30 border border-border/30 text-xs">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 shrink-0" />
@@ -632,6 +663,11 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
                     {!rowSel?.woo_cats?.length && (
                       <span className="text-muted-foreground italic text-[11px]">no mapping</span>
                     )}
+                    {assignedProfile && (
+                      <span className="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 border border-violet-500/25 text-[11px]">
+                        ⊞ {assignedProfile.name}
+                      </span>
+                    )}
                   </div>
                 </div>
                 {cat.times_used > 0 && (
@@ -650,8 +686,11 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
             Assign WooCommerce categories ({newCats.length} new)
           </div>
           {newCats.map((cat: CategoryRow) => {
-            const rowSel = sel[cat.sunsky_cat] ?? { woo_cats: [], primary_id: null, save_as_rule: true };
+            const rowSel = sel[cat.sunsky_cat] ?? { woo_cats: [], primary_id: null, profile_id: null, save_as_rule: true };
             const isOpen = openTree === cat.sunsky_cat;
+            const profiles: AttrProfileSummary[] = data?.profiles ?? [];
+            const setProfileId = (pid: number | null) =>
+              setSel(prev => ({ ...prev, [cat.sunsky_cat]: { ...(prev[cat.sunsky_cat] ?? { woo_cats: [], primary_id: null, profile_id: null, save_as_rule: true }), profile_id: pid } }));
             return (
               <div key={cat.sunsky_cat} className="rounded-xl border border-border/40 overflow-hidden">
                 {/* Row header */}
@@ -668,6 +707,28 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
                     Save as rule
                   </label>
                 </div>
+
+                {/* Panel B — Attribute Profile selector */}
+                {profiles.length > 0 && (
+                  <div className="flex items-center gap-2 px-3 py-2 border-t border-border/20 bg-secondary/10">
+                    <span className="text-xs text-muted-foreground shrink-0">Attribute profile:</span>
+                    <select
+                      value={rowSel.profile_id ?? ""}
+                      onChange={e => setProfileId(e.target.value ? Number(e.target.value) : null)}
+                      className="flex-1 min-w-0 bg-background border border-border rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-primary"
+                    >
+                      <option value="">— None —</option>
+                      {profiles.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}{p.description ? ` · ${p.description}` : ""}</option>
+                      ))}
+                    </select>
+                    {rowSel.profile_id && (
+                      <button onClick={() => setProfileId(null)} className="text-muted-foreground hover:text-foreground shrink-0">
+                        <XIcon className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* Selected category chips */}
                 {rowSel.woo_cats.length > 0 && (

@@ -397,7 +397,7 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
         prod_dict = {"id": product.id, "name": product.name or "", **raw}
         product_dicts.append(prod_dict)
 
-        attrs = await extract_attributes(prod_dict, gen_cfg)
+        attrs = await extract_attributes(prod_dict, gen_cfg, db=db)
         for a in attrs:
             stmt = (
                 pg_insert(ProductEnrichAttr)
@@ -407,11 +407,18 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
                     attribute=a["attribute"],
                     raw_value=a["raw_value"],
                     confidence=a.get("confidence"),
+                    source=a.get("source", "rule_based"),
+                    flagged=a.get("flagged", False),
                     confirmed=False,
                 )
                 .on_conflict_do_update(
                     index_elements=["pipeline_job_id", "product_id", "attribute"],
-                    set_={"raw_value": a["raw_value"], "confidence": a.get("confidence")},
+                    set_={
+                        "raw_value":  a["raw_value"],
+                        "confidence": a.get("confidence"),
+                        "source":     a.get("source", "rule_based"),
+                        "flagged":    a.get("flagged", False),
+                    },
                 )
             )
             await db.execute(stmt)

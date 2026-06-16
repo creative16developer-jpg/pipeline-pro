@@ -276,12 +276,15 @@ class SunskyCategoryMapping(Base):
     woo_cat_name       = Column(Text, nullable=True)      # backward-compat: primary cat name
     woo_cats_json      = Column(Text, nullable=True)      # JSON: [{id, name}, ...]
     primary_woo_cat_id = Column(Integer, nullable=True)
+    # Attribute profile assigned to products in this Sunsky category
+    profile_id         = Column(Integer, ForeignKey("attribute_profiles.id", ondelete="SET NULL"), nullable=True)
     times_used         = Column(Integer, nullable=False, default=0)
     last_used_at       = Column(DateTime(timezone=True), nullable=True)
     created_at         = Column(DateTime(timezone=True), server_default=func.now())
     updated_at         = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    store = relationship("Store")
+    store   = relationship("Store")
+    profile = relationship("AttributeProfile")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -302,6 +305,10 @@ class ProductEnrichAttr(Base):
     woo_attr_name    = Column(Text, nullable=True)   # override WooCommerce attribute name
     confidence       = Column(Float, nullable=True)
     confirmed        = Column(Boolean, nullable=False, default=False)
+    # "ai" | "rule_based" | "default" | "manual"
+    source           = Column(String(20), nullable=False, default="ai")
+    # True when confidence < rule threshold
+    flagged          = Column(Boolean, nullable=False, default=False)
     created_at       = Column(DateTime(timezone=True), server_default=func.now())
 
     product      = relationship("Product")
@@ -337,3 +344,90 @@ class VariantGroup(Base):
     created_at      = Column(DateTime(timezone=True), server_default=func.now())
 
     pipeline_job = relationship("PipelineJob")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Attribute Profiles  (defined before SunskyCategoryMapping — FK dependency)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AttributeProfile(Base):
+    """Named set of WooCommerce attributes expected for a product category."""
+    __tablename__ = "attribute_profiles"
+
+    id          = Column(Integer, primary_key=True, index=True)
+    name        = Column(Text, nullable=False, unique=True)
+    description = Column(Text, nullable=True)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at  = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    attributes = relationship(
+        "ProfileAttribute", back_populates="profile",
+        cascade="all, delete-orphan", order_by="ProfileAttribute.sort_order"
+    )
+
+
+class ProfileAttribute(Base):
+    """One WooCommerce attribute slot within an AttributeProfile."""
+    __tablename__ = "profile_attributes"
+    __table_args__ = (UniqueConstraint("profile_id", "woo_attr_name"),)
+
+    id            = Column(Integer, primary_key=True, index=True)
+    profile_id    = Column(Integer, ForeignKey("attribute_profiles.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    woo_attr_name = Column(Text, nullable=False)
+    required      = Column(Boolean, nullable=False, default=True)
+    sort_order    = Column(Integer, nullable=False, default=0)
+    created_at    = Column(DateTime(timezone=True), server_default=func.now())
+
+    profile = relationship("AttributeProfile", back_populates="attributes")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Extraction Rules
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AIExtractionRule(Base):
+    """
+    Per-attribute rule controlling how AI extracts a WooCommerce attribute value.
+    source_fields: "title" | "specs" | "both"
+    if_not_found:  "leave_blank" | "flag" | "use_default"
+    """
+    __tablename__ = "ai_extraction_rules"
+
+    id                   = Column(Integer, primary_key=True, index=True)
+    woo_attr_name        = Column(Text, nullable=False, unique=True)
+    source_fields        = Column(String(20), nullable=False, default="both")
+    instruction          = Column(Text, nullable=False, default="")
+    confidence_threshold = Column(Float, nullable=False, default=0.7)
+    if_not_found         = Column(String(30), nullable=False, default="flag")
+    default_value        = Column(Text, nullable=True)
+    sort_order           = Column(Integer, nullable=False, default=0)
+    created_at           = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at           = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inventory Mapping Config (per store)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class InventoryMappingConfig(Base):
+    """Per-store config for mapping Sunsky inventory/weight/dimension fields to WooCommerce."""
+    __tablename__ = "inventory_mapping_configs"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    store_id       = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"),
+                            nullable=False, unique=True, index=True)
+    weight_unit    = Column(String(10), nullable=False, default="kg")
+    dimension_unit = Column(String(10), nullable=False, default="cm")
+    weight_null    = Column(String(20), nullable=False, default="leave_blank")
+    length_null    = Column(String(20), nullable=False, default="leave_blank")
+    width_null     = Column(String(20), nullable=False, default="leave_blank")
+    height_null    = Column(String(20), nullable=False, default="leave_blank")
+    weight_default    = Column(String(30), nullable=True)
+    length_default    = Column(String(30), nullable=True)
+    width_default     = Column(String(30), nullable=True)
+    height_default    = Column(String(30), nullable=True)
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at     = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    store = relationship("Store")

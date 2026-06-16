@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from models.models import (
-    PipelineJob, Product, SunskyCategoryMapping, WooCategory
+    PipelineJob, Product, SunskyCategoryMapping, WooCategory, AttributeProfile
 )
 
 router = APIRouter(tags=["map-step"])
@@ -46,6 +46,7 @@ class MappingEntry(BaseModel):
     sunsky_cat: str
     woo_cats: list[WooCatEntry] = []
     primary_woo_cat_id: Optional[int] = None
+    profile_id: Optional[int] = None
     save_as_rule: bool = True
 
 
@@ -137,18 +138,29 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         )
     ).scalars().all()
 
+    # Load attribute profiles for the panel B dropdown
+    from sqlalchemy.orm import selectinload
+    profiles = (
+        await db.execute(
+            select(AttributeProfile)
+            .options(selectinload(AttributeProfile.attributes))
+            .order_by(AttributeProfile.name)
+        )
+    ).scalars().all()
+
     categories = []
     for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1]):
         m = saved.get(cat)
         woo_cat_list = _mapping_woo_cats(m) if m else []
         primary_id = m.primary_woo_cat_id if m else (woo_cat_list[0]["id"] if woo_cat_list else None)
         categories.append({
-            "sunsky_cat":        cat,
-            "product_count":     count,
-            "woo_cats":          woo_cat_list,
+            "sunsky_cat":         cat,
+            "product_count":      count,
+            "woo_cats":           woo_cat_list,
             "primary_woo_cat_id": primary_id,
-            "is_new":            m is None,
-            "times_used":        m.times_used if m else 0,
+            "profile_id":         m.profile_id if m else None,
+            "is_new":             m is None,
+            "times_used":         m.times_used if m else 0,
         })
 
     # Total product count in this batch (products may have no extractable category)
@@ -164,6 +176,18 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         "woo_options": [
             {"id": c.woo_id, "name": c.name, "parent_id": c.parent_id or 0}
             for c in sorted(woo_cats, key=lambda x: x.name)
+        ],
+        "profiles": [
+            {
+                "id": p.id,
+                "name": p.name,
+                "description": p.description,
+                "attributes": [
+                    {"woo_attr_name": a.woo_attr_name, "required": a.required}
+                    for a in (p.attributes or [])
+                ],
+            }
+            for p in profiles
         ],
     }
 
@@ -197,6 +221,7 @@ async def map_confirm(
         primary_cat = next((c for c in entry.woo_cats if c.id == primary_id), entry.woo_cats[0] if entry.woo_cats else None)
 
         cats_json = json.dumps([{"id": c.id, "name": c.name} for c in entry.woo_cats])
+        profile_id = entry.profile_id or None
 
         if entry.save_as_rule:
             stmt = (
@@ -208,6 +233,7 @@ async def map_confirm(
                     woo_cat_name=primary_cat.name if primary_cat else None,
                     woo_cats_json=cats_json,
                     primary_woo_cat_id=primary_id,
+                    profile_id=profile_id,
                     times_used=1,
                     last_used_at=datetime.now(timezone.utc),
                     updated_at=datetime.now(timezone.utc),
@@ -219,6 +245,7 @@ async def map_confirm(
                         "woo_cat_name":       primary_cat.name if primary_cat else None,
                         "woo_cats_json":      cats_json,
                         "primary_woo_cat_id": primary_id,
+                        "profile_id":         profile_id,
                         "times_used":         SunskyCategoryMapping.__table__.c.times_used + 1,
                         "last_used_at":       datetime.now(timezone.utc),
                         "updated_at":         datetime.now(timezone.utc),
@@ -227,8 +254,6 @@ async def map_confirm(
             )
             await db.execute(stmt)
         else:
-            # Not saved as rule but we still need it for this run — upsert without incrementing
-            # (only insert if it doesn't already exist so we don't overwrite a good rule)
             stmt = (
                 pg_insert(SunskyCategoryMapping)
                 .values(
@@ -238,6 +263,7 @@ async def map_confirm(
                     woo_cat_name=primary_cat.name if primary_cat else None,
                     woo_cats_json=cats_json,
                     primary_woo_cat_id=primary_id,
+                    profile_id=profile_id,
                     times_used=0,
                     last_used_at=datetime.now(timezone.utc),
                     updated_at=datetime.now(timezone.utc),
@@ -249,6 +275,7 @@ async def map_confirm(
                         "primary_woo_cat_id": primary_id,
                         "woo_cat_id":         primary_cat.id if primary_cat else None,
                         "woo_cat_name":       primary_cat.name if primary_cat else None,
+                        "profile_id":         profile_id,
                         "updated_at":         datetime.now(timezone.utc),
                     },
                 )
