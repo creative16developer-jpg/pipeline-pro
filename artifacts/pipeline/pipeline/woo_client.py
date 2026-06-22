@@ -640,6 +640,54 @@ async def set_product_attributes(store: Store, woo_id: int, attributes: list[dic
         return resp.json()
 
 
+async def get_product_attributes(store: Store) -> list[dict]:
+    """Fetch all product attributes from WooCommerce (paginated)."""
+    base_url = _base_url(store)
+    headers = _auth_header(store)
+    results: list[dict] = []
+    page = 1
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        while True:
+            resp = await client.get(
+                f"{base_url}/products/attributes",
+                headers=headers,
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            results.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+    return results
+
+
+async def get_attribute_terms(store: Store, attribute_woo_id: int) -> list[dict]:
+    """Fetch all terms for one WooCommerce product attribute (paginated)."""
+    base_url = _base_url(store)
+    headers = _auth_header(store)
+    results: list[dict] = []
+    page = 1
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        while True:
+            resp = await client.get(
+                f"{base_url}/products/attributes/{attribute_woo_id}/terms",
+                headers=headers,
+                params={"per_page": 100, "page": page},
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            results.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+    return results
+
+
 async def set_product_categories(store: Store, woo_id: int, category_woo_ids: list[int]) -> dict:
     """Update the categories on an existing WooCommerce product."""
     cats = [{"id": cid} for cid in category_woo_ids if cid]

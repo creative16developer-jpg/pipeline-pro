@@ -679,6 +679,11 @@ function AIExtractionRulesTab() {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
 
+  const [stores, setStores] = useState<any[]>([]);
+  const [storeId, setStoreId] = useState<number | null>(null);
+  const [wooAttrs, setWooAttrs] = useState<any[]>([]);
+  const [syncing, setSyncing] = useState(false);
+
   const emptyForm = (): Omit<ExtractionRule, "id"> => ({
     woo_attr_name: "",
     source_fields: "both",
@@ -700,6 +705,43 @@ function AIExtractionRulesTab() {
   };
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    fetch("/api/stores")
+      .then(r => r.json())
+      .then(d => {
+        const list = Array.isArray(d) ? d : (d.stores ?? []);
+        setStores(list);
+        if (list.length > 0) setStoreId(list[0].id);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!storeId) return;
+    fetch(`/api/stores/${storeId}/woo-attributes`)
+      .then(r => r.json())
+      .then(d => setWooAttrs(Array.isArray(d) ? d : []))
+      .catch(() => setWooAttrs([]));
+  }, [storeId]);
+
+  const syncAttrs = async () => {
+    if (!storeId) return;
+    setSyncing(true);
+    try {
+      const r = await fetch(`/api/stores/${storeId}/woo-attributes/sync`, { method: "POST" });
+      if (!r.ok) throw new Error("Sync failed");
+      const d = await r.json();
+      toast({ title: `Synced ${d.synced_attributes ?? 0} attributes, ${d.synced_terms ?? 0} terms` });
+      const r2 = await fetch(`/api/stores/${storeId}/woo-attributes`);
+      const attrs = await r2.json();
+      setWooAttrs(Array.isArray(attrs) ? attrs : []);
+    } catch (e: any) {
+      toast({ title: "Sync failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const startNew = () => { setForm(emptyForm()); setEditingId("new"); };
   const startEdit = (r: ExtractionRule) => {
@@ -750,6 +792,13 @@ function AIExtractionRulesTab() {
     }
   };
 
+  const usedAttrNames = new Set(
+    rules
+      .filter(r => editingId === null || (typeof editingId === "number" && r.id !== editingId))
+      .map(r => r.woo_attr_name.toLowerCase())
+  );
+  const availableWooAttrs = wooAttrs.filter(a => !usedAttrNames.has(a.name.toLowerCase()));
+
   const RuleForm = () => (
     <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 space-y-4">
       <div className="flex items-center justify-between">
@@ -764,13 +813,26 @@ function AIExtractionRulesTab() {
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2 space-y-1">
           <label className="text-xs font-medium text-muted-foreground">WooCommerce Attribute Name *</label>
-          <input
-            type="text"
-            placeholder="e.g. Color, Brand, Material"
-            value={form.woo_attr_name}
-            onChange={e => setForm(f => ({ ...f, woo_attr_name: e.target.value }))}
-            className={inputCls}
-          />
+          {wooAttrs.length > 0 ? (
+            <select
+              value={form.woo_attr_name}
+              onChange={e => setForm(f => ({ ...f, woo_attr_name: e.target.value }))}
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+            >
+              <option value="">— select a WooCommerce attribute —</option>
+              {availableWooAttrs.map(a => (
+                <option key={a.id} value={a.name}>{a.name}</option>
+              ))}
+              {form.woo_attr_name && !availableWooAttrs.find((a: any) => a.name === form.woo_attr_name) && (
+                <option value={form.woo_attr_name}>{form.woo_attr_name}</option>
+              )}
+            </select>
+          ) : (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-400">
+              <Info className="w-3.5 h-3.5 shrink-0" />
+              No WooCommerce attributes synced yet — click <strong>Sync Attributes</strong> above.
+            </div>
+          )}
         </div>
 
         <div className="space-y-1">
@@ -806,15 +868,23 @@ function AIExtractionRulesTab() {
           />
         </div>
 
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-muted-foreground">Confidence Threshold (0–1)</label>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-muted-foreground">Confidence Threshold</label>
+            <span className="text-sm font-bold text-foreground tabular-nums">
+              {Math.round(form.confidence_threshold * 100)}%
+            </span>
+          </div>
           <input
-            type="number"
+            type="range"
             min={0} max={1} step={0.05}
             value={form.confidence_threshold}
-            onChange={e => setForm(f => ({ ...f, confidence_threshold: parseFloat(e.target.value) || 0.7 }))}
-            className={inputCls}
+            onChange={e => setForm(f => ({ ...f, confidence_threshold: parseFloat(e.target.value) }))}
+            className="w-full accent-primary"
           />
+          <div className="flex justify-between text-[10px] text-muted-foreground">
+            <span>0%</span><span>50%</span><span>100%</span>
+          </div>
         </div>
 
         {form.if_not_found === "use_default" && (
@@ -855,6 +925,26 @@ function AIExtractionRulesTab() {
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">AI Extraction Rules</h2>
         </div>
         <div className="flex items-center gap-2">
+          {stores.length > 1 && (
+            <select
+              value={storeId ?? ""}
+              onChange={e => setStoreId(Number(e.target.value))}
+              className="bg-background border border-border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-primary"
+            >
+              {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
+          {storeId && (
+            <button
+              onClick={syncAttrs}
+              disabled={syncing}
+              title="Sync WooCommerce attributes"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-secondary hover:bg-secondary/80 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={cn("w-3.5 h-3.5", syncing && "animate-spin")} />
+              Sync Attributes
+            </button>
+          )}
           <button onClick={load} disabled={loading} className="p-2 rounded-xl border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
           </button>
@@ -871,7 +961,8 @@ function AIExtractionRulesTab() {
       <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-secondary/40 border border-border/40 text-xs text-muted-foreground">
         <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
         <span>
-          Each rule controls how the AI extracts one WooCommerce attribute. Rules are applied during the <strong className="text-foreground">Enrich</strong> step of every pipeline. If no rules exist, the default attribute list is used.
+          Each rule controls how the AI extracts one WooCommerce attribute. Rules are applied during the <strong className="text-foreground">Enrich</strong> step of every pipeline.{" "}
+          Only attributes synced from WooCommerce appear in the dropdown — create the attribute in WooCommerce first, then click <strong className="text-foreground">Sync Attributes</strong>.
         </span>
       </div>
 
@@ -962,9 +1053,14 @@ function AttributeProfilesTab() {
   const [deleting, setDeleting] = useState<number | null>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
+  const [stores, setStores] = useState<any[]>([]);
+  const [storeId, setStoreId] = useState<number | null>(null);
+  const [wooAttrs, setWooAttrs] = useState<any[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [selectedAttr, setSelectedAttr] = useState("");
+
   const emptyForm = () => ({ name: "", description: "", attributes: [] as ProfileAttr[] });
   const [form, setForm] = useState(emptyForm());
-  const [newAttrName, setNewAttrName] = useState("");
 
   const load = () => {
     setLoading(true);
@@ -977,28 +1073,60 @@ function AttributeProfilesTab() {
 
   useEffect(() => { load(); }, []);
 
-  const startNew = () => { setForm(emptyForm()); setNewAttrName(""); setEditingId("new"); };
+  useEffect(() => {
+    fetch("/api/stores")
+      .then(r => r.json())
+      .then(d => {
+        const list = Array.isArray(d) ? d : (d.stores ?? []);
+        setStores(list);
+        if (list.length > 0) setStoreId(list[0].id);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!storeId) return;
+    fetch(`/api/stores/${storeId}/woo-attributes`)
+      .then(r => r.json())
+      .then(d => setWooAttrs(Array.isArray(d) ? d : []))
+      .catch(() => setWooAttrs([]));
+  }, [storeId]);
+
+  const syncAttrs = async () => {
+    if (!storeId) return;
+    setSyncing(true);
+    try {
+      const r = await fetch(`/api/stores/${storeId}/woo-attributes/sync`, { method: "POST" });
+      if (!r.ok) throw new Error("Sync failed");
+      const d = await r.json();
+      toast({ title: `Synced ${d.synced_attributes ?? 0} attributes, ${d.synced_terms ?? 0} terms` });
+      const r2 = await fetch(`/api/stores/${storeId}/woo-attributes`);
+      const attrs = await r2.json();
+      setWooAttrs(Array.isArray(attrs) ? attrs : []);
+    } catch (e: any) {
+      toast({ title: "Sync failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const startNew = () => { setForm(emptyForm()); setSelectedAttr(""); setEditingId("new"); };
   const startEdit = (p: AttrProfile) => {
     setForm({ name: p.name, description: p.description ?? "", attributes: p.attributes.map(a => ({ ...a })) });
-    setNewAttrName("");
+    setSelectedAttr("");
     setEditingId(p.id);
   };
 
   const addAttr = () => {
-    const trimmed = newAttrName.trim();
-    if (!trimmed || form.attributes.some(a => a.woo_attr_name.toLowerCase() === trimmed.toLowerCase())) return;
+    if (!selectedAttr || form.attributes.some(a => a.woo_attr_name.toLowerCase() === selectedAttr.toLowerCase())) return;
     setForm(f => ({
       ...f,
-      attributes: [...f.attributes, { woo_attr_name: trimmed, required: true, sort_order: f.attributes.length }],
+      attributes: [...f.attributes, { woo_attr_name: selectedAttr, required: true, sort_order: f.attributes.length }],
     }));
-    setNewAttrName("");
+    setSelectedAttr("");
   };
 
   const removeAttr = (name: string) => setForm(f => ({ ...f, attributes: f.attributes.filter(a => a.woo_attr_name !== name) }));
-  const toggleRequired = (name: string) => setForm(f => ({
-    ...f,
-    attributes: f.attributes.map(a => a.woo_attr_name === name ? { ...a, required: !a.required } : a),
-  }));
 
   const handleSave = async () => {
     if (!form.name.trim()) return;
@@ -1054,42 +1182,59 @@ function AttributeProfilesTab() {
       </div>
 
       <div className="space-y-2">
-        <label className="text-xs font-medium text-muted-foreground">Attributes</label>
+        <label className="text-xs font-medium text-muted-foreground">
+          Attributes — selected from WooCommerce
+        </label>
         {form.attributes.length > 0 && (
-          <div className="space-y-1.5">
+          <div className="flex flex-wrap gap-1.5">
             {form.attributes.map(a => (
-              <div key={a.woo_attr_name} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-secondary/50 border border-border/40">
-                <span className="flex-1 text-sm font-medium text-foreground">{a.woo_attr_name}</span>
+              <span
+                key={a.woo_attr_name}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30 text-sm font-medium"
+              >
+                {a.woo_attr_name}
                 <button
-                  onClick={() => toggleRequired(a.woo_attr_name)}
-                  className={cn("text-xs px-2 py-0.5 rounded-full border transition-colors",
-                    a.required
-                      ? "bg-amber-500/15 text-amber-400 border-amber-500/30"
-                      : "bg-secondary text-muted-foreground border-border"
-                  )}
+                  onClick={() => removeAttr(a.woo_attr_name)}
+                  className="text-blue-400/60 hover:text-blue-400 ml-0.5"
                 >
-                  {a.required ? "Required" : "Optional"}
+                  <X className="w-3 h-3" />
                 </button>
-                <button onClick={() => removeAttr(a.woo_attr_name)} className="text-muted-foreground hover:text-red-400 p-1">
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              </span>
             ))}
           </div>
         )}
         <div className="flex gap-2">
-          <input
-            type="text"
-            placeholder="Add attribute name…"
-            value={newAttrName}
-            onChange={e => setNewAttrName(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && addAttr()}
-            className={inputCls}
-          />
-          <button onClick={addAttr} disabled={!newAttrName.trim()} className="flex items-center gap-1 px-3 py-2 rounded-lg border border-border bg-secondary hover:bg-secondary/80 text-sm disabled:opacity-50">
+          {wooAttrs.length > 0 ? (
+            <select
+              value={selectedAttr}
+              onChange={e => setSelectedAttr(e.target.value)}
+              className="flex-1 bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+            >
+              <option value="">— select a WooCommerce attribute to add —</option>
+              {wooAttrs
+                .filter(a => !form.attributes.some(fa => fa.woo_attr_name.toLowerCase() === a.name.toLowerCase()))
+                .map((a: any) => (
+                  <option key={a.id} value={a.name}>{a.name}</option>
+                ))
+              }
+            </select>
+          ) : (
+            <div className="flex-1 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-400">
+              <Info className="w-3.5 h-3.5 shrink-0" />
+              No WooCommerce attributes synced yet — click <strong>Sync Attributes</strong> above.
+            </div>
+          )}
+          <button
+            onClick={addAttr}
+            disabled={!selectedAttr}
+            className="flex items-center gap-1 px-3 py-2 rounded-lg border border-border bg-secondary hover:bg-secondary/80 text-sm disabled:opacity-50"
+          >
             <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
+        <p className="text-[11px] text-muted-foreground">
+          Only attributes that exist in WooCommerce appear here. Create the attribute in WooCommerce first, then click <strong className="text-foreground">Sync Attributes</strong>.
+        </p>
       </div>
 
       <div className="flex gap-2">
@@ -1110,6 +1255,26 @@ function AttributeProfilesTab() {
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Attribute Profiles</h2>
         </div>
         <div className="flex items-center gap-2">
+          {stores.length > 1 && (
+            <select
+              value={storeId ?? ""}
+              onChange={e => setStoreId(Number(e.target.value))}
+              className="bg-background border border-border rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-primary"
+            >
+              {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
+          {storeId && (
+            <button
+              onClick={syncAttrs}
+              disabled={syncing}
+              title="Sync WooCommerce attributes"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-secondary hover:bg-secondary/80 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw className={cn("w-3.5 h-3.5", syncing && "animate-spin")} />
+              Sync Attributes
+            </button>
+          )}
           <button onClick={load} disabled={loading} className="p-2 rounded-xl border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors">
             <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
           </button>
@@ -1122,7 +1287,8 @@ function AttributeProfilesTab() {
       <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-secondary/40 border border-border/40 text-xs text-muted-foreground">
         <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
         <span>
-          Profiles define the expected WooCommerce attributes for a product category. Assign a profile to a Sunsky category mapping in the <strong className="text-foreground">Map step</strong> of a pipeline — the AI will extract those attributes for every product in that category.
+          Profiles define the expected WooCommerce attributes for a product category. Assign a profile to a Sunsky category mapping in the <strong className="text-foreground">Map step</strong> of a pipeline — the AI will extract those attributes for every product in that category.{" "}
+          Only attributes synced from WooCommerce appear in the dropdown — click <strong className="text-foreground">Sync Attributes</strong> to pull from your store.
         </span>
       </div>
 

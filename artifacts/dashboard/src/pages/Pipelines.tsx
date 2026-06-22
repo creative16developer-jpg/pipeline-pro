@@ -905,6 +905,10 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
   const [bulkNormEdits, setBulkNormEdits] = useState<Record<string, string>>({});
   const [bulkOpen, setBulkOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [attrFilter, setAttrFilter] = useState<"all" | "unset" | "low_conf">("all");
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [resolutions, setResolutions] = useState<Record<number, Record<number, { value?: string; confirmed?: boolean }>>>({});
+  const [wooAttrs, setWooAttrs] = useState<any[]>([]);
 
   // Unique attribute names across all products (order preserved)
   const uniqueAttrNames = useMemo<string[]>(() => {
@@ -1042,6 +1046,78 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
     }
   };
 
+  useEffect(() => {
+    if (!pl.store_id) return;
+    fetch(`/api/stores/${pl.store_id}/woo-attributes`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setWooAttrs(Array.isArray(d) ? d : []))
+      .catch(() => setWooAttrs([]));
+  }, [pl.store_id]);
+
+  // Attribute Resolution UI helpers (derived from enrichData)
+  const attrProducts = enrichData?.products ?? [];
+  const attrStats = enrichData?.stats ?? { total: 0, from_ai: 0, from_defaults: 0, need_review: 0 };
+  const attrTotalProducts = enrichData?.total_products ?? attrProducts.length;
+  const attrProblemAttrs = (p: any) =>
+    (p.attrs ?? []).filter((a: any) => a.status === "unset" || a.status === "low_confidence");
+  const attentionProducts = attrProducts.filter((p: any) => attrProblemAttrs(p).length > 0);
+  const attrResolvedCount = attrTotalProducts - attentionProducts.length;
+  const attrUnsetCount = attentionProducts.reduce(
+    (acc: number, p: any) => acc + (p.attrs ?? []).filter((a: any) => a.status === "unset").length, 0);
+  const attrLowConfCount = attentionProducts.reduce(
+    (acc: number, p: any) => acc + (p.attrs ?? []).filter((a: any) => a.status === "low_confidence").length, 0);
+  const attrFilteredProducts = attrFilter === "all"
+    ? attentionProducts
+    : attentionProducts.filter((p: any) =>
+        (p.attrs ?? []).some((a: any) => a.status === (attrFilter === "unset" ? "unset" : "low_confidence"))
+      );
+  const getWooTerms = (a: any): string[] => {
+    if (a.woo_terms?.length) return a.woo_terms;
+    const key = (a.woo_attr_name ?? a.attribute ?? "").toLowerCase();
+    const found = wooAttrs.find((wa: any) => wa.name.toLowerCase() === key || wa.slug?.toLowerCase() === key);
+    return found?.terms?.map((t: any) => t.name) ?? [];
+  };
+  const allResolved = attentionProducts.length === 0 || attentionProducts.every((p: any) =>
+    attrProblemAttrs(p).every((a: any) => {
+      const r = resolutions[p.product_id]?.[a.id] ?? {};
+      if (a.status === "unset") return !!r.value;
+      if (a.status === "low_confidence") return r.confirmed || !!r.value;
+      return true;
+    })
+  );
+
+  const handleAttrConfirm = async () => {
+    setSaving(true);
+    try {
+      const attrs: any[] = [];
+      for (const p of attentionProducts) {
+        for (const a of attrProblemAttrs(p)) {
+          const r = resolutions[p.product_id]?.[a.id] ?? {};
+          if (a.status === "unset" && r.value) {
+            attrs.push({ product_id: p.product_id, attribute: a.attribute,
+              normalised_value: r.value, woo_attr_name: a.woo_attr_name || a.attribute, confirmed: true });
+          } else if (a.status === "low_confidence" && (r.confirmed || r.value)) {
+            attrs.push({ product_id: p.product_id, attribute: a.attribute,
+              normalised_value: r.value ?? a.raw_value ?? a.normalised_value,
+              woo_attr_name: a.woo_attr_name || a.attribute, confirmed: true });
+          }
+        }
+      }
+      const resp = await fetch(`/api/pipelines/${pl.id}/enrich-confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attrs, new_norm_entries: [] }),
+      });
+      if (!resp.ok) throw new Error(await resp.text());
+      toast({ title: "Attributes confirmed — pipeline continuing" });
+      onConfirmed();
+    } catch (e: any) {
+      toast({ title: "Failed to confirm attributes", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const toggleGroup = async (groupId: number, confirmed: boolean) => {
     try {
       await fetch(`/api/pipelines/${pl.id}/variant-groups/confirm`, {
@@ -1080,7 +1156,7 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
         ))}
       </div>
 
-      {/* Attributes tab */}
+      {/* Attributes tab — Attribute Resolution UI */}
       {tab === "attrs" && (
         loadingEnrich ? (
           <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
@@ -1092,140 +1168,182 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
               <AlertTriangle className="w-4 h-4 shrink-0" /> Failed to load attribute data
             </div>
             <pre className="text-xs text-red-400/70 whitespace-pre-wrap break-all font-mono max-h-32 overflow-y-auto">{enrichError}</pre>
-            <p className="text-xs text-muted-foreground">
-              If this mentions a missing column, run <code className="px-1 bg-secondary rounded font-mono">git pull && pm2 restart pipeline-api</code> on your server to apply the latest migration.
-            </p>
           </div>
         ) : !enrichData?.products?.length ? (
           <div className="py-3 text-sm text-muted-foreground italic">No attributes extracted yet.</div>
         ) : (
           <div className="space-y-3">
-            {/* ── Bulk Edit panel ── */}
-            {uniqueAttrNames.length > 0 && (
-              <div className="rounded-xl border border-orange-500/25 bg-orange-500/5 overflow-hidden">
-                <button
-                  onClick={() => setBulkOpen(o => !o)}
-                  className="w-full flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-orange-400 hover:bg-orange-500/10 transition-colors"
-                >
-                  {bulkOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                  <Layers className="w-3.5 h-3.5" />
-                  Bulk Edit — apply to ALL products
-                  <span className="ml-auto text-[10px] font-normal text-muted-foreground">
-                    {Object.keys(bulkNormEdits).filter(k => bulkNormEdits[k]?.trim()).length > 0
-                      ? `${Object.keys(bulkNormEdits).filter(k => bulkNormEdits[k]?.trim()).length} overrides active`
-                      : "set once, apply to every product"}
-                  </span>
-                </button>
-                {bulkOpen && (
-                  <div className="border-t border-orange-500/20">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="bg-secondary/30">
-                          <th className="px-3 py-1.5 text-left text-[10px] font-medium text-muted-foreground/70 w-28">Sunsky Attr</th>
-                          <th className="px-3 py-1.5 text-left text-[10px] font-medium text-orange-400/80 w-36">WooCommerce Name <span className="text-muted-foreground/50">(all products)</span></th>
-                          <th className="px-3 py-1.5 text-left text-[10px] font-medium text-blue-400/80">Normalised Value Override <span className="text-muted-foreground/50">(all products)</span></th>
-                          <th className="px-2 py-1.5 w-6" />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {uniqueAttrNames.map(attrName => {
-                          const bulk = bulkNormEdits[attrName] ?? "";
-                          return (
-                            <tr key={attrName} className="border-t border-border/20">
-                              <td className="px-3 py-1.5 text-muted-foreground w-28">{attrName}</td>
-                              <td className="px-3 py-1.5 w-36">
-                                <input
-                                  type="text"
-                                  placeholder={nameEdits[attrName] || attrName}
-                                  value={nameEdits[attrName] ?? ""}
-                                  onChange={e => setNameEdits(prev => ({ ...prev, [attrName]: e.target.value }))}
-                                  className="w-full bg-transparent border-b border-orange-400/25 focus:border-orange-400/70 outline-none py-0.5 text-orange-300 placeholder:text-muted-foreground/40 text-xs"
-                                />
-                              </td>
-                              <td className="px-3 py-1.5">
-                                <input
-                                  type="text"
-                                  placeholder="Leave blank to keep per-product values"
-                                  value={bulk}
-                                  onChange={e => setBulkNormEdits(prev => ({ ...prev, [attrName]: e.target.value }))}
-                                  className={cn(
-                                    "w-full bg-transparent border-b outline-none py-0.5 text-xs placeholder:text-muted-foreground/40",
-                                    bulk ? "border-blue-400/60 text-blue-300" : "border-blue-400/20 focus:border-blue-400/60 text-blue-300"
-                                  )}
-                                />
-                              </td>
-                              <td className="px-2 py-1.5">
-                                {bulk && (
-                                  <button
-                                    onClick={() => setBulkNormEdits(prev => { const n = { ...prev }; delete n[attrName]; return n; })}
-                                    className="text-muted-foreground hover:text-red-400 text-[10px]"
-                                    title="Clear override"
-                                  >×</button>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                    <div className="px-4 py-2 text-[10px] text-muted-foreground border-t border-orange-500/15">
-                      WooCommerce Name is shared across all rows for that attribute. Normalised Value override replaces per-product values when set. Leave blank to keep individual edits below.
-                    </div>
-                  </div>
-                )}
+            {/* 4-stat summary */}
+            <div className="grid grid-cols-4 gap-2">
+              {([
+                { n: attrStats.total,        label: "RESOLVED TOTAL", hi: false },
+                { n: attrStats.from_ai,       label: "FROM AI",        hi: false },
+                { n: attrStats.from_defaults, label: "FROM DEFAULTS",  hi: false },
+                { n: attrStats.need_review,   label: "NEED REVIEW",    hi: attrStats.need_review > 0 },
+              ] as const).map(s => (
+                <div key={s.label} className="rounded-xl border border-border/40 bg-secondary/20 p-3 text-center">
+                  <div className={cn("text-2xl font-bold tabular-nums", s.hi ? "text-amber-400" : "text-foreground")}>{s.n}</div>
+                  <div className="text-[10px] font-medium text-muted-foreground mt-0.5">{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Filter tabs */}
+            {attentionProducts.length > 0 && (
+              <div className="flex gap-1.5 flex-wrap">
+                {([
+                  ["all",      `All (${attentionProducts.length})`],
+                  ["unset",    `Unset (${attrUnsetCount})`],
+                  ["low_conf", `Low confidence (${attrLowConfCount})`],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setAttrFilter(key)}
+                    className={cn(
+                      "px-3 py-1 text-xs rounded-full border transition-colors",
+                      attrFilter === key
+                        ? "bg-foreground text-background border-foreground"
+                        : "border-border text-muted-foreground hover:text-foreground"
+                    )}
+                  >{label}</button>
+                ))}
               </div>
             )}
 
-            {/* Per-product attribute list */}
-            <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
-            {enrichData.products.map((p: any) => (
-              <div key={p.product_id} className="rounded-xl border border-border/30 bg-secondary/20 overflow-hidden">
-                <div className="px-3 py-2 bg-secondary/40 text-xs font-medium text-foreground truncate">
-                  {p.product_sku && <span className="text-muted-foreground mr-2 font-mono">{p.product_sku}</span>}
-                  {p.product_name}
+            {/* Product list — only products needing attention */}
+            <div className="space-y-1 max-h-72 overflow-y-auto pr-1">
+              {attentionProducts.length === 0 ? (
+                <div className="py-4 text-center text-sm text-muted-foreground italic">
+                  All attributes resolved automatically — no action needed.
                 </div>
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-t border-border/20 bg-secondary/20">
-                      <th className="px-3 py-1 text-left text-[10px] font-medium text-muted-foreground/70 w-28">Sunsky Attr</th>
-                      <th className="px-3 py-1 text-left text-[10px] font-medium text-orange-400/80 w-32">WooCommerce Name</th>
-                      <th className="px-3 py-1 text-left text-[10px] font-medium text-muted-foreground/70">Raw Value</th>
-                      <th className="px-3 py-1 text-left text-[10px] font-medium text-blue-400/80 w-32">Normalised Value</th>
-                      <th className="px-2 py-1 text-right text-[10px] font-medium text-muted-foreground/70 w-10">Conf.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(p.attrs ?? []).map((a: any) => (
-                      <tr key={a.id} className={cn("border-t border-border/20", bulkNormEdits[a.attribute] ? "opacity-60" : "")}>
-                        <td className="px-3 py-1.5 text-muted-foreground w-28 shrink-0">{a.attribute}</td>
-                        <td className="px-3 py-1.5 w-32">
-                          <input
-                            type="text"
-                            placeholder={a.woo_attr_name_suggest ?? a.attribute}
-                            defaultValue={a.woo_attr_name ?? a.woo_attr_name_suggest ?? ""}
-                            onChange={(e) => setNameEdits((prev) => ({ ...prev, [a.attribute]: e.target.value }))}
-                            className="w-full bg-transparent border-b border-orange-400/25 focus:border-orange-400/70 outline-none py-0.5 text-orange-300 placeholder:text-muted-foreground/40 text-xs"
-                          />
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-foreground">{a.raw_value}</td>
-                        <td className="px-3 py-1.5 w-32">
-                          <input
-                            type="text"
-                            placeholder={a.norm_suggestion ?? a.raw_value}
-                            defaultValue={a.normalised_value ?? a.norm_suggestion ?? ""}
-                            onChange={(e) => setNormEdits((prev) => ({ ...prev, [a.id]: { value: e.target.value } }))}
-                            className="w-full bg-transparent border-b border-blue-400/25 focus:border-blue-400/70 outline-none py-0.5 text-blue-300 placeholder:text-muted-foreground/40 text-xs"
-                          />
-                        </td>
-                        <td className={cn("px-2 py-1.5 text-right tabular-nums text-[10px] w-10", confidenceColor(a.confidence))}>
-                          {a.confidence != null ? `${Math.round(a.confidence * 100)}%` : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ))}
+              ) : attrFilteredProducts.length === 0 ? (
+                <div className="py-4 text-center text-sm text-muted-foreground italic">
+                  No products match this filter.
+                </div>
+              ) : attrFilteredProducts.map((p: any) => {
+                const isExp = expanded.has(p.product_id);
+                const problems = attrProblemAttrs(p);
+                const pUnsets = problems.filter((a: any) => a.status === "unset");
+                const pLowConfs = problems.filter((a: any) => a.status === "low_confidence");
+                return (
+                  <div key={p.product_id} className="rounded-xl border border-border/30 bg-secondary/20 overflow-hidden">
+                    <button
+                      className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-secondary/40 transition-colors"
+                      onClick={() => setExpanded(prev => {
+                        const n = new Set(prev);
+                        n.has(p.product_id) ? n.delete(p.product_id) : n.add(p.product_id);
+                        return n;
+                      })}
+                    >
+                      <div className="flex flex-col items-start min-w-0">
+                        <span className="text-sm font-medium text-foreground truncate">{p.product_name}</span>
+                        {p.product_sku && <span className="text-[10px] text-muted-foreground font-mono">{p.product_sku}</span>}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        {pUnsets.length > 0 && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/15 text-red-400 border border-red-500/25">
+                            {pUnsets.length} unset
+                          </span>
+                        )}
+                        {pLowConfs.length > 0 && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                            {pLowConfs.length} low conf
+                          </span>
+                        )}
+                        {isExp ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+                      </div>
+                    </button>
+                    {isExp && (
+                      <div className="border-t border-border/20 bg-background/40">
+                        {problems.map((a: any) => {
+                          const res = resolutions[p.product_id]?.[a.id] ?? {};
+                          const terms = getWooTerms(a);
+                          const isHandled = res.confirmed || !!res.value;
+                          return (
+                            <div key={a.id} className="flex items-center gap-3 px-3 py-2.5 border-b border-border/10 last:border-0">
+                              <span className="text-xs font-medium text-foreground w-32 shrink-0">{a.woo_attr_name || a.attribute}</span>
+                              <span className="text-muted-foreground shrink-0">→</span>
+                              {a.status === "unset" ? (
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                  <select
+                                    value={res.value ?? ""}
+                                    onChange={e => setResolutions(prev => ({
+                                      ...prev,
+                                      [p.product_id]: { ...(prev[p.product_id] ?? {}), [a.id]: { value: e.target.value } },
+                                    }))}
+                                    className="flex-1 bg-background border border-border rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-primary"
+                                  >
+                                    <option value="">— select value —</option>
+                                    {terms.map((t: string) => <option key={t} value={t}>{t}</option>)}
+                                  </select>
+                                  <span className="text-[10px] text-red-400 font-medium shrink-0">unset</span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                  {isHandled ? (
+                                    <span className="text-xs text-emerald-400 font-medium flex-1">{res.value ?? a.raw_value}</span>
+                                  ) : (
+                                    <>
+                                      <select
+                                        value={res.value ?? ""}
+                                        onChange={e => setResolutions(prev => ({
+                                          ...prev,
+                                          [p.product_id]: { ...(prev[p.product_id] ?? {}), [a.id]: { value: e.target.value } },
+                                        }))}
+                                        className="flex-1 bg-background border border-border rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-primary"
+                                      >
+                                        <option value="">
+                                          {a.raw_value || a.normalised_value} ({Math.round((a.confidence ?? 0) * 100)}%)
+                                        </option>
+                                        {terms.map((t: string) => <option key={t} value={t}>{t}</option>)}
+                                      </select>
+                                      <button
+                                        onClick={() => setResolutions(prev => ({
+                                          ...prev,
+                                          [p.product_id]: { ...(prev[p.product_id] ?? {}), [a.id]: { confirmed: true } },
+                                        }))}
+                                        className="px-2 py-1 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 shrink-0"
+                                      >
+                                        Confirm
+                                      </button>
+                                    </>
+                                  )}
+                                  <span className="text-[10px] shrink-0">
+                                    {isHandled
+                                      ? <span className="text-emerald-400">✓</span>
+                                      : <span className="text-amber-400">{Math.round((a.confidence ?? 0) * 100)}% conf</span>
+                                    }
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer with Confirm & continue */}
+            <div className="flex items-center justify-between pt-2 border-t border-border/30">
+              <span className="text-xs text-muted-foreground">
+                {attrResolvedCount > 0 && attentionProducts.length > 0
+                  ? `${attrResolvedCount} product${attrResolvedCount !== 1 ? "s" : ""} resolved automatically`
+                  : attentionProducts.length === 0
+                  ? "All products resolved automatically — ready to continue"
+                  : "Review each product above, then confirm"
+                }
+              </span>
+              <button
+                onClick={handleAttrConfirm}
+                disabled={saving || !allResolved}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors"
+              >
+                {saving && <Loader2 className="w-3 h-3 animate-spin" />}
+                Confirm &amp; continue ›
+              </button>
             </div>
           </div>
         )
@@ -1287,17 +1405,6 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
         )
       )}
 
-      <div className="flex items-center gap-2 pt-1 border-t border-border/30">
-        <button
-          onClick={handleConfirm}
-          disabled={saving}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/20 transition-colors disabled:opacity-50"
-        >
-          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-          Confirm Attributes &amp; Continue
-        </button>
-        <span className="text-xs text-muted-foreground">Pipeline will resume with Generate / Review after confirmation</span>
-      </div>
     </div>
   );
 }

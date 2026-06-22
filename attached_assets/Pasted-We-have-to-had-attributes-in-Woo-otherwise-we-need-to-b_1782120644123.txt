@@ -1,0 +1,87 @@
+We have to had attributes in Woo, otherwise we need to build an option to add attribution in Woo from Pipeline which will be comlicated
+
+
+Image 1 (check image1.png)— New Extraction Rule: mostly correct, two issues
+
+
+
+The structure matches the architecture well — WooCommerce attribute name, source fields, AI instruction, confidence threshold, if-not-found behaviour are all the right fields. Two things need fixing:
+
+
+
+Issue 1 — "WooCommerce Attribute Name" should not be a free-text field. It currently shows as a text input with placeholder "e.g. Color, Brand, Material". This breaks the entire premise that WooCommerce is the source of truth. If the user types "Color" but WooCommerce actually has the attribute named "Colour" or "pa_color", the extraction rule will never match anything and will fail silently. This needs to be a dropdown populated from the synced WooCommerce attributes list — the same list used everywhere else (default rules, profiles).
+
+
+
+Issue 2 — Confidence Threshold as a raw number input is too easy to get wrong. Typing 0.7 works but invites mistakes like 7 or 70 or 0.75123. A slider with a labeled percentage (as I showed in the mockup) is more constrained and harder to misconfigure. This is a minor issue — a number input with min=0 max=1 step=0.05 and a visible "70%" label next to it would also work fine if the dev prefers to keep it simple.
+Everything else — Source Fields as a dropdown, AI Instruction as a textarea, If Not Found as a dropdown — is correct and matches the design.
+
+
+
+Image 2 (check image2.png) — New Attribute Profile
+
+
+
+For Color and Size, the profile only needs to reference which attributes belong to this product type — not their values, not their extraction logic, not anything else. Those are defined elsewhere (in the WooCommerce attribute registry and in the AI extraction rules from Image 1). The profile is purely a grouping list.
+So for "Add attribute name..." you would add:
+
+
+
+Profile Name: Clothing
+Attributes: [Color] [Size] [+]
+
+
+
+That's it. Each click on "+" adds one more attribute chip to the profile. The field should work exactly like the "Source Fields" multi-select pattern — except instead of free text, it should also be a dropdown of existing WooCommerce attributes, not a free-text "Add attribute name..." input.
+
+
+
+This is the same issue as Image 1: the attribute name field should never be free text anywhere in this system. Every place an attribute is referenced — extraction rules, default rules, profiles — must pull from the same single dropdown source: the synced WooCommerce attribute list. If any of these screens allow typing a name freely, you get four different ways to misspell "Color" across four different settings screens, and none of them will match each other or match WooCommerce.
+Here is the corrected version of Image 2: check image3.png
+
+Try selecting "Material" or "Brand" from the dropdown and clicking the + button — it becomes a chip, and removing it with the × frees it back up in the dropdown.
+
+
+For the "Clothing" profile example with Color and Size: select "Color" from the dropdown, click +, it becomes a chip. Select "Size", click +, second chip. That's the entire profile. No values, no extraction logic, no anything else — just a list of which attributes apply to this product type.
+
+
+What happens before the screen renders
+When the pipeline reaches the Attribute step, the backend has already done three things for every product in the batch: applied the default attribute rules, run AI extraction using the configured rules, and checked the product's assigned profile (from its Sunsky category mapping) to know which attributes are expected.
+The UI's job is to show the result of resolving all three sources, and surface only what still needs a human decision.
+
+The resolution logic per attribute, per product
+For every attribute in the product's profile, the system checks in this order:
+
+1. Does a product-level manual value already exist? → use it, mark "manual"
+2. Did AI extraction return a result above the confidence threshold? → use it, mark "ai"
+3. Does a default rule apply to this attribute? → use it, mark "default"
+4. None of the above → unset, needs input
+
+If AI extraction returned a result but it was below the confidence threshold, that does not count as resolved — it is shown as a low-confidence suggestion needing confirmation, not silently dropped and not silently accepted.
+
+The page needs two things: a batch-level summary so the user knows whether to even look closely, and a filtered product list that only surfaces the products needing attention.
+
+check image5.png
+
+
+At the Attribute step during a pipeline run, display exactly this:
+
+
+
+A four-number summary at the top: total attributes resolved, how many came from AI, how many from default rules, and how many still need attention. This tells the user in one glance whether this run is clean or needs work.
+
+
+
+A filtered list showing only the products with problems — not all 52 products. A product appears in this list only if it has at least one attribute that is either unset or below the confidence threshold. The other 47 products (fully resolved automatically) are mentioned only as a count in the footer — they never need to be looked at.
+
+
+
+Each problem product expands inline to show only its problem attributes — not all of its attributes, just the ones needing a decision. Two cases per attribute: unset shows a dropdown to pick a value (populated from WooCommerce terms for that attribute), low confidence shows the AI's suggested value with a "Confirm" button — one click to accept it if it looks right, or the user can open the dropdown to change it instead.
+
+
+
+One confirm button at the bottom that becomes active once every flagged attribute across every flagged product has either a selected value or a confirmed suggestion. Until then it should be disabled, similar to the pattern used at the category Map step.
+
+
+
+The key principle to tell the dev: never show all attributes for all products at this step. Only show what the resolution logic in the previous message could not resolve on its own. If extraction and defaults are working well, this list should usually be short — often just a handful of products out of a batch of fifty.

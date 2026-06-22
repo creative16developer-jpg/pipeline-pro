@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from database import get_db
-from models.models import Store, WooCategory, StoreStatus
+from models.models import Store, WooCategory, StoreStatus, WooAttribute, WooAttributeTerm
 from schemas.schemas import StoreCreate, StoreUpdate, StoreOut, WooCategoryOut
 from pipeline import woo_client
 from datetime import datetime, timezone
@@ -106,6 +106,77 @@ async def sync_store_categories(store_id: int, db: AsyncSession = Depends(get_db
 
     await db.commit()
     return {"synced": len(raw_cats)}
+
+
+@router.get("/{store_id}/woo-attributes")
+async def list_store_attributes(store_id: int, db: AsyncSession = Depends(get_db)):
+    """Return synced WooCommerce product attributes with their terms."""
+    attrs = (
+        await db.execute(
+            select(WooAttribute)
+            .where(WooAttribute.store_id == store_id)
+            .order_by(WooAttribute.name)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": a.id,
+            "woo_id": a.woo_id,
+            "name": a.name,
+            "slug": a.slug,
+            "terms": [
+                {"id": t.id, "woo_id": t.woo_id, "name": t.name, "slug": t.slug}
+                for t in (a.terms or [])
+            ],
+        }
+        for a in attrs
+    ]
+
+
+@router.post("/{store_id}/woo-attributes/sync")
+async def sync_store_attributes(store_id: int, db: AsyncSession = Depends(get_db)):
+    """Sync product attributes and their terms from WooCommerce."""
+    store = await db.get(Store, store_id)
+    if not store:
+        raise HTTPException(404, "Store not found")
+
+    try:
+        raw_attrs = await woo_client.get_product_attributes(store)
+    except Exception as e:
+        raise HTTPException(502, f"Failed to fetch attributes from WooCommerce: {e}")
+
+    # Replace all attributes for this store
+    await db.execute(delete(WooAttribute).where(WooAttribute.store_id == store_id))
+    await db.flush()
+
+    synced_terms = 0
+    for a in raw_attrs:
+        attr_obj = WooAttribute(
+            store_id=store_id,
+            woo_id=a["id"],
+            name=a["name"],
+            slug=a.get("slug", ""),
+        )
+        db.add(attr_obj)
+        await db.flush()
+
+        try:
+            terms = await woo_client.get_attribute_terms(store, a["id"])
+        except Exception:
+            terms = []
+
+        for t in terms:
+            db.add(WooAttributeTerm(
+                attribute_id=attr_obj.id,
+                store_id=store_id,
+                woo_id=t["id"],
+                name=t["name"],
+                slug=t.get("slug", ""),
+            ))
+            synced_terms += 1
+
+    await db.commit()
+    return {"synced_attributes": len(raw_attrs), "synced_terms": synced_terms}
 
 
 @router.post("/{store_id}/test-product")

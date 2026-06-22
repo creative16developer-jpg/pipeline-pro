@@ -248,6 +248,46 @@ class WooCategory(Base):
     store = relationship("Store", back_populates="categories")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WooCommerce product attributes + terms (synced cache)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class WooAttribute(Base):
+    """WooCommerce product attribute synced from the store (e.g. pa_color → Color)."""
+    __tablename__ = "woo_attributes"
+    __table_args__ = (UniqueConstraint("store_id", "woo_id"),)
+
+    id         = Column(Integer, primary_key=True, index=True)
+    store_id   = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    woo_id     = Column(Integer, nullable=False)
+    name       = Column(String(200), nullable=False)
+    slug       = Column(String(200), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    store = relationship("Store")
+    terms = relationship(
+        "WooAttributeTerm", back_populates="attribute",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class WooAttributeTerm(Base):
+    """One allowed value (term) for a WooCommerce product attribute."""
+    __tablename__ = "woo_attribute_terms"
+    __table_args__ = (UniqueConstraint("attribute_id", "woo_id"),)
+
+    id           = Column(Integer, primary_key=True, index=True)
+    attribute_id = Column(Integer, ForeignKey("woo_attributes.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id     = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    woo_id       = Column(Integer, nullable=False)
+    name         = Column(String(200), nullable=False)
+    slug         = Column(String(200), nullable=False)
+
+    attribute = relationship("WooAttribute", back_populates="terms")
+
+
 class JobLog(Base):
     __tablename__ = "job_logs"
 

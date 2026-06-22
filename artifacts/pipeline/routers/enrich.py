@@ -22,9 +22,12 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from sqlalchemy import func as sqlfunc
+from sqlalchemy.orm import selectinload
 from models.models import (
     PipelineJob, Product,
     ProductEnrichAttr, NormalisationDict, VariantGroup,
+    AIExtractionRule, WooAttribute,
 )
 
 router = APIRouter(tags=["enrich"])
@@ -89,24 +92,90 @@ async def get_enrich_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         (r.attribute.lower(), r.raw_value.lower()): r.woo_term
         for r in norm_rows
     }
-    # Attribute-name override lookup: attribute.lower() → woo_attr_name (first non-null wins)
     attr_name_lookup: dict[str, str] = {}
     for r in norm_rows:
         if r.woo_attr_name and r.attribute.lower() not in attr_name_lookup:
             attr_name_lookup[r.attribute.lower()] = r.woo_attr_name
 
+    # Load AI extraction rule confidence thresholds (keyed by woo_attr_name.lower())
+    rule_rows = (
+        await db.execute(select(AIExtractionRule))
+    ).scalars().all()
+    threshold_by_attr: dict[str, float] = {
+        r.woo_attr_name.lower(): r.confidence_threshold for r in rule_rows
+    }
+    DEFAULT_THRESHOLD = 0.7
+
+    # Load synced WooCommerce attributes + terms for this store
+    woo_attr_rows = (
+        await db.execute(
+            select(WooAttribute)
+            .options(selectinload(WooAttribute.terms))
+            .where(WooAttribute.store_id == pl.store_id)
+        )
+    ).scalars().all()
+    # Build lookup: name.lower() → list[term_name]
+    woo_terms_by_name: dict[str, list[str]] = {
+        wa.name.lower(): [t.name for t in wa.terms]
+        for wa in woo_attr_rows
+    }
+    woo_terms_by_slug: dict[str, list[str]] = {
+        wa.slug.lower(): [t.name for t in wa.terms]
+        for wa in woo_attr_rows
+    }
+
+    def _attr_status(a: ProductEnrichAttr, threshold: float) -> str:
+        if a.confirmed:
+            return "resolved"
+        src = (getattr(a, "source", None) or "ai")
+        if src == "default":
+            return "resolved"
+        flagged = getattr(a, "flagged", False) or False
+        if flagged:
+            return "unset"
+        if a.confidence is None:
+            return "resolved"  # rule-based extraction — trusted
+        if a.confidence >= threshold:
+            return "resolved"
+        return "low_confidence"
+
+    def _woo_terms_for_attr(a: ProductEnrichAttr) -> list[str]:
+        name_key = (a.woo_attr_name or a.attribute or "").lower()
+        return woo_terms_by_name.get(name_key) or woo_terms_by_slug.get(name_key) or []
+
     # Load product names
     product_ids = list({a.product_id for a in attrs})
-    products = {}
+    products: dict[int, Product] = {}
     if product_ids:
         rows = (await db.execute(
             select(Product).where(Product.id.in_(product_ids))
         )).scalars().all()
         products = {p.id: p for p in rows}
 
-    # Build per-product attr list
+    # Build per-product attr list with status + woo_terms
     by_product: dict[int, list] = {}
+    stats_total = 0
+    stats_from_ai = 0
+    stats_from_defaults = 0
+    stats_need_review = 0
+
     for a in attrs:
+        threshold = threshold_by_attr.get(
+            (a.woo_attr_name or a.attribute or "").lower(), DEFAULT_THRESHOLD
+        )
+        status = _attr_status(a, threshold)
+        woo_terms = _woo_terms_for_attr(a)
+
+        stats_total += 1
+        src = (getattr(a, "source", None) or "ai")
+        if status == "resolved":
+            if src == "default":
+                stats_from_defaults += 1
+            elif src == "ai":
+                stats_from_ai += 1
+        else:
+            stats_need_review += 1
+
         entry = {
             "id":                    a.id,
             "attribute":             a.attribute,
@@ -115,6 +184,11 @@ async def get_enrich_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             "woo_attr_name":         a.woo_attr_name,
             "confidence":            a.confidence,
             "confirmed":             a.confirmed,
+            "source":                src,
+            "flagged":               getattr(a, "flagged", False) or False,
+            "status":                status,
+            "ai_suggestion":         a.raw_value if status == "low_confidence" else None,
+            "woo_terms":             woo_terms,
             "norm_suggestion":       norm_lookup.get((a.attribute.lower(), a.raw_value.lower())),
             "woo_attr_name_suggest": attr_name_lookup.get(a.attribute.lower()),
         }
@@ -126,14 +200,21 @@ async def get_enrich_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         result.append({
             "product_id":   pid,
             "product_name": p.name if p else f"#{pid}",
-            "product_sku":  p.site_sku or p.sku if p else "",
+            "product_sku":  (p.site_sku or p.sku) if p else "",
             "attrs":        attr_list,
         })
 
     return {
-        "pipeline_id":   pipeline_id,
-        "status":        pl.status,
-        "products":      result,
+        "pipeline_id":    pipeline_id,
+        "status":         pl.status,
+        "products":       result,
+        "total_products": len(result),
+        "stats": {
+            "total":         stats_total,
+            "from_ai":       stats_from_ai,
+            "from_defaults": stats_from_defaults,
+            "need_review":   stats_need_review,
+        },
         "norm_dict_size": len(norm_rows),
     }
 
