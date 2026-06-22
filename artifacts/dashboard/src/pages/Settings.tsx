@@ -1130,6 +1130,12 @@ function AttributeProfilesTab() {
 
   const handleSave = async () => {
     if (!form.name.trim()) return;
+    // Auto-include any attribute currently selected in the dropdown (the user
+    // shouldn't have to click "+" separately before clicking Save).
+    let finalAttrs = form.attributes;
+    if (selectedAttr && !finalAttrs.some(a => a.woo_attr_name.toLowerCase() === selectedAttr.toLowerCase())) {
+      finalAttrs = [...finalAttrs, { woo_attr_name: selectedAttr, required: true, sort_order: finalAttrs.length }];
+    }
     setSaving(true);
     try {
       const isNew = editingId === "new";
@@ -1137,7 +1143,7 @@ function AttributeProfilesTab() {
       const r = await fetch(url, {
         method: isNew ? "POST" : "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: form.name.trim(), description: form.description || null, attributes: form.attributes }),
+        body: JSON.stringify({ name: form.name.trim(), description: form.description || null, attributes: finalAttrs }),
       });
       if (!r.ok) { const d = await r.json(); throw new Error(d.detail || "Save failed"); }
       toast({ title: isNew ? "Profile created" : "Profile updated" });
@@ -1163,7 +1169,9 @@ function AttributeProfilesTab() {
     }
   };
 
-  const ProfileForm = () => (
+  // JSX variable (not a sub-component) so React reconciles it as a stable <div>
+  // and never unmounts the form mid-render, which would lose input focus.
+  const profileFormJsx = (
     <div className="rounded-2xl border border-primary/30 bg-primary/5 p-4 space-y-4">
       <div className="flex items-center justify-between">
         <span className="text-sm font-semibold">{editingId === "new" ? "New Attribute Profile" : "Edit Profile"}</span>
@@ -1292,7 +1300,7 @@ function AttributeProfilesTab() {
         </span>
       </div>
 
-      {editingId === "new" && <ProfileForm />}
+      {editingId === "new" && profileFormJsx}
 
       {loading ? (
         <div className="flex items-center gap-2 py-12 justify-center text-muted-foreground text-sm">
@@ -1307,7 +1315,7 @@ function AttributeProfilesTab() {
           {profiles.map(p => (
             <div key={p.id}>
               {editingId === p.id ? (
-                <ProfileForm />
+                profileFormJsx
               ) : (
                 <div className="bg-card border border-border/50 rounded-2xl overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-3 border-b border-border/40">
