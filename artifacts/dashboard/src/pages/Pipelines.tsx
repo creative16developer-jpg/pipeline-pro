@@ -905,7 +905,7 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
   const [bulkNormEdits, setBulkNormEdits] = useState<Record<string, string>>({});
   const [bulkOpen, setBulkOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [attrFilter, setAttrFilter] = useState<"all" | "unset" | "low_conf">("all");
+  const [attrFilter, setAttrFilter] = useState<"all" | "unset" | "low_conf">("all"); // "all"=all products, "unset"=needs review, "low_conf"=auto-resolved
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [resolutions, setResolutions] = useState<Record<number, Record<number, { value?: string; confirmed?: boolean }>>>({});
   const [wooAttrs, setWooAttrs] = useState<any[]>([]);
@@ -1061,16 +1061,17 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
   const attrProblemAttrs = (p: any) =>
     (p.attrs ?? []).filter((a: any) => a.status === "unset" || a.status === "low_confidence");
   const attentionProducts = attrProducts.filter((p: any) => attrProblemAttrs(p).length > 0);
+  const autoResolvedProducts = attrProducts.filter((p: any) => attrProblemAttrs(p).length === 0);
   const attrResolvedCount = attrTotalProducts - attentionProducts.length;
   const attrUnsetCount = attentionProducts.reduce(
     (acc: number, p: any) => acc + (p.attrs ?? []).filter((a: any) => a.status === "unset").length, 0);
   const attrLowConfCount = attentionProducts.reduce(
     (acc: number, p: any) => acc + (p.attrs ?? []).filter((a: any) => a.status === "low_confidence").length, 0);
-  const attrFilteredProducts = attrFilter === "all"
-    ? attentionProducts
-    : attentionProducts.filter((p: any) =>
-        (p.attrs ?? []).some((a: any) => a.status === (attrFilter === "unset" ? "unset" : "low_confidence"))
-      );
+  // Filter tabs: all products / needs review / auto-resolved
+  const attrFilteredProducts =
+    attrFilter === "all"      ? attrProducts :
+    attrFilter === "unset"    ? attentionProducts :
+                                autoResolvedProducts;
   const getWooTerms = (a: any): string[] => {
     if (a.woo_terms?.length) return a.woo_terms;
     const key = (a.woo_attr_name ?? a.attribute ?? "").toLowerCase();
@@ -1188,45 +1189,46 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
               ))}
             </div>
 
-            {/* Filter tabs */}
-            {attentionProducts.length > 0 && (
-              <div className="flex gap-1.5 flex-wrap">
-                {([
-                  ["all",      `All (${attentionProducts.length})`],
-                  ["unset",    `Unset (${attrUnsetCount})`],
-                  ["low_conf", `Low confidence (${attrLowConfCount})`],
-                ] as const).map(([key, label]) => (
-                  <button
-                    key={key}
-                    onClick={() => setAttrFilter(key)}
-                    className={cn(
-                      "px-3 py-1 text-xs rounded-full border transition-colors",
-                      attrFilter === key
-                        ? "bg-foreground text-background border-foreground"
-                        : "border-border text-muted-foreground hover:text-foreground"
-                    )}
-                  >{label}</button>
-                ))}
-              </div>
-            )}
+            {/* Filter tabs — All / Needs Review / Auto-resolved */}
+            <div className="flex gap-1.5 flex-wrap">
+              {([
+                ["all",      `All (${attrProducts.length})`],
+                ["unset",    `Needs review (${attentionProducts.length})`, attrUnsetCount + attrLowConfCount > 0],
+                ["low_conf", `Auto-resolved (${autoResolvedProducts.length})`],
+              ] as [string, string, boolean?][]).map(([key, label, highlight]) => (
+                <button
+                  key={key}
+                  onClick={() => setAttrFilter(key as typeof attrFilter)}
+                  className={cn(
+                    "px-3 py-1 text-xs rounded-full border transition-colors",
+                    attrFilter === key
+                      ? highlight
+                        ? "bg-amber-500 text-background border-amber-500"
+                        : "bg-foreground text-background border-foreground"
+                      : highlight
+                      ? "border-amber-500/40 text-amber-400 hover:text-amber-300"
+                      : "border-border text-muted-foreground hover:text-foreground"
+                  )}
+                >{label}</button>
+              ))}
+            </div>
 
-            {/* Product list — only products needing attention */}
-            <div className="space-y-1 max-h-72 overflow-y-auto pr-1">
-              {attentionProducts.length === 0 ? (
+            {/* Product list — all attributes shown per product */}
+            <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
+              {attrFilteredProducts.length === 0 ? (
                 <div className="py-4 text-center text-sm text-muted-foreground italic">
-                  All attributes resolved automatically — no action needed.
-                </div>
-              ) : attrFilteredProducts.length === 0 ? (
-                <div className="py-4 text-center text-sm text-muted-foreground italic">
-                  No products match this filter.
+                  No products in this filter.
                 </div>
               ) : attrFilteredProducts.map((p: any) => {
                 const isExp = expanded.has(p.product_id);
+                const allAttrs: any[] = p.attrs ?? [];
                 const problems = attrProblemAttrs(p);
                 const pUnsets = problems.filter((a: any) => a.status === "unset");
                 const pLowConfs = problems.filter((a: any) => a.status === "low_confidence");
+                const pResolved = allAttrs.filter((a: any) => a.status === "resolved");
                 return (
                   <div key={p.product_id} className="rounded-xl border border-border/30 bg-secondary/20 overflow-hidden">
+                    {/* Product header row */}
                     <button
                       className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-secondary/40 transition-colors"
                       onClick={() => setExpanded(prev => {
@@ -1239,10 +1241,10 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
                         <span className="text-sm font-medium text-foreground truncate">{p.product_name}</span>
                         {p.product_sku && <span className="text-[10px] text-muted-foreground font-mono">{p.product_sku}</span>}
                       </div>
-                      <div className="flex items-center gap-2 shrink-0 ml-2">
-                        {pUnsets.length > 0 && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/15 text-red-400 border border-red-500/25">
-                            {pUnsets.length} unset
+                      <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                        {pResolved.length > 0 && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                            {pResolved.length} auto ✓
                           </span>
                         )}
                         {pLowConfs.length > 0 && (
@@ -1250,71 +1252,105 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
                             {pLowConfs.length} low conf
                           </span>
                         )}
-                        {isExp ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />}
+                        {pUnsets.length > 0 && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/15 text-red-400 border border-red-500/25">
+                            {pUnsets.length} unset
+                          </span>
+                        )}
+                        {isExp ? <ChevronUp className="w-3.5 h-3.5 text-muted-foreground ml-1" /> : <ChevronDown className="w-3.5 h-3.5 text-muted-foreground ml-1" />}
                       </div>
                     </button>
+
+                    {/* Expanded: ALL attributes with AI values */}
                     {isExp && (
                       <div className="border-t border-border/20 bg-background/40">
-                        {problems.map((a: any) => {
+                        {/* Column headers */}
+                        <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-2 px-3 py-1.5 border-b border-border/10 bg-secondary/30">
+                          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Attribute</span>
+                          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">AI Extracted Value</span>
+                          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Conf</span>
+                          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Status</span>
+                        </div>
+                        {allAttrs.length === 0 ? (
+                          <div className="px-3 py-3 text-xs text-muted-foreground italic">No attributes extracted for this product.</div>
+                        ) : allAttrs.map((a: any) => {
                           const res = resolutions[p.product_id]?.[a.id] ?? {};
                           const terms = getWooTerms(a);
                           const isHandled = res.confirmed || !!res.value;
+                          const aiValue = a.normalised_value ?? a.raw_value ?? "—";
+                          const confPct = a.confidence != null ? Math.round(a.confidence * 100) : null;
+
                           return (
-                            <div key={a.id} className="flex items-center gap-3 px-3 py-2.5 border-b border-border/10 last:border-0">
-                              <span className="text-xs font-medium text-foreground w-32 shrink-0">{a.woo_attr_name || a.attribute}</span>
-                              <span className="text-muted-foreground shrink-0">→</span>
-                              {a.status === "unset" ? (
-                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <div key={a.id} className={cn(
+                              "grid grid-cols-[1fr_1fr_auto_auto] gap-2 items-center px-3 py-2 border-b border-border/10 last:border-0",
+                              a.status === "resolved" ? "bg-emerald-500/3" : a.status === "unset" ? "bg-red-500/3" : "bg-amber-500/3"
+                            )}>
+                              {/* Attribute name */}
+                              <span className="text-xs font-semibold text-foreground capitalize">
+                                {a.woo_attr_name || a.attribute}
+                              </span>
+
+                              {/* AI extracted value / input */}
+                              {a.status === "resolved" ? (
+                                <span className="text-xs text-emerald-400 font-medium">{aiValue}</span>
+                              ) : a.status === "unset" ? (
+                                <select
+                                  value={res.value ?? ""}
+                                  onChange={e => setResolutions(prev => ({
+                                    ...prev,
+                                    [p.product_id]: { ...(prev[p.product_id] ?? {}), [a.id]: { value: e.target.value } },
+                                  }))}
+                                  className="bg-background border border-border rounded px-2 py-0.5 text-xs focus:outline-none focus:border-primary"
+                                >
+                                  <option value="">— pick value —</option>
+                                  {terms.map((t: string) => <option key={t} value={t}>{t}</option>)}
+                                </select>
+                              ) : isHandled ? (
+                                <span className="text-xs text-emerald-400 font-medium">{res.value ?? aiValue}</span>
+                              ) : (
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="text-xs text-amber-300 font-medium truncate">{aiValue}</span>
                                   <select
                                     value={res.value ?? ""}
                                     onChange={e => setResolutions(prev => ({
                                       ...prev,
                                       [p.product_id]: { ...(prev[p.product_id] ?? {}), [a.id]: { value: e.target.value } },
                                     }))}
-                                    className="flex-1 bg-background border border-border rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-primary"
+                                    className="bg-background border border-amber-500/30 rounded px-1.5 py-0.5 text-xs focus:outline-none focus:border-amber-500 max-w-[100px]"
+                                    title="Override AI value"
                                   >
-                                    <option value="">— select value —</option>
+                                    <option value="">override…</option>
                                     {terms.map((t: string) => <option key={t} value={t}>{t}</option>)}
                                   </select>
-                                  <span className="text-[10px] text-red-400 font-medium shrink-0">unset</span>
                                 </div>
+                              )}
+
+                              {/* Confidence */}
+                              <span className={cn("text-[10px] font-mono tabular-nums text-right",
+                                confPct == null ? "text-muted-foreground" :
+                                confPct >= 80 ? "text-emerald-400" :
+                                confPct >= 50 ? "text-amber-400" : "text-red-400"
+                              )}>
+                                {confPct != null ? `${confPct}%` : "—"}
+                              </span>
+
+                              {/* Status / action */}
+                              {a.status === "resolved" ? (
+                                <span className="text-[10px] font-medium text-emerald-400 whitespace-nowrap">✓ auto</span>
+                              ) : a.status === "unset" ? (
+                                <span className="text-[10px] font-medium text-red-400 whitespace-nowrap">✗ unset</span>
+                              ) : isHandled ? (
+                                <span className="text-[10px] font-medium text-emerald-400 whitespace-nowrap">✓ ok</span>
                               ) : (
-                                <div className="flex items-center gap-2 flex-1 min-w-0">
-                                  {isHandled ? (
-                                    <span className="text-xs text-emerald-400 font-medium flex-1">{res.value ?? a.raw_value}</span>
-                                  ) : (
-                                    <>
-                                      <select
-                                        value={res.value ?? ""}
-                                        onChange={e => setResolutions(prev => ({
-                                          ...prev,
-                                          [p.product_id]: { ...(prev[p.product_id] ?? {}), [a.id]: { value: e.target.value } },
-                                        }))}
-                                        className="flex-1 bg-background border border-border rounded-lg px-2 py-1 text-xs focus:outline-none focus:border-primary"
-                                      >
-                                        <option value="">
-                                          {a.raw_value || a.normalised_value} ({Math.round((a.confidence ?? 0) * 100)}%)
-                                        </option>
-                                        {terms.map((t: string) => <option key={t} value={t}>{t}</option>)}
-                                      </select>
-                                      <button
-                                        onClick={() => setResolutions(prev => ({
-                                          ...prev,
-                                          [p.product_id]: { ...(prev[p.product_id] ?? {}), [a.id]: { confirmed: true } },
-                                        }))}
-                                        className="px-2 py-1 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 shrink-0"
-                                      >
-                                        Confirm
-                                      </button>
-                                    </>
-                                  )}
-                                  <span className="text-[10px] shrink-0">
-                                    {isHandled
-                                      ? <span className="text-emerald-400">✓</span>
-                                      : <span className="text-amber-400">{Math.round((a.confidence ?? 0) * 100)}% conf</span>
-                                    }
-                                  </span>
-                                </div>
+                                <button
+                                  onClick={() => setResolutions(prev => ({
+                                    ...prev,
+                                    [p.product_id]: { ...(prev[p.product_id] ?? {}), [a.id]: { confirmed: true } },
+                                  }))}
+                                  className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 whitespace-nowrap"
+                                >
+                                  Confirm
+                                </button>
                               )}
                             </div>
                           );
@@ -1329,11 +1365,11 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
             {/* Footer with Confirm & continue */}
             <div className="flex items-center justify-between pt-2 border-t border-border/30">
               <span className="text-xs text-muted-foreground">
-                {attrResolvedCount > 0 && attentionProducts.length > 0
-                  ? `${attrResolvedCount} product${attrResolvedCount !== 1 ? "s" : ""} resolved automatically`
-                  : attentionProducts.length === 0
-                  ? "All products resolved automatically — ready to continue"
-                  : "Review each product above, then confirm"
+                {attentionProducts.length === 0
+                  ? `All ${attrProducts.length} product${attrProducts.length !== 1 ? "s" : ""} resolved automatically — ready to continue`
+                  : allResolved
+                  ? `All reviewed — ${attrResolvedCount} auto + ${attentionProducts.length} confirmed`
+                  : `${attrResolvedCount} auto-resolved · ${attentionProducts.length} need${attentionProducts.length === 1 ? "s" : ""} review`
                 }
               </span>
               <button
