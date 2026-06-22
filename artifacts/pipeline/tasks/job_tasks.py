@@ -1589,9 +1589,10 @@ async def _run_sync(db, job):
             # bfs_meta[sunsky_id] = {id, alias_id, name, sunsky_parent_id}
             # ─────────────────────────────────────────────────────────────────
 
-            BATCH_SIZE   = 3    # concurrent Sunsky requests per batch
-            BATCH_DELAY  = 1.5  # seconds between batches (≈ 2 req/s → ~120/min, usually safe)
-            MAX_DEPTH    = 6
+            BATCH_SIZE      = 3    # concurrent Sunsky requests per batch
+            BATCH_DELAY     = 1.5  # seconds between batches (≈ 2 req/s → ~120/min, usually safe)
+            MAX_DEPTH       = 4    # rarely deeper than 3; cap prevents exponential blowup
+            MAX_BFS_FETCHES = 80   # hard cap on total API calls; if exceeded the ID isn't in tree
             RATE_LIMIT_PAUSE = 62  # seconds to wait after hitting the per-minute cap
 
             # ── a) Seed bfs_meta from disk cache ──────────────────────────────
@@ -1649,6 +1650,7 @@ async def _run_sync(db, job):
 
                 current_level: list[tuple[str, list]] = [("0", root_cats)]
                 newly_found: dict[str, dict] = {}  # entries discovered this run
+                total_bfs_fetches = 0
 
                 for depth in range(1, MAX_DEPTH + 1):
                     if not current_level or not remaining:
@@ -1681,6 +1683,17 @@ async def _run_sync(db, job):
                     if not next_fetch_ids:
                         break
 
+                    # Hard cap: if this level would push us over MAX_BFS_FETCHES, stop now.
+                    # The target category isn't in a reachable part of the tree.
+                    if total_bfs_fetches + len(next_fetch_ids) > MAX_BFS_FETCHES:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  BFS cap reached ({MAX_BFS_FETCHES} fetches) at depth {depth} "
+                                   f"— category IDs not found in Sunsky tree: "
+                                   f"{', '.join(sorted(remaining))} (will skip)")
+                        remaining.clear()
+                        break
+
+                    total_bfs_fetches += len(next_fetch_ids)
                     await _log(db, job.id, LogLevel.info,
                                f"  BFS depth {depth}: fetching {len(next_fetch_ids)} branches "
                                f"({len(remaining)} ID(s) still needed)…")
