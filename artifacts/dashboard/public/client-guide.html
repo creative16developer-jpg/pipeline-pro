@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PipelinePro — WooCommerce Import System: Client Guide</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f8f9fb;
+    color: #1a1d23;
+    line-height: 1.6;
+    font-size: 14px;
+  }
+
+  .page {
+    max-width: 860px;
+    margin: 0 auto;
+    background: #fff;
+    padding: 56px 64px;
+  }
+
+  /* ── Cover ── */
+  .cover {
+    border-bottom: 3px solid #6366f1;
+    padding-bottom: 40px;
+    margin-bottom: 48px;
+  }
+  .cover-badge {
+    display: inline-block;
+    background: #ede9fe;
+    color: #5b21b6;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 20px;
+    margin-bottom: 16px;
+  }
+  .cover h1 {
+    font-size: 32px;
+    font-weight: 800;
+    color: #1a1d23;
+    line-height: 1.2;
+    margin-bottom: 10px;
+  }
+  .cover p {
+    font-size: 15px;
+    color: #5a6072;
+    max-width: 560px;
+  }
+  .cover-meta {
+    margin-top: 20px;
+    font-size: 12px;
+    color: #9ca3af;
+  }
+
+  /* ── TOC ── */
+  .toc {
+    background: #f4f4f8;
+    border-left: 3px solid #6366f1;
+    padding: 20px 24px;
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 48px;
+  }
+  .toc h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: #6366f1; margin-bottom: 12px; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin-bottom: 5px; font-size: 13px; color: #374151; }
+  .toc a { color: #6366f1; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  /* ── Section ── */
+  .section { margin-bottom: 52px; }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  .step-num {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: #6366f1;
+    color: #fff;
+    font-size: 14px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .step-num.green  { background: #10b981; }
+  .step-num.orange { background: #f59e0b; }
+  .step-num.blue   { background: #3b82f6; }
+  .step-num.purple { background: #8b5cf6; }
+  .section-header h2 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #1a1d23;
+  }
+  .section-header .where {
+    margin-left: auto;
+    font-size: 11px;
+    background: #ede9fe;
+    color: #5b21b6;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  p { margin-bottom: 12px; color: #374151; }
+
+  /* ── Example box ── */
+  .example {
+    background: #f8faff;
+    border: 1px solid #c7d2fe;
+    border-left: 4px solid #6366f1;
+    border-radius: 0 8px 8px 0;
+    padding: 16px 20px;
+    margin: 14px 0;
+  }
+  .example-label {
+    font-size: 10px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: #6366f1;
+    margin-bottom: 8px;
+  }
+
+  /* ── Note box ── */
+  .note {
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 14px 0;
+    font-size: 13px;
+    color: #78350f;
+  }
+  .note strong { color: #b45309; }
+
+  /* ── Success box ── */
+  .success {
+    background: #ecfdf5;
+    border: 1px solid #6ee7b7;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 14px 0;
+    font-size: 13px;
+    color: #065f46;
+  }
+
+  /* ── Tables ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 13px;
+  }
+  thead tr { background: #6366f1; color: #fff; }
+  thead th { padding: 9px 12px; text-align: left; font-weight: 600; font-size: 12px; }
+  tbody tr:nth-child(even) { background: #f9fafb; }
+  tbody tr:hover { background: #f0f0ff; }
+  td { padding: 9px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: top; }
+
+  /* ── Status chips ── */
+  .chip {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .chip-green  { background: #d1fae5; color: #065f46; }
+  .chip-amber  { background: #fef3c7; color: #92400e; }
+  .chip-red    { background: #fee2e2; color: #991b1b; }
+  .chip-blue   { background: #dbeafe; color: #1e40af; }
+  .chip-purple { background: #ede9fe; color: #5b21b6; }
+
+  /* ── Flow diagram ── */
+  .flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 20px 0;
+  }
+  .flow-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    position: relative;
+  }
+  .flow-step:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    left: 19px;
+    top: 40px;
+    width: 2px;
+    height: calc(100% - 10px);
+    background: #e5e7eb;
+  }
+  .flow-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+    border: 2px solid #e5e7eb;
+    background: #fff;
+  }
+  .flow-body {
+    padding: 8px 0 28px 0;
+    flex: 1;
+  }
+  .flow-body h4 { font-size: 14px; font-weight: 700; color: #1a1d23; margin-bottom: 4px; }
+  .flow-body p  { font-size: 13px; color: #6b7280; margin: 0; }
+  .flow-pause .flow-icon { border-color: #f59e0b; background: #fffbeb; }
+  .flow-auto  .flow-icon { border-color: #10b981; background: #ecfdf5; }
+
+  /* ── Architecture diagram ── */
+  .arch {
+    background: #1e2030;
+    color: #e2e8f0;
+    border-radius: 10px;
+    padding: 24px 28px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 12.5px;
+    line-height: 1.9;
+    overflow-x: auto;
+    margin: 16px 0;
+  }
+  .arch .c-purple { color: #a78bfa; }
+  .arch .c-green  { color: #6ee7b7; }
+  .arch .c-amber  { color: #fcd34d; }
+  .arch .c-blue   { color: #7dd3fc; }
+  .arch .c-gray   { color: #6b7280; }
+
+  /* ── Key points ── */
+  .keypoints {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 16px 0;
+  }
+  .kp {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .kp-icon { font-size: 20px; margin-bottom: 6px; }
+  .kp h4  { font-size: 13px; font-weight: 700; color: #1a1d23; margin-bottom: 4px; }
+  .kp p   { font-size: 12px; color: #6b7280; margin: 0; }
+
+  /* ── Footer ── */
+  .footer {
+    margin-top: 56px;
+    padding-top: 24px;
+    border-top: 1px solid #e5e7eb;
+    font-size: 12px;
+    color: #9ca3af;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  /* ── Print ── */
+  @media print {
+    body { background: #fff; }
+    .page { padding: 32px 40px; box-shadow: none; }
+    .section { page-break-inside: avoid; }
+    .flow-step { page-break-inside: avoid; }
+  }
+
+  @media (max-width: 640px) {
+    .page { padding: 28px 20px; }
+    .keypoints { grid-template-columns: 1fr; }
+    .section-header .where { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- COVER -->
+  <div class="cover">
+    <div class="cover-badge">Client Documentation</div>
+    <h1>WooCommerce Product Import System</h1>
+    <p>A complete guide to how the attribute and category mapping system works — from Sunsky to WooCommerce, powered by AI extraction with human review.</p>
+    <div class="cover-meta">PipelinePro &nbsp;·&nbsp; Prepared for your review &nbsp;·&nbsp; June 2026</div>
+  </div>
+
+  <!-- TABLE OF CONTENTS -->
+  <div class="toc">
+    <h3>Contents</h3>
+    <ol>
+      <li><a href="#overview">System Overview</a></li>
+      <li><a href="#step1">Step 1 — Sync WooCommerce Attributes</a></li>
+      <li><a href="#step2">Step 2 — Set AI Extraction Rules</a></li>
+      <li><a href="#step3">Step 3 — Create Attribute Profiles</a></li>
+      <li><a href="#step4">Step 4 — Map Categories</a></li>
+      <li><a href="#step5">Step 5 — Run a Pipeline</a></li>
+      <li><a href="#step6">Step 6 — Attribute Review (The Key Step)</a></li>
+      <li><a href="#keypoints">Key Points Summary</a></li>
+      <li><a href="#glossary">Glossary</a></li>
+    </ol>
+  </div>
+
+  <!-- OVERVIEW -->
+  <div class="section" id="overview">
+    <div class="section-header">
+      <div class="step-num" style="background:#1a1d23">✦</div>
+      <h2>System Overview</h2>
+    </div>
+
+    <p>The system automates importing products from the <strong>Sunsky supplier catalogue</strong> into your <strong>WooCommerce store</strong>. For every product it:</p>
+    <ul style="margin: 0 0 14px 20px; color:#374151;">
+      <li style="margin-bottom:5px">Downloads and processes images (resize, watermark, convert to WebP)</li>
+      <li style="margin-bottom:5px">Uses AI to extract product attributes (color, size, material, etc.)</li>
+      <li style="margin-bottom:5px">Pauses for your review before uploading anything</li>
+      <li style="margin-bottom:5px">Uploads products as <strong>drafts</strong> — nothing goes public until you publish</li>
+    </ul>
+
+    <div class="arch">
+<span class="c-blue">Sunsky Catalogue</span>  →  <span class="c-purple">Pipeline</span>  →  <span class="c-amber">Your Review</span>  →  <span class="c-green">WooCommerce (drafts)</span>
+
+<span class="c-gray">─────────────────────────────────────────────────────────</span>
+<span class="c-gray">Settings you configure once:</span>
+
+  <span class="c-blue">WooCommerce Attributes</span>  (synced from your store)
+       ↓
+  <span class="c-purple">AI Extraction Rules</span>     (confidence thresholds per attribute)
+       ↓
+  <span class="c-amber">Attribute Profiles</span>      (groups of attributes per product type)
+       ↓
+  <span class="c-green">Category Mappings</span>       (Sunsky category → WooCommerce + Profile)
+
+<span class="c-gray">─────────────────────────────────────────────────────────</span>
+<span class="c-gray">Each pipeline run:</span>
+
+  Fetch products  →  Process images  →  AI extracts attrs
+                                               ↓
+                            <span class="c-amber">⏸  You review &amp; confirm</span>
+                                               ↓
+                                   Upload as WooCommerce drafts
+    </div>
+
+    <div class="note">
+      <strong>Nothing uploads without your approval.</strong> The pipeline always pauses at the Attribute Review step. You see exactly what the AI extracted — with confidence scores — before clicking Confirm.
+    </div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div class="section" id="step1">
+    <div class="section-header">
+      <div class="step-num blue">1</div>
+      <h2>Sync WooCommerce Attributes</h2>
+      <div class="where">Settings → Attribute Profiles</div>
+    </div>
+
+    <p>Before anything else, the system needs to know what attributes exist in your WooCommerce store. Click <strong>Sync Attributes</strong> to pull them in.</p>
+
+    <p>This is a one-time setup, but you can re-sync any time you add new attributes in WooCommerce.</p>
+
+    <div class="example">
+      <div class="example-label">Example — Attributes synced from your store</div>
+      <table>
+        <thead><tr><th>Attribute Name</th><th>Available Terms (Values)</th></tr></thead>
+        <tbody>
+          <tr><td><strong>color</strong></td><td>Red, Blue, Black, White, Navy, Green, Yellow…</td></tr>
+          <tr><td><strong>size</strong></td><td>XS, S, M, L, XL, XXL, One Size</td></tr>
+          <tr><td><strong>material</strong></td><td>Cotton, Polyester, Nylon, Wool, Linen…</td></tr>
+          <tr><td><strong>gender</strong></td><td>Men, Women, Unisex</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <strong>Important:</strong> Attributes must be created in WooCommerce first (via your WooCommerce admin panel). The system reads from WooCommerce — it does not create attributes for you.
+    </div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="section" id="step2">
+    <div class="section-header">
+      <div class="step-num purple">2</div>
+      <h2>Set AI Extraction Rules</h2>
+      <div class="where">Settings → AI Extraction Rules</div>
+    </div>
+
+    <p>For each attribute, you can optionally set a <strong>confidence threshold</strong> — how certain the AI must be before it auto-approves a value. If the AI is below that threshold, it still extracts the value but flags it for your manual confirmation.</p>
+
+    <div class="example">
+      <div class="example-label">Example — Extraction rules for a clothing store</div>
+      <table>
+        <thead><tr><th>Attribute</th><th>Confidence Threshold</th><th>Reasoning</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>color</strong></td>
+            <td>75%</td>
+            <td>Colors are usually clear in product descriptions</td>
+          </tr>
+          <tr>
+            <td><strong>size</strong></td>
+            <td>90%</td>
+            <td>Sizes are critical — wrong size means returns</td>
+          </tr>
+          <tr>
+            <td><strong>material</strong></td>
+            <td>60%</td>
+            <td>Material can be vague in supplier data; lower bar is fine</td>
+          </tr>
+          <tr>
+            <td><strong>gender</strong></td>
+            <td>80%</td>
+            <td>Usually clear from category name or title</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>If no rule is set for an attribute, a default threshold of <strong>70%</strong> is used automatically.</p>
+
+    <div class="success">
+      <strong>How confidence works in practice:</strong> If the AI sees "100% Cotton" in a product description and extracts <em>material = Cotton</em> with 94% confidence — and your threshold is 60% — it auto-approves. If it's only 55% confident, it shows the value to you and asks you to confirm or override.
+    </div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="section" id="step3">
+    <div class="section-header">
+      <div class="step-num green">3</div>
+      <h2>Create Attribute Profiles</h2>
+      <div class="where">Settings → Attribute Profiles</div>
+    </div>
+
+    <p>An <strong>Attribute Profile</strong> is a named list of attributes that a <em>type</em> of product needs. You create one profile per product category type, then reuse it across many category mappings.</p>
+
+    <div class="example">
+      <div class="example-label">Example — Three profiles for different product types</div>
+      <table>
+        <thead><tr><th>Profile Name</th><th>Attributes Included</th><th>Used For</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Clothing</strong></td>
+            <td>color, size, material, gender</td>
+            <td>T-shirts, dresses, jackets, trousers…</td>
+          </tr>
+          <tr>
+            <td><strong>Electronics</strong></td>
+            <td>connectivity, voltage, battery_life, weight</td>
+            <td>Chargers, earphones, cables, gadgets…</td>
+          </tr>
+          <tr>
+            <td><strong>Accessories</strong></td>
+            <td>color, material, dimensions</td>
+            <td>Bags, wallets, belts, hats…</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>Only attributes that exist in your WooCommerce store (synced in Step 1) can be added to a profile. This ensures the AI only extracts values that WooCommerce can actually use.</p>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="section" id="step4">
+    <div class="section-header">
+      <div class="step-num orange">4</div>
+      <h2>Map Categories</h2>
+      <div class="where">Settings → Category Mapping</div>
+    </div>
+
+    <p>Category Mapping is where you connect everything together. For each Sunsky supplier category, you tell the system:</p>
+    <ul style="margin: 0 0 14px 20px; color:#374151;">
+      <li style="margin-bottom:5px">Which <strong>WooCommerce category</strong> the products should go into</li>
+      <li style="margin-bottom:5px">Which <strong>Attribute Profile</strong> to use (so the AI knows what to extract)</li>
+    </ul>
+
+    <div class="example">
+      <div class="example-label">Example — Category mappings for a clothing &amp; electronics store</div>
+      <table>
+        <thead><tr><th>Sunsky Category</th><th>WooCommerce Category</th><th>Attribute Profile</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Men's T-Shirts</td>
+            <td>Clothing &gt; Men &gt; Tops</td>
+            <td><span class="chip chip-purple">Clothing</span></td>
+          </tr>
+          <tr>
+            <td>Women's Dresses</td>
+            <td>Clothing &gt; Women &gt; Dresses</td>
+            <td><span class="chip chip-purple">Clothing</span></td>
+          </tr>
+          <tr>
+            <td>Winter Jackets</td>
+            <td>Clothing &gt; Outerwear</td>
+            <td><span class="chip chip-purple">Clothing</span></td>
+          </tr>
+          <tr>
+            <td>USB Chargers</td>
+            <td>Electronics &gt; Charging</td>
+            <td><span class="chip chip-blue">Electronics</span></td>
+          </tr>
+          <tr>
+            <td>Bluetooth Earphones</td>
+            <td>Electronics &gt; Audio</td>
+            <td><span class="chip chip-blue">Electronics</span></td>
+          </tr>
+          <tr>
+            <td>Handbags</td>
+            <td>Accessories &gt; Bags</td>
+            <td><span class="chip chip-green">Accessories</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <strong>One-time setup:</strong> You create these mappings once. Every time you run a pipeline for "Men's T-Shirts", the system automatically knows to use the Clothing profile and the Clothing &gt; Men &gt; Tops WooCommerce category.
+    </div>
+  </div>
+
+  <!-- STEP 5 -->
+  <div class="section" id="step5">
+    <div class="section-header">
+      <div class="step-num" style="background:#ec4899">5</div>
+      <h2>Run a Pipeline</h2>
+      <div class="where">Pipelines → + New Pipeline</div>
+    </div>
+
+    <p>When you want to import products, you start a Pipeline. Select your store and category — the system does the rest automatically.</p>
+
+    <div class="flow">
+      <div class="flow-step flow-auto">
+        <div class="flow-icon">📥</div>
+        <div class="flow-body">
+          <h4>Fetch products from Sunsky</h4>
+          <p>Downloads all products in the selected category — titles, descriptions, specifications, images.</p>
+        </div>
+      </div>
+      <div class="flow-step flow-auto">
+        <div class="flow-icon">🖼️</div>
+        <div class="flow-body">
+          <h4>Process images</h4>
+          <p>Each product image is resized, watermarked with your branding, and converted to WebP format for fast loading.</p>
+        </div>
+      </div>
+      <div class="flow-step flow-auto">
+        <div class="flow-icon">🤖</div>
+        <div class="flow-body">
+          <h4>AI extracts attributes</h4>
+          <p>The AI reads each product's data and extracts the attributes defined in the profile — e.g. color, size, material — with a confidence score for each.</p>
+        </div>
+      </div>
+      <div class="flow-step flow-pause">
+        <div class="flow-icon">⏸</div>
+        <div class="flow-body">
+          <h4>Pause — Attribute Review</h4>
+          <p><strong>You review all extracted values.</strong> The pipeline waits here until you click Confirm &amp; continue. See Step 6 for full details.</p>
+        </div>
+      </div>
+      <div class="flow-step flow-auto">
+        <div class="flow-icon">☁️</div>
+        <div class="flow-body">
+          <h4>Upload to WooCommerce as drafts</h4>
+          <p>Products are uploaded with all attributes, images, and categories — but set to <strong>Draft</strong> status so nothing is publicly visible yet.</p>
+        </div>
+      </div>
+      <div class="flow-step flow-auto">
+        <div class="flow-icon">✅</div>
+        <div class="flow-body">
+          <h4>Publish in WooCommerce</h4>
+          <p>You do a final review in WooCommerce and publish the products you are happy with. This step is done directly in your WooCommerce admin.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 6 -->
+  <div class="section" id="step6">
+    <div class="section-header">
+      <div class="step-num" style="background:#f59e0b">6</div>
+      <h2>Attribute Review — The Key Step</h2>
+      <div class="where">Pipelines → click running pipeline</div>
+    </div>
+
+    <p>This is the most important step. After the AI has processed every product, the pipeline pauses and shows you a detailed review panel. You see <strong>every product</strong> with <strong>every attribute</strong> the AI extracted — including the value and how confident the AI was.</p>
+
+    <div class="example">
+      <div class="example-label">Example — Review panel for "Classic Men's Polo Shirt" (SKU: SMS-4421)</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Attribute</th>
+            <th>AI Extracted Value</th>
+            <th>Confidence</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>color</strong></td>
+            <td>Navy Blue</td>
+            <td>94%</td>
+            <td><span class="chip chip-green">✓ Auto-approved</span></td>
+          </tr>
+          <tr>
+            <td><strong>size</strong></td>
+            <td>M</td>
+            <td>88%</td>
+            <td><span class="chip chip-green">✓ Auto-approved</span></td>
+          </tr>
+          <tr>
+            <td><strong>material</strong></td>
+            <td>100% Cotton</td>
+            <td>72%</td>
+            <td><span class="chip chip-amber">⚠ Needs confirm</span></td>
+          </tr>
+          <tr>
+            <td><strong>gender</strong></td>
+            <td><em>(not found)</em></td>
+            <td>—</td>
+            <td><span class="chip chip-red">✗ Unset — pick value</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>For each attribute, one of three things happens:</p>
+
+    <table>
+      <thead><tr><th>Status</th><th>What it means</th><th>What you do</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="chip chip-green">✓ Auto-approved</span></td>
+          <td>AI was confident enough (above your threshold). Value is shown so you can verify it.</td>
+          <td>Nothing — just read it. If it looks wrong, you can still override it.</td>
+        </tr>
+        <tr>
+          <td><span class="chip chip-amber">⚠ Needs confirm</span></td>
+          <td>AI extracted a value but was below your confidence threshold. It could be right — it just wants your sign-off.</td>
+          <td>Click <strong>Confirm</strong> to accept the AI value, or pick a different value from the dropdown.</td>
+        </tr>
+        <tr>
+          <td><span class="chip chip-red">✗ Unset</span></td>
+          <td>AI could not extract a value for this attribute from the product data.</td>
+          <td>Pick the correct value from the WooCommerce terms dropdown.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Filter tabs let you focus: <strong>All Products</strong> · <strong>Needs Review</strong> (only products with amber/red attributes) · <strong>Auto-resolved</strong> (products the AI handled fully).</p>
+
+    <div class="success">
+      Once all flagged attributes are handled, the <strong>Confirm &amp; continue ›</strong> button becomes active. Clicking it saves your decisions and the pipeline uploads the products to WooCommerce.
+    </div>
+
+    <h3 style="margin: 20px 0 10px; font-size:15px;">The system gets smarter over time</h3>
+    <p>Every time you correct an AI value, that correction is saved as a <strong>normalisation rule</strong>. For example, if the AI extracted "COTTON 100%" and you corrected it to "Cotton", the system remembers that mapping and applies it automatically to every future product — so you never have to correct that same thing twice.</p>
+  </div>
+
+  <!-- KEY POINTS -->
+  <div class="section" id="keypoints">
+    <div class="section-header">
+      <div class="step-num" style="background:#1a1d23">★</div>
+      <h2>Key Points Summary</h2>
+    </div>
+
+    <div class="keypoints">
+      <div class="kp">
+        <div class="kp-icon">🔒</div>
+        <h4>Nothing uploads without your approval</h4>
+        <p>The pipeline always pauses at Attribute Review. You see every value the AI extracted before anything is sent to WooCommerce.</p>
+      </div>
+      <div class="kp">
+        <div class="kp-icon">📝</div>
+        <h4>Products upload as drafts</h4>
+        <p>All imported products land in WooCommerce as Drafts. Nothing is publicly visible until you manually publish them in WooCommerce.</p>
+      </div>
+      <div class="kp">
+        <div class="kp-icon">🧠</div>
+        <h4>AI learns from your corrections</h4>
+        <p>Each confirmed or corrected value teaches the system. Future runs for the same category will need less and less manual review.</p>
+      </div>
+      <div class="kp">
+        <div class="kp-icon">♻️</div>
+        <h4>Set up once, reuse forever</h4>
+        <p>Create your profiles and category mappings once. Every future pipeline for "Men's T-Shirts" automatically uses the right settings.</p>
+      </div>
+      <div class="kp">
+        <div class="kp-icon">🎚️</div>
+        <h4>You control confidence thresholds</h4>
+        <p>Set stricter thresholds for critical attributes like size, and looser ones for less important fields. The AI auto-approves everything above your bar.</p>
+      </div>
+      <div class="kp">
+        <div class="kp-icon">🖼️</div>
+        <h4>Images processed automatically</h4>
+        <p>Every image is resized, watermarked with your branding, and converted to WebP — no manual image editing needed.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- GLOSSARY -->
+  <div class="section" id="glossary">
+    <div class="section-header">
+      <div class="step-num" style="background:#6b7280">?</div>
+      <h2>Glossary</h2>
+    </div>
+
+    <table>
+      <thead><tr><th>Term</th><th>Definition</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>WooCommerce Attribute</strong></td>
+          <td>A product property in WooCommerce (e.g., <em>color</em>, <em>size</em>). Attributes have a fixed list of valid values called <em>terms</em>.</td>
+        </tr>
+        <tr>
+          <td><strong>AI Extraction Rule</strong></td>
+          <td>A per-attribute setting that tells the AI how confident it must be before auto-approving a value. Below the threshold, the value is flagged for your review.</td>
+        </tr>
+        <tr>
+          <td><strong>Attribute Profile</strong></td>
+          <td>A named collection of attributes expected for a type of product (e.g., a "Clothing" profile includes color, size, material). Assigned to a category mapping.</td>
+        </tr>
+        <tr>
+          <td><strong>Category Mapping</strong></td>
+          <td>A rule that links a Sunsky supplier category to a WooCommerce category, along with the Attribute Profile to use for that category's products.</td>
+        </tr>
+        <tr>
+          <td><strong>Pipeline</strong></td>
+          <td>A single import run for one store + category combination. Covers fetch → images → AI → review → upload.</td>
+        </tr>
+        <tr>
+          <td><strong>Confidence Score</strong></td>
+          <td>A percentage (0–100%) indicating how certain the AI is about an extracted value. Higher = more certain.</td>
+        </tr>
+        <tr>
+          <td><strong>Normalisation Rule</strong></td>
+          <td>A saved correction that maps a raw supplier value to the correct WooCommerce term (e.g., "COTTON 100%" → "Cotton"). Applied automatically on future runs.</td>
+        </tr>
+        <tr>
+          <td><strong>Draft</strong></td>
+          <td>A WooCommerce product status meaning the product exists in your store but is not publicly visible. You publish it manually when ready.</td>
+        </tr>
+        <tr>
+          <td><strong>Sunsky</strong></td>
+          <td>The supplier API that provides the product catalogue, descriptions, specifications, and images being imported.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    <span>PipelinePro — WooCommerce Import System</span>
+    <span>
+      To save as PDF: File → Print → Save as PDF &nbsp;·&nbsp; Ctrl+P / ⌘P
+    </span>
+  </div>
+
+</div>
+</body>
+</html>
