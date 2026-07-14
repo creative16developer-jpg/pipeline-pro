@@ -1,4 +1,4 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useMutation } from "@tanstack/react-query";
 import {
   useListStores,
   useGetStore,
@@ -75,5 +75,45 @@ export function useSyncCategories() {
         queryClient.invalidateQueries({ queryKey: [`/api/stores/${variables.id}/categories`] });
       }
     }
+  });
+}
+
+export function usePullFromWooCommerce() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      pullCategories,
+      pullAttributes,
+    }: {
+      id: number;
+      pullCategories: boolean;
+      pullAttributes: boolean;
+    }) => {
+      const base = (import.meta.env.BASE_URL ?? "/").replace(/\/$/, "");
+      const res = await fetch(`${base}/api/stores/${id}/pull`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pull_categories: pullCategories,
+          pull_attributes: pullAttributes,
+        }),
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new Error(msg);
+      }
+      return res.json() as Promise<{
+        synced_categories?: number;
+        synced_attributes?: number;
+        synced_terms?: number;
+      }>;
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/stores"] });
+      queryClient.invalidateQueries({
+        queryKey: [`/api/stores/${variables.id}/categories`],
+      });
+    },
   });
 }

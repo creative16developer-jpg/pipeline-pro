@@ -51,6 +51,78 @@ async def _run_enum_migrations():
         pass  # enum type not yet created (fresh DB — create_all handles it)
 
 
+async def _migrate_pipeline_job_status():
+    """
+    T02 — Convert pipeline_jobs.status from VARCHAR(20) to a proper PostgreSQL
+    enum type with all valid values (including the new category_review state).
+    Fully idempotent — safe to run on every startup.
+    """
+    import sqlalchemy as sa
+    _values = [
+        "queued", "running", "review", "enrich_review", "category_review",
+        "completed", "failed", "cancelled",
+    ]
+
+    # Step 1: Create the enum type and add any missing values (needs AUTOCOMMIT)
+    async with engine.execution_options(isolation_level="AUTOCOMMIT").connect() as conn:
+        try:
+            vals_sql = ", ".join(f"'{v}'" for v in _values)
+            await conn.execute(sa.text(
+                f"CREATE TYPE pipeline_job_status AS ENUM ({vals_sql})"
+            ))
+        except Exception:
+            pass  # already exists
+
+        for val in _values:
+            try:
+                await conn.execute(sa.text(
+                    f"ALTER TYPE pipeline_job_status ADD VALUE IF NOT EXISTS '{val}'"
+                ))
+            except Exception:
+                pass
+
+    # Step 2: Alter the column type if it is still varchar (transactional)
+    async with engine.begin() as conn:
+        row = (await conn.execute(sa.text(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_name = 'pipeline_jobs' AND column_name = 'status'"
+        ))).fetchone()
+        if row and row[0] == "character varying":
+            await conn.execute(sa.text(
+                "ALTER TABLE pipeline_jobs "
+                "ALTER COLUMN status TYPE pipeline_job_status "
+                "USING status::pipeline_job_status"
+            ))
+
+
+async def _recover_stuck_pipelines():
+    """
+    T03 — On startup, any pipeline still in 'running' status is stuck
+    (the server crashed mid-run).  Mark them as 'failed' so the operator
+    can retry.  Pipelines in a pause state (review / category_review /
+    enrich_review) are intentionally waiting — do NOT touch them.
+    """
+    import sqlalchemy as sa
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            sa.text(
+                "UPDATE pipeline_jobs SET status = 'failed', "
+                "error_message = 'Server restarted while pipeline was running — please retry.', "
+                "updated_at = NOW() "
+                "WHERE status = 'running' "
+                "RETURNING id"
+            )
+        )
+        recovered = result.fetchall()
+        if recovered:
+            ids = [str(r[0]) for r in recovered]
+            print(f"[startup] T03: marked {len(ids)} stuck pipeline(s) as failed: {', '.join(ids)}")
+        await db.commit()
+
+
 async def _run_migrations(conn):
     """Run all pending SQL migrations idempotently on startup.
     Skips ALTER TYPE ADD VALUE statements — those run via _run_enum_migrations."""
@@ -79,11 +151,15 @@ async def _run_migrations(conn):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Enum value additions must run outside a transaction (AUTOCOMMIT)
+    # 1. Enum DDL (must run before create_all)
     await _run_enum_migrations()
+    await _migrate_pipeline_job_status()
+    # 2. Schema sync + SQL migrations
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _run_migrations(conn)
+    # 3. T03: recover any pipelines that were mid-run when the server crashed
+    await _recover_stuck_pipelines()
     yield
 
 

@@ -1,0 +1,29 @@
+import { Tag, Construction } from "lucide-react";
+
+export default function SunskyCategories() {
+  return <SettingsStub title="Sunsky Categories" icon={Tag} description="View and manage the Sunsky product category tree. Categories are fetched automatically during pipeline runs and can be refreshed manually here." />
+}
+
+function SettingsStub({ title, icon: Icon, description }: { title: string; icon: any; description: string }) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-display font-bold text-foreground">{title}</h1>
+        <p className="text-muted-foreground mt-1 text-sm">{description}</p>
+      </div>
+      <div className="bg-card border border-border/50 rounded-2xl p-12 flex flex-col items-center justify-center gap-4 text-center">
+        <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center">
+          <Icon className="w-7 h-7 text-primary" />
+        </div>
+        <div>
+          <p className="font-semibold text-foreground">Coming Soon</p>
+          <p className="text-sm text-muted-foreground mt-1 max-w-sm">{title} configuration will be available in a future update.</p>
+        </div>
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground/50 mt-2">
+          <Construction className="w-3.5 h-3.5" />
+          Under development
+        </div>
+      </div>
+    </div>
+  );
+}

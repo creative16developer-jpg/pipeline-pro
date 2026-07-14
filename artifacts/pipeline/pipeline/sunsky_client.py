@@ -26,6 +26,114 @@ MAX_RETRIES = 3
 RETRY_DELAY = 2.0
 
 
+# ── T01: Mock mode ────────────────────────────────────────────────────────────
+
+class _SunskyAuthError(Exception):
+    """Raised when the Sunsky API returns 401 or 403 (key not whitelisted)."""
+
+
+def _use_mock() -> bool:
+    """Return True when the API key is absent or clearly a test/demo key."""
+    key = (settings.sunsky_api_key or "").strip()
+    return not key or key.upper() in ("TESTKEY", "TEST", "DEMO", "")
+
+
+_MOCK_CATEGORIES: list[dict] = [
+    {"id": "101",  "name": "Phone Accessories",      "parent_id": None,  "alias_id": ""},
+    {"id": "102",  "name": "Audio",                  "parent_id": None,  "alias_id": ""},
+    {"id": "103",  "name": "Wearables",              "parent_id": None,  "alias_id": ""},
+    {"id": "1011", "name": "Phone Cases & Covers",   "parent_id": "101", "alias_id": ""},
+    {"id": "1012", "name": "Screen Protectors",      "parent_id": "101", "alias_id": ""},
+    {"id": "1013", "name": "Wireless Chargers",      "parent_id": "101", "alias_id": ""},
+    {"id": "1021", "name": "Bluetooth Earbuds",      "parent_id": "102", "alias_id": ""},
+    {"id": "1022", "name": "Bluetooth Speakers",     "parent_id": "102", "alias_id": ""},
+    {"id": "1031", "name": "Smart Watches",          "parent_id": "103", "alias_id": ""},
+    {"id": "1032", "name": "Fitness Trackers",       "parent_id": "103", "alias_id": ""},
+]
+
+_IMG = "https://placehold.co/400x400/1e293b/94a3b8?text="
+
+_MOCK_PRODUCTS: list[dict] = [
+    {"id": "MOCK001", "sku": "MOCK001", "name": "Waterproof Bluetooth Earbuds 5.0 IPX5",
+     "description": "Premium wireless earbuds with IPX5 waterproof rating and 20-hour playtime.",
+     "price": "12.50", "stock_status": "in_stock", "category_id": "1021",
+     "images": [_IMG + "Earbuds"],
+     "raw_data": {"paramsTable": "<tr><td>Connectivity</td><td>Bluetooth 5.0</td></tr><tr><td>Waterproof</td><td>IPX5</td></tr><tr><td>Playtime</td><td>6h (20h case)</td></tr><tr><td>Color</td><td>Black / White / Blue</td></tr>"}},
+    {"id": "MOCK002", "sku": "MOCK002", "name": "Tempered Glass Screen Protector 9H Hardness",
+     "description": "Ultra-clear 9H hardness tempered glass for full-coverage smartphone protection.",
+     "price": "2.30", "stock_status": "in_stock", "category_id": "1012",
+     "images": [_IMG + "Glass"],
+     "raw_data": {"paramsTable": "<tr><td>Material</td><td>Tempered Glass</td></tr><tr><td>Hardness</td><td>9H</td></tr><tr><td>Thickness</td><td>0.33mm</td></tr>"}},
+    {"id": "MOCK003", "sku": "MOCK003", "name": "360 Degree Protective Phone Case with Stand",
+     "description": "Full-body shockproof case with built-in kickstand and screen protector.",
+     "price": "4.80", "stock_status": "in_stock", "category_id": "1011",
+     "images": [_IMG + "PhoneCase"],
+     "raw_data": {"paramsTable": "<tr><td>Material</td><td>TPU + PC</td></tr><tr><td>Feature</td><td>360° Protection</td></tr><tr><td>Kickstand</td><td>Yes</td></tr><tr><td>Color</td><td>Black / Red / Blue</td></tr>"}},
+    {"id": "MOCK004", "sku": "MOCK004", "name": "15W Fast Wireless Charging Pad Qi",
+     "description": "Universal Qi wireless charger with 15W fast charging for all Qi-enabled devices.",
+     "price": "8.90", "stock_status": "in_stock", "category_id": "1013",
+     "images": [_IMG + "Charger"],
+     "raw_data": {"paramsTable": "<tr><td>Power Output</td><td>15W Max</td></tr><tr><td>Standard</td><td>Qi</td></tr><tr><td>Input</td><td>USB-C</td></tr>"}},
+    {"id": "MOCK005", "sku": "MOCK005", "name": "Portable Bluetooth Speaker IPX7 Waterproof",
+     "description": "Compact waterproof bluetooth speaker with 360° surround sound and 12-hour battery.",
+     "price": "22.40", "stock_status": "in_stock", "category_id": "1022",
+     "images": [_IMG + "Speaker"],
+     "raw_data": {"paramsTable": "<tr><td>Bluetooth</td><td>5.0</td></tr><tr><td>Waterproof</td><td>IPX7</td></tr><tr><td>Battery</td><td>2000mAh</td></tr><tr><td>Color</td><td>Black / Blue / Red</td></tr>"}},
+    {"id": "MOCK006", "sku": "MOCK006", "name": "Smart Watch with Heart Rate & SpO2 Monitor",
+     "description": "Feature-packed smartwatch with health monitoring, GPS, and 7-day battery life.",
+     "price": "35.00", "stock_status": "in_stock", "category_id": "1031",
+     "images": [_IMG + "SmartWatch"],
+     "raw_data": {"paramsTable": "<tr><td>Display</td><td>1.4\" AMOLED</td></tr><tr><td>Battery</td><td>7 days</td></tr><tr><td>Sensors</td><td>HR, SpO2, GPS</td></tr>"}},
+    {"id": "MOCK007", "sku": "MOCK007", "name": "Sport Fitness Tracker Band with OLED Display",
+     "description": "Slim fitness band with step counter, sleep tracker, and notification alerts.",
+     "price": "14.20", "stock_status": "in_stock", "category_id": "1032",
+     "images": [_IMG + "FitnessTracker"],
+     "raw_data": {"paramsTable": "<tr><td>Display</td><td>OLED 0.96\"</td></tr><tr><td>Battery</td><td>10 days</td></tr><tr><td>Sensors</td><td>Accelerometer, HR</td></tr>"}},
+    {"id": "MOCK008", "sku": "MOCK008", "name": "True Wireless Earbuds with Active Noise Cancellation",
+     "description": "ANC earbuds with transparency mode and 30-hour total playtime with charging case.",
+     "price": "28.90", "stock_status": "in_stock", "category_id": "1021",
+     "images": [_IMG + "ANC+Earbuds"],
+     "raw_data": {"paramsTable": "<tr><td>ANC</td><td>Yes, -25dB</td></tr><tr><td>Bluetooth</td><td>5.2</td></tr><tr><td>Playtime</td><td>8h (30h case)</td></tr><tr><td>Color</td><td>White / Black</td></tr>"}},
+    {"id": "MOCK009", "sku": "MOCK009", "name": "Carbon Fibre Wallet Phone Case for iPhone",
+     "description": "Premium carbon fibre pattern case with card holder and magnetic closure.",
+     "price": "6.50", "stock_status": "in_stock", "category_id": "1011",
+     "images": [_IMG + "WalletCase"],
+     "raw_data": {"paramsTable": "<tr><td>Material</td><td>PU Leather</td></tr><tr><td>Card Slots</td><td>3</td></tr><tr><td>Pattern</td><td>Carbon Fibre</td></tr>"}},
+    {"id": "MOCK010", "sku": "MOCK010", "name": "Privacy Screen Protector Anti-Spy Film",
+     "description": "Anti-spy privacy filter screen protector with 180° viewing angle restriction.",
+     "price": "3.10", "stock_status": "in_stock", "category_id": "1012",
+     "images": [_IMG + "PrivacyScreen"],
+     "raw_data": {"paramsTable": "<tr><td>Type</td><td>Privacy / Anti-Spy</td></tr><tr><td>View Angle</td><td>180° restricted</td></tr><tr><td>Material</td><td>PET Film</td></tr>"}},
+]
+
+
+def _mock_get_categories(parent_id: str = "0") -> list[dict]:
+    if parent_id in ("0", "", None, "None"):
+        return [c for c in _MOCK_CATEGORIES if not c["parent_id"]]
+    return [c for c in _MOCK_CATEGORIES if c["parent_id"] == parent_id]
+
+
+def _mock_search_products(
+    category_id: Optional[str] = None,
+    keyword: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> dict:
+    products = list(_MOCK_PRODUCTS)
+    if category_id:
+        products = [p for p in products if p["category_id"] == category_id]
+    if keyword:
+        kw = keyword.lower()
+        products = [p for p in products if kw in p["name"].lower() or kw in p["description"].lower()]
+    total = len(products)
+    start = (page - 1) * page_size
+    return {
+        "products": products[start : start + page_size],
+        "total": total,
+        "pages": max(1, (total + page_size - 1) // page_size),
+    }
+
+
 def _build_signature(params: dict) -> str:
     sorted_keys = sorted(params.keys())
     value_string = "".join(str(params[k]) for k in sorted_keys)
@@ -43,6 +151,10 @@ async def _post(endpoint: str, params: dict) -> dict:
         try:
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                 resp = await client.post(f"{SUNSKY_BASE}/{endpoint.lstrip('/')}", data=params)
+                if resp.status_code in (401, 403):
+                    raise _SunskyAuthError(
+                        f"Sunsky API returned {resp.status_code} — key not whitelisted. Using mock data."
+                    )
                 resp.raise_for_status()
                 data = resp.json()
 
@@ -57,8 +169,7 @@ async def _post(endpoint: str, params: dict) -> dict:
                     msg = data.get("message", data.get("msg", str(data)))
                     raise ValueError(f"Sunsky API error (code={code}): {msg}")
                 return data
-        except ValueError:
-            # Business-logic errors — don't retry
+        except (_SunskyAuthError, ValueError):
             raise
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             last_error = exc
@@ -157,17 +268,28 @@ def _normalise_images(raw: dict) -> list[str]:
 
 
 async def get_categories(parent_id: str = "0") -> list[dict]:
-    data = await _post("category!getChildren.do", {"parentId": parent_id})
-    categories = _extract_list(data)
-    return [_normalise_category(c) for c in categories if c.get("id") or c.get("categoryId")]
+    if _use_mock():
+        return _mock_get_categories(parent_id)
+    try:
+        data = await _post("category!getChildren.do", {"parentId": parent_id})
+        categories = _extract_list(data)
+        return [_normalise_category(c) for c in categories if c.get("id") or c.get("categoryId")]
+    except _SunskyAuthError:
+        return _mock_get_categories(parent_id)
 
 
 async def get_category_tree() -> list[dict]:
+    if _use_mock():
+        return list(_MOCK_CATEGORIES)
+
     all_cats: list[dict] = []
     seen: set[str] = set()
 
     async def _recurse(parent_id: str):
-        children = await get_categories(parent_id)
+        try:
+            children = await get_categories(parent_id)
+        except _SunskyAuthError:
+            return
         for cat in children:
             if cat["id"] in seen:
                 continue
@@ -176,7 +298,7 @@ async def get_category_tree() -> list[dict]:
             await _recurse(cat["id"])
 
     await _recurse("0")
-    return all_cats
+    return all_cats if all_cats else list(_MOCK_CATEGORIES)
 
 
 async def search_products(
@@ -185,19 +307,23 @@ async def search_products(
     page: int = 1,
     page_size: int = 50,
 ) -> dict:
-    params: dict = {"pageNo": page, "pageSize": page_size}
-    if category_id:
-        params["categoryId"] = category_id
-    if keyword:
-        params["keyword"] = keyword
+    if _use_mock():
+        return _mock_search_products(category_id, keyword, page, page_size)
+    try:
+        params: dict = {"pageNo": page, "pageSize": page_size}
+        if category_id:
+            params["categoryId"] = category_id
+        if keyword:
+            params["keyword"] = keyword
 
-    data = await _post("product!search.do", params)
-    raw_products = _extract_list(data)
-    total = _extract_total(data, len(raw_products))
-
-    products = [_normalise_product(p) for p in raw_products]
-    pages = max(1, (total + page_size - 1) // page_size) if total else 1
-    return {"products": products, "total": total, "pages": pages}
+        data = await _post("product!search.do", params)
+        raw_products = _extract_list(data)
+        total = _extract_total(data, len(raw_products))
+        products = [_normalise_product(p) for p in raw_products]
+        pages = max(1, (total + page_size - 1) // page_size) if total else 1
+        return {"products": products, "total": total, "pages": pages}
+    except _SunskyAuthError:
+        return _mock_search_products(category_id, keyword, page, page_size)
 
 
 async def get_all_products(
@@ -207,10 +333,20 @@ async def get_all_products(
     max_pages: Optional[int] = None,
     on_page: Optional[object] = None,
 ) -> list[dict]:
+    if _use_mock():
+        result = _mock_search_products(category_id, keyword, 1, 999)
+        products = result["products"]
+        if on_page:
+            await on_page(1, products, len(products))
+        return products
+
     all_products: list[dict] = []
     page = 1
     while True:
-        result = await search_products(category_id=category_id, keyword=keyword, page=page, page_size=page_size)
+        try:
+            result = await search_products(category_id=category_id, keyword=keyword, page=page, page_size=page_size)
+        except _SunskyAuthError:
+            result = _mock_search_products(category_id, keyword, page, page_size)
         batch = result["products"]
         total_pages = result["pages"]
         total = result["total"]
@@ -277,12 +413,18 @@ async def get_product_detail(item_no: str) -> Optional[dict]:
     Fetch full product information using the correct endpoint:
       POST product!detail.do  with param itemNo=<SKU>
     """
+    if _use_mock():
+        match = next((p for p in _MOCK_PRODUCTS if p["sku"] == item_no or p["id"] == item_no), None)
+        return match or _MOCK_PRODUCTS[0]
     try:
         data = await _post("product!detail.do", {"itemNo": item_no, "lang": "en"})
         raw = data.get("data", {})
         if not raw or not isinstance(raw, dict):
             return None
         return _normalise_product(raw)
+    except _SunskyAuthError:
+        match = next((p for p in _MOCK_PRODUCTS if p["sku"] == item_no or p["id"] == item_no), None)
+        return match or _MOCK_PRODUCTS[0]
     except Exception as exc:
         print(f"[sunsky_client] get_product_detail({item_no!r}) failed: {exc}")
         return None

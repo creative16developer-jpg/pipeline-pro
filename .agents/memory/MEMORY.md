@@ -2,3 +2,7 @@
 - [Pipeline task dispatch](pipeline-task-dispatch.md) — Celery/Redis not available; use asyncio.create_task() for all background pipeline tasks
 - [Attribute mapping system](attr-mapping-system.md) — new DB tables, Express proxy pattern, enrich_service DB-driven rules
 - [asyncpg multi-statement migrations](asyncpg-migrations.md) — asyncpg rejects multi-statement SQL in one text(); split each CREATE TABLE into a separate execute() call
+- [Nav + settings route structure](nav-settings-routes.md) — new nav layout, all settings sub-routes, stub page locations.
+- [Dashboard pipeline stats](dashboard-pipeline-stats.md) — DashboardStats new fields, PipelineRunOut schema, dashboard.py query pattern.
+- [Sunsky mock fallback](sunsky-mock-fallback.md) — _use_mock(), _SunskyAuthError, mock data constants; every public function checks mock first and catches auth errors.
+- [AI prompts file](ai-prompts-file.md) — prompts.json at pipeline/pipeline/prompts.json; _PROMPTS loaded at module startup; RuntimeError if missing.
