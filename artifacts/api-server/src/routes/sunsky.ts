@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, productsTable, jobsTable } from "@workspace/db";
 import { fetchSunskyProducts, fetchSunskyCategories } from "../lib/sunsky";
+import { makePythonProxy } from "../lib/python-proxy";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
@@ -98,5 +99,13 @@ router.get("/categories", async (_req, res) => {
     res.status(500).json({ error: "Failed to fetch categories" });
   }
 });
+
+// ── Starred Sunsky categories — proxy to Python ───────────────────────────
+// makePythonProxy appends req.path to the prefix, so use "/api/sunsky" here.
+const sunskyPythonProxy = makePythonProxy("/api/sunsky");
+
+router.get("/starred-categories", sunskyPythonProxy);
+router.post("/starred-categories", sunskyPythonProxy);
+router.delete("/starred-categories/:catId", sunskyPythonProxy);
 
 export default router;

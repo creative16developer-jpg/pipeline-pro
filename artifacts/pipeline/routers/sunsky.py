@@ -1,12 +1,61 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete
 from database import get_db
-from models.models import Job, JobStatus, JobType, ProductStatus
+from models.models import Job, JobStatus, JobType, ProductStatus, StarredSunskyCategory
 from schemas.schemas import SunskyFetchRequest, SunskyFetchResult, SunskyCategoryOut
 from pipeline import sunsky_client
 from datetime import datetime, timezone
+from pydantic import BaseModel
+from typing import Optional
 
 router = APIRouter(prefix="/sunsky", tags=["sunsky"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Starred Sunsky categories
+# ─────────────────────────────────────────────────────────────────────────────
+
+class StarCategoryBody(BaseModel):
+    id: str
+    name: str
+    parentName: Optional[str] = None
+
+
+@router.get("/starred-categories")
+async def list_starred_categories(db: AsyncSession = Depends(get_db)):
+    rows = (
+        await db.execute(
+            select(StarredSunskyCategory).order_by(StarredSunskyCategory.name)
+        )
+    ).scalars().all()
+    return [{"id": r.cat_id, "name": r.name, "parentName": r.parent_name} for r in rows]
+
+
+@router.post("/starred-categories", status_code=200)
+async def star_category(body: StarCategoryBody, db: AsyncSession = Depends(get_db)):
+    existing = (
+        await db.execute(
+            select(StarredSunskyCategory).where(StarredSunskyCategory.cat_id == body.id)
+        )
+    ).scalar_one_or_none()
+    if not existing:
+        db.add(StarredSunskyCategory(cat_id=body.id, name=body.name, parent_name=body.parentName))
+        await db.commit()
+    return {"ok": True}
+
+
+@router.delete("/starred-categories/{cat_id}", status_code=200)
+async def unstar_category(cat_id: str, db: AsyncSession = Depends(get_db)):
+    row = (
+        await db.execute(
+            select(StarredSunskyCategory).where(StarredSunskyCategory.cat_id == cat_id)
+        )
+    ).scalar_one_or_none()
+    if row:
+        await db.delete(row)
+        await db.commit()
+    return {"ok": True}
 
 
 

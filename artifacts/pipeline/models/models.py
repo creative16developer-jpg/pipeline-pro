@@ -450,6 +450,17 @@ class AIExtractionRule(Base):
 # Inventory Mapping Config (per store)
 # ─────────────────────────────────────────────────────────────────────────────
 
+class StarredSunskyCategory(Base):
+    """User-starred Sunsky categories — appear in dropdowns/filters throughout the app."""
+    __tablename__ = "starred_sunsky_categories"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    cat_id     = Column(String(50), nullable=False, unique=True)
+    name       = Column(String(200), nullable=False)
+    parent_name = Column(String(200), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class InventoryMappingConfig(Base):
     """Per-store config for mapping Sunsky inventory/weight/dimension fields to WooCommerce."""
     __tablename__ = "inventory_mapping_configs"

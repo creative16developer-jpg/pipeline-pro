@@ -7,6 +7,7 @@ import {
   Upload, FileSpreadsheet, AlertCircle, Wrench
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useStores } from "@/hooks/use-stores";
 import { cn } from "@/lib/utils";
 
 interface ProviderStatus {
@@ -1544,6 +1545,422 @@ function InventoryMappingTab() {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Sunsky Categories tab — star/unstar with lazy-loaded tree
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface SunskyCat { id: string; name: string }
+interface StarredSunskyCat { id: string; name: string; parentName?: string }
+
+function SunskyCategoriesTab() {
+  const { toast } = useToast();
+  const [rootCats, setRootCats]         = useState<SunskyCat[]>([]);
+  const [expanded, setExpanded]         = useState<Set<string>>(new Set());
+  const [childMap, setChildMap]         = useState<Record<string, SunskyCat[]>>({});
+  const [loadingChild, setLoadingChild] = useState<Set<string>>(new Set());
+  const [starred, setStarred]           = useState<StarredSunskyCat[]>([]);
+  const [searchQ, setSearchQ]           = useState("");
+  const [loadingRoot, setLoadingRoot]   = useState(true);
+  const [toggling, setToggling]         = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/sunsky/categories?parent_id=0")
+      .then((r) => r.json())
+      .then((d) => setRootCats(Array.isArray(d) ? d : []))
+      .catch(() => {})
+      .finally(() => setLoadingRoot(false));
+  }, []);
+
+  const loadStarred = () => {
+    fetch("/api/sunsky/starred-categories")
+      .then((r) => r.json())
+      .then((d) => setStarred(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  };
+  useEffect(() => { loadStarred(); }, []);
+
+  const isStarred = (id: string) => starred.some((s) => s.id === id);
+
+  const toggleExpand = async (cat: SunskyCat) => {
+    const next = new Set(expanded);
+    if (next.has(cat.id)) {
+      next.delete(cat.id);
+    } else {
+      next.add(cat.id);
+      if (!childMap[cat.id]) {
+        setLoadingChild((p) => new Set([...p, cat.id]));
+        try {
+          const d = await fetch(
+            `/api/sunsky/categories?parent_id=${encodeURIComponent(cat.id)}`
+          ).then((r) => r.json());
+          setChildMap((p) => ({ ...p, [cat.id]: Array.isArray(d) ? d : [] }));
+        } catch {}
+        setLoadingChild((p) => { const n = new Set(p); n.delete(cat.id); return n; });
+      }
+    }
+    setExpanded(next);
+  };
+
+  const toggleStar = async (cat: SunskyCat, parentName?: string) => {
+    setToggling(cat.id);
+    try {
+      if (isStarred(cat.id)) {
+        await fetch(`/api/sunsky/starred-categories/${encodeURIComponent(cat.id)}`, { method: "DELETE" });
+      } else {
+        await fetch("/api/sunsky/starred-categories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: cat.id, name: cat.name, parentName }),
+        });
+      }
+      loadStarred();
+    } catch {
+      toast({ title: "Failed to update", variant: "destructive" });
+    } finally {
+      setToggling(null);
+    }
+  };
+
+  const filteredRoot = searchQ
+    ? rootCats.filter((c) => c.name.toLowerCase().includes(searchQ.toLowerCase()))
+    : rootCats;
+
+  return (
+    <div>
+      <div>
+        <h1 className="text-2xl font-display font-bold text-foreground">Sunsky Categories</h1>
+        <p className="text-muted-foreground text-sm mt-1">
+          Star the categories you import from. Only starred categories appear in dropdowns throughout the system.
+        </p>
+      </div>
+      <div className="mt-4 grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 items-start">
+        {/* Left — Tree */}
+        <div className="bg-card border border-border/50 rounded-2xl p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+            Sunsky Category Tree
+          </p>
+          <div className="relative mb-3">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search categories..."
+              value={searchQ}
+              onChange={(e) => setSearchQ(e.target.value)}
+              className="w-full bg-background border border-border rounded-xl pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+            />
+          </div>
+          {loadingRoot ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading categories…
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {filteredRoot.map((cat) => (
+                <div key={cat.id}>
+                  <div className="flex items-center gap-1 py-1.5 px-1 rounded-lg hover:bg-secondary/40 group">
+                    <button
+                      onClick={() => toggleExpand(cat)}
+                      className="flex items-center gap-1.5 flex-1 text-sm text-left min-w-0"
+                    >
+                      {loadingChild.has(cat.id) ? (
+                        <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-muted-foreground" />
+                      ) : expanded.has(cat.id) ? (
+                        <ChevronDown className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <ChevronRight className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <Tag className="w-3.5 h-3.5 shrink-0 text-amber-400/70" />
+                      <span className="font-medium truncate">{cat.name}</span>
+                    </button>
+                    <button
+                      onClick={() => toggleStar(cat)}
+                      disabled={toggling === cat.id}
+                      className="shrink-0 px-1 py-0.5 rounded text-lg leading-none transition-colors"
+                      title={isStarred(cat.id) ? "Remove from favourites" : "Add to favourites"}
+                    >
+                      {isStarred(cat.id)
+                        ? <span className="text-amber-400">★</span>
+                        : <span className="text-muted-foreground/30 group-hover:text-muted-foreground/60">☆</span>}
+                    </button>
+                  </div>
+                  {expanded.has(cat.id) &&
+                    (childMap[cat.id] ?? []).map((child) => (
+                      <div key={child.id} className="flex items-center gap-1 py-1.5 px-1 ml-6 rounded-lg hover:bg-secondary/40 group">
+                        <div className="flex items-center gap-1.5 flex-1 text-sm min-w-0">
+                          <Tag className="w-3 h-3 shrink-0 text-amber-400/40" />
+                          <span className="truncate text-foreground/90">{child.name}</span>
+                        </div>
+                        <button
+                          onClick={() => toggleStar(child, cat.name)}
+                          disabled={toggling === child.id}
+                          className="shrink-0 px-1 py-0.5 rounded text-lg leading-none transition-colors"
+                          title={isStarred(child.id) ? "Remove from favourites" : "Add to favourites"}
+                        >
+                          {isStarred(child.id)
+                            ? <span className="text-amber-400">★</span>
+                            : <span className="text-muted-foreground/30 group-hover:text-muted-foreground/60">☆</span>}
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              ))}
+              {filteredRoot.length === 0 && (
+                <p className="text-sm text-muted-foreground py-6 text-center">
+                  {searchQ ? "No categories match your search." : "No categories loaded."}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Right — Starred list */}
+        <div className="bg-card border border-border/50 rounded-2xl p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+            Your Starred Categories ({starred.length})
+          </p>
+          {starred.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">
+              No starred categories yet. Click ☆ next to a category to add it.
+            </p>
+          ) : (
+            <div className="space-y-2 mb-4">
+              {starred.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-amber-500/5 border border-amber-500/20"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{s.name}</p>
+                    {s.parentName && (
+                      <p className="text-xs text-muted-foreground">{s.parentName}</p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => toggleStar(s)}
+                    disabled={toggling === s.id}
+                    className="text-xs text-muted-foreground hover:text-red-400 shrink-0 ml-3 transition-colors whitespace-nowrap"
+                  >
+                    × remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/20 text-xs text-sky-400 leading-relaxed">
+            These appear in: New Pipeline fetch filter, Category Mapping, and pipeline pause dropdowns.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WooCommerce Categories tab — browse per-store categories, star favourites
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface WooCatFull { id: number; name: string; parent_id: number | null; slug?: string }
+
+function WooCategoriesTab() {
+  const { data: stores }              = useStores();
+  const { toast }                     = useToast();
+  const [storeId, setStoreId]         = useState("");
+  const [cats, setCats]               = useState<WooCatFull[]>([]);
+  const [loading, setLoading]         = useState(false);
+  const [syncing, setSyncing]         = useState(false);
+  const [starred, setStarred]         = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    if (!storeId) { setCats([]); return; }
+    setLoading(true);
+    fetch(`/api/stores/${storeId}/categories`)
+      .then((r) => r.json())
+      .then((d) => setCats(Array.isArray(d) ? d : []))
+      .catch(() => setCats([]))
+      .finally(() => setLoading(false));
+    try {
+      const saved = JSON.parse(localStorage.getItem(`woo_starred_${storeId}`) ?? "[]");
+      setStarred(new Set(saved as number[]));
+    } catch { setStarred(new Set()); }
+  }, [storeId]);
+
+  const toggleStar = (id: number) => {
+    const next = new Set(starred);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setStarred(next);
+    localStorage.setItem(`woo_starred_${storeId}`, JSON.stringify([...next]));
+  };
+
+  const handleSync = async () => {
+    if (!storeId) return;
+    setSyncing(true);
+    try {
+      const r = await fetch(`/api/stores/${storeId}/categories`, { method: "POST" });
+      if (!r.ok) throw new Error(await r.text());
+      const d = await fetch(`/api/stores/${storeId}/categories`).then((x) => x.json());
+      setCats(Array.isArray(d) ? d : []);
+      toast({
+        title: "Categories synced",
+        description: `${Array.isArray(d) ? d.length : 0} categories loaded from WooCommerce.`,
+      });
+    } catch (e: any) {
+      toast({ title: "Sync failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const rootCats = cats.filter((c) => !c.parent_id || c.parent_id === 0);
+  const childrenOf: Record<number, WooCatFull[]> = {};
+  cats
+    .filter((c) => c.parent_id && c.parent_id > 0)
+    .forEach((c) => {
+      const pid = c.parent_id!;
+      if (!childrenOf[pid]) childrenOf[pid] = [];
+      childrenOf[pid].push(c);
+    });
+  const starredCats = cats.filter((c) => starred.has(c.id));
+
+  return (
+    <div>
+      <div>
+        <h1 className="text-2xl font-display font-bold text-foreground">WooCommerce Categories</h1>
+        <p className="text-muted-foreground text-sm mt-1">
+          Browse and star WooCommerce store categories. Starred categories are prioritised in the category mapping UI and pipeline category review panels.
+        </p>
+      </div>
+      <div className="mt-4 grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4 items-start">
+        {/* Left — Tree */}
+        <div className="bg-card border border-border/50 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              WooCommerce Category Tree
+            </p>
+            {storeId && (
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                className="flex items-center gap-1.5 text-xs text-primary hover:underline disabled:opacity-50"
+              >
+                {syncing
+                  ? <Loader2 className="w-3 h-3 animate-spin" />
+                  : <RefreshCw className="w-3 h-3" />}
+                Sync from store
+              </button>
+            )}
+          </div>
+          <select
+            value={storeId}
+            onChange={(e) => setStoreId(e.target.value)}
+            className="w-full bg-background border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary mb-3"
+          >
+            <option value="">— Select a store —</option>
+            {stores?.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+
+          {!storeId ? (
+            <p className="text-sm text-muted-foreground italic text-center py-4">
+              Select a store to view its categories.
+            </p>
+          ) : loading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading categories…
+            </div>
+          ) : cats.length === 0 ? (
+            <div className="text-center py-6 space-y-2">
+              <p className="text-sm text-muted-foreground">No categories synced yet.</p>
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                className="text-xs text-primary hover:underline disabled:opacity-50"
+              >
+                Sync from WooCommerce
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {rootCats.map((cat) => (
+                <div key={cat.id}>
+                  <div className="flex items-center gap-1 py-1.5 px-1 rounded-lg hover:bg-secondary/40 group">
+                    <div className="flex items-center gap-1.5 flex-1 text-sm min-w-0">
+                      <Tag className="w-3.5 h-3.5 shrink-0 text-blue-400/60" />
+                      <span className="font-medium truncate">{cat.name}</span>
+                    </div>
+                    <button
+                      onClick={() => toggleStar(cat.id)}
+                      className="shrink-0 px-1 py-0.5 rounded text-lg leading-none transition-colors"
+                      title={starred.has(cat.id) ? "Remove from favourites" : "Add to favourites"}
+                    >
+                      {starred.has(cat.id)
+                        ? <span className="text-amber-400">★</span>
+                        : <span className="text-muted-foreground/30 group-hover:text-muted-foreground/60">☆</span>}
+                    </button>
+                  </div>
+                  {(childrenOf[cat.id] ?? []).map((child) => (
+                    <div key={child.id} className="flex items-center gap-1 py-1.5 px-1 ml-6 rounded-lg hover:bg-secondary/40 group">
+                      <div className="flex items-center gap-1.5 flex-1 text-sm min-w-0">
+                        <Tag className="w-3 h-3 shrink-0 text-blue-400/40" />
+                        <span className="truncate text-foreground/90">{child.name}</span>
+                      </div>
+                      <button
+                        onClick={() => toggleStar(child.id)}
+                        className="shrink-0 px-1 py-0.5 rounded text-lg leading-none transition-colors"
+                        title={starred.has(child.id) ? "Remove from favourites" : "Add to favourites"}
+                      >
+                        {starred.has(child.id)
+                          ? <span className="text-amber-400">★</span>
+                          : <span className="text-muted-foreground/30 group-hover:text-muted-foreground/60">☆</span>}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Right — Starred list */}
+        <div className="bg-card border border-border/50 rounded-2xl p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+            Your Starred Categories ({starredCats.length})
+          </p>
+          {!storeId ? (
+            <p className="text-sm text-muted-foreground text-center py-6">Select a store first.</p>
+          ) : starredCats.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-6">
+              No starred categories. Click ☆ to add.
+            </p>
+          ) : (
+            <div className="space-y-2 mb-4">
+              {starredCats.map((s) => (
+                <div
+                  key={s.id}
+                  className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-amber-500/5 border border-amber-500/20"
+                >
+                  <p className="text-sm font-medium text-foreground truncate">{s.name}</p>
+                  <button
+                    onClick={() => toggleStar(s.id)}
+                    className="text-xs text-muted-foreground hover:text-red-400 shrink-0 ml-3 transition-colors whitespace-nowrap"
+                  >
+                    × remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/20 text-xs text-sky-400 leading-relaxed">
+            Starred categories are prioritised in Category Mapping and pipeline review panels.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Stub placeholder for settings sections not yet implemented
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1859,15 +2276,9 @@ export default function Settings() {
       ) : activeTab === "inventory" ? (
         <InventoryMappingTab />
       ) : activeTab === "sunsky-cats" ? (
-        <StubTab
-          title="Sunsky Categories"
-          description="Browse your Sunsky category tree and star categories to add them to your favourites. Starred categories appear as quick picks when creating a pipeline."
-        />
+        <SunskyCategoriesTab />
       ) : activeTab === "woo-cats" ? (
-        <StubTab
-          title="WooCommerce Categories"
-          description="Browse and star WooCommerce store categories. Starred categories are prioritised in the category mapping UI and pipeline category review panels."
-        />
+        <WooCategoriesTab />
       ) : activeTab === "attr-mapping" ? (
         <StubTab
           title="Attribute Mapping"
