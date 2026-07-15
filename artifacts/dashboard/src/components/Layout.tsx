@@ -26,6 +26,7 @@ import { useDashboardStats } from "@/hooks/use-dashboard";
 const PIPELINES_ITEMS = [
   { href: "/pipelines", label: "All Runs", exact: true },
   { href: "/pipelines/products", label: "Products" },
+  { href: "/jobs", label: "Fetch Jobs" },
 ];
 
 const SETTINGS_GROUPS = [
