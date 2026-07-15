@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useSearch } from "wouter";
 import {
   Settings as SettingsIcon, Key, Eye, EyeOff, CheckCircle2,
   XCircle, Save, Trash2, Loader2, Info, Sparkles, ExternalLink,
   RefreshCw, Tag, Search, ChevronDown, ChevronRight, Edit2, X, Plus,
-  Upload, FileSpreadsheet, AlertCircle
+  Upload, FileSpreadsheet, AlertCircle, Wrench
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -1543,12 +1544,59 @@ function InventoryMappingTab() {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Stub placeholder for settings sections not yet implemented
+// ─────────────────────────────────────────────────────────────────────────────
+
+function StubTab({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="bg-card border border-border/50 rounded-2xl p-8 flex flex-col items-center text-center gap-4 shadow-sm">
+      <div className="w-12 h-12 rounded-xl bg-secondary/60 border border-border flex items-center justify-center">
+        <Wrench className="w-6 h-6 text-muted-foreground" />
+      </div>
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">{title}</h2>
+        <p className="text-sm text-muted-foreground mt-1 max-w-md leading-relaxed">{description}</p>
+      </div>
+      <span className="text-xs px-3 py-1 rounded-full bg-primary/10 text-primary border border-primary/20 font-medium">
+        Coming soon
+      </span>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main Settings page
 // ─────────────────────────────────────────────────────────────────────────────
 
+type SettingsTab =
+  | "keys"
+  | "mappings"
+  | "rules"
+  | "profiles"
+  | "inventory"
+  | "sunsky-cats"
+  | "woo-cats"
+  | "attr-mapping"
+  | "content-gen"
+  | "images"
+  | "pipeline-defaults";
+
+const VALID_TABS: SettingsTab[] = [
+  "keys", "mappings", "rules", "profiles", "inventory",
+  "sunsky-cats", "woo-cats", "attr-mapping",
+  "content-gen", "images", "pipeline-defaults",
+];
+
+function tabFromSearch(search: string): SettingsTab {
+  const t = new URLSearchParams(search).get("tab") as SettingsTab | null;
+  return t && VALID_TABS.includes(t) ? t : "keys";
+}
+
 export default function Settings() {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<"keys" | "mappings" | "rules" | "profiles" | "inventory">("keys");
+  const search = useSearch();
+  const activeTab: SettingsTab = tabFromSearch(search);
 
   const [statuses, setStatuses] = useState<Record<string, ProviderStatus>>({});
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
@@ -1635,31 +1683,6 @@ export default function Settings() {
         )}
       </div>
 
-      {/* Tab switcher */}
-      <div className="flex flex-wrap gap-1 p-1 bg-secondary/40 rounded-xl w-fit border border-border/30">
-        {(
-          [
-            { id: "keys",      icon: <Sparkles className="w-3.5 h-3.5" />, label: "AI Provider Keys" },
-            { id: "mappings",  icon: <Tag className="w-3.5 h-3.5" />,      label: "Category Mappings" },
-            { id: "rules",     icon: <Sparkles className="w-3.5 h-3.5" />, label: "Extraction Rules" },
-            { id: "profiles",  icon: <Tag className="w-3.5 h-3.5" />,      label: "Attribute Profiles" },
-            { id: "inventory", icon: <Tag className="w-3.5 h-3.5" />,      label: "Inventory Mapping" },
-          ] as const
-        ).map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all",
-              activeTab === tab.id
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            {tab.icon} {tab.label}
-          </button>
-        ))}
-      </div>
 
       {activeTab === "keys" ? (
         <>
@@ -1833,8 +1856,38 @@ export default function Settings() {
         <AIExtractionRulesTab />
       ) : activeTab === "profiles" ? (
         <AttributeProfilesTab />
-      ) : (
+      ) : activeTab === "inventory" ? (
         <InventoryMappingTab />
+      ) : activeTab === "sunsky-cats" ? (
+        <StubTab
+          title="Sunsky Categories"
+          description="Browse your Sunsky category tree and star categories to add them to your favourites. Starred categories appear as quick picks when creating a pipeline."
+        />
+      ) : activeTab === "woo-cats" ? (
+        <StubTab
+          title="WooCommerce Categories"
+          description="Browse and star WooCommerce store categories. Starred categories are prioritised in the category mapping UI and pipeline category review panels."
+        />
+      ) : activeTab === "attr-mapping" ? (
+        <StubTab
+          title="Attribute Mapping"
+          description="Define how Sunsky product attributes map to WooCommerce attribute taxonomy terms. Set default mappings that apply across all stores, then override per-store as needed."
+        />
+      ) : activeTab === "content-gen" ? (
+        <StubTab
+          title="Content Generation Defaults"
+          description="Set the default AI model, prompt templates, and field-level generation rules used when pipelines include a Content Generation step."
+        />
+      ) : activeTab === "images" ? (
+        <StubTab
+          title="Image Processing Defaults"
+          description="Configure default image compression quality, resize dimensions, watermark position and opacity, and output format (WebP) applied to all pipeline image steps."
+        />
+      ) : (
+        <StubTab
+          title="Pipeline Defaults"
+          description="Set default toggle states for new pipeline runs — enrichment, content generation, auto-review pause, force re-run, and image compression. These become the pre-filled values in the New Pipeline form."
+        />
       )}
     </div>
   );
