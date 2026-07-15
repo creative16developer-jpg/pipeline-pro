@@ -26,20 +26,6 @@ from typing import Optional
 # Path to config-store API keys (fallback when env vars not set)
 _KEYS_PATH = Path(__file__).parent.parent / "config_store" / "api_keys.json"
 
-# ── T04: Load prompt templates from prompts.json on startup ──────────────────
-_PROMPTS_FILE = Path(__file__).parent / "prompts.json"
-
-def _load_prompts() -> dict:
-    if not _PROMPTS_FILE.exists():
-        raise RuntimeError(
-            f"AI prompt templates file not found: {_PROMPTS_FILE}\n"
-            "This file is required for AI content generation. "
-            "Restore it from the repository and restart the server."
-        )
-    return json.loads(_PROMPTS_FILE.read_text(encoding="utf-8"))
-
-_PROMPTS: dict = _load_prompts()
-
 
 def _get_api_key(env_var: str, provider: str) -> str | None:
     """Read API key: env var first, then config-store file."""
@@ -91,19 +77,82 @@ def _build_product_context(product: dict) -> str:
 
 
 def _build_prompt(field: str, product: dict, options: dict) -> str:
-    """Build the AI prompt for `field` using templates from prompts.json."""
     ctx = _build_product_context(product)
-    template = _PROMPTS.get(field) or _PROMPTS.get("_fallback", "Generate content for \"{field}\".\n\n{context}\n\nReturn ONLY the content value.")
 
-    vars_: dict = {
-        "context":   ctx,
-        "field":     field,
-        "max_chars": options.get("max_chars", 120 if field == "title" else 60 if field == "meta_title" else 155),
-        "max_words": options.get("max_words", 30),
-        "max_tags":  options.get("max_tags", 8),
-        "structure": ", ".join(options.get("structure", ["intro", "features", "benefits", "compatibility"])),
-    }
-    return template.format(**vars_)
+    if field == "title":
+        max_chars = options.get("max_chars", 120)
+        return (
+            f"Write a concise, SEO-friendly product title for a WooCommerce store.\n"
+            f"Max {max_chars} characters. Plain text only. Include key product feature and type.\n\n"
+            f"{ctx}\n\nReturn ONLY the title text."
+        )
+
+    if field == "description":
+        structure = options.get("structure", ["intro", "features", "benefits", "compatibility"])
+        return (
+            f"Write an HTML product description for a WooCommerce store.\n"
+            f"Use <p> and <ul><li> tags only. Structure: {', '.join(structure)}.\n"
+            f"Keep it under 200 words. Be factual, professional, and SEO-friendly.\n\n"
+            f"{ctx}\n\nReturn ONLY the HTML. No explanation, no markdown."
+        )
+
+    if field == "short_description":
+        max_words = options.get("max_words", 30)
+        return (
+            f"Write a short product description for a WooCommerce store listing.\n"
+            f"Maximum {max_words} words. Plain text only (no HTML). Professional and factual.\n\n"
+            f"{ctx}\n\nReturn ONLY the short description text."
+        )
+
+    if field == "slug":
+        return (
+            f"Generate a SEO-friendly URL slug for this product.\n"
+            f"Rules: lowercase, hyphens only, no special characters, include SKU at the end, max 80 characters.\n\n"
+            f"{ctx}\n\nReturn ONLY the slug."
+        )
+
+    if field == "meta_title":
+        max_chars = options.get("max_chars", 60)
+        return (
+            f"Write an SEO meta title for this product. Max {max_chars} characters.\n"
+            f"Plain text only. Include the product name and a key feature.\n\n"
+            f"{ctx}\n\nReturn ONLY the meta title."
+        )
+
+    if field == "meta_description":
+        max_chars = options.get("max_chars", 155)
+        return (
+            f"Write an SEO meta description for this product. Max {max_chars} characters.\n"
+            f"Plain text only. Compelling, factual, includes a soft call to action.\n\n"
+            f"{ctx}\n\nReturn ONLY the meta description."
+        )
+
+    if field == "tags":
+        max_tags = options.get("max_tags", 8)
+        return (
+            f"Generate {max_tags} product tags for WooCommerce.\n"
+            f"Tags should be short keywords or phrases relevant to the product.\n\n"
+            f"{ctx}\n\nReturn ONLY a comma-separated list of tags."
+        )
+
+    if field == "image_alt":
+        return (
+            f"Write an image alt text for this product photo. Max 125 characters.\n"
+            f"Include the product name and SKU. Plain text only.\n\n"
+            f"{ctx}\n\nReturn ONLY the alt text."
+        )
+
+    if field == "image_names":
+        return (
+            f"Generate a filename-safe image name for this product.\n"
+            f"Lowercase, hyphens only, include SKU, max 80 chars, no file extension.\n\n"
+            f"{ctx}\n\nReturn ONLY the filename."
+        )
+
+    return (
+        f'Generate content for the "{field}" field for this product.\n\n'
+        f"{ctx}\n\nReturn ONLY the content value."
+    )
 
 
 # ---------------------------------------------------------------------------

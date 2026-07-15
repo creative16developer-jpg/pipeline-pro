@@ -159,19 +159,6 @@ class JobListOut(BaseModel):
     total_pages: int
 
 
-class PipelineRunOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True, alias_generator=to_camel)
-
-    id: int
-    store_name: str
-    status: str
-    products_total: int = 0
-    products_uploaded: int = 0
-    products_failed: int = 0
-    created_at: datetime
-    is_waiting: bool = False
-
-
 class DashboardStats(BaseModel):
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
@@ -184,11 +171,6 @@ class DashboardStats(BaseModel):
     active_jobs: int
     total_stores: int
     recent_jobs: list[JobOut]
-    active_pipelines: int = 0
-    waiting_for_input: int = 0
-    uploaded_30d: int = 0
-    failed_30d: int = 0
-    recent_pipeline_runs: list[PipelineRunOut] = []
 
 
 class SunskyFetchRequest(BaseModel):

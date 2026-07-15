@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from database import get_db
@@ -178,87 +177,6 @@ async def sync_store_attributes(store_id: int, db: AsyncSession = Depends(get_db
 
     await db.commit()
     return {"synced_attributes": len(raw_attrs), "synced_terms": synced_terms}
-
-
-class PullWooCommerceRequest(BaseModel):
-    pull_categories: bool = True
-    pull_attributes: bool = True
-
-
-@router.post("/{store_id}/pull")
-async def pull_from_woocommerce(
-    store_id: int,
-    body: PullWooCommerceRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Pull categories and/or product attributes from a WooCommerce store into
-    PipelinePro.  Replaces all previously-pulled data for this store.
-    """
-    store = await db.get(Store, store_id)
-    if not store:
-        raise HTTPException(404, "Store not found")
-
-    result: dict = {}
-
-    if body.pull_categories:
-        try:
-            raw_cats = await woo_client.get_categories(store)
-        except Exception as exc:
-            raise HTTPException(502, f"Failed to fetch categories from WooCommerce: {exc}")
-
-        await db.execute(delete(WooCategory).where(WooCategory.store_id == store_id))
-        for c in raw_cats:
-            db.add(WooCategory(
-                store_id=store_id,
-                woo_id=c["id"],
-                name=c["name"],
-                slug=c["slug"],
-                parent_id=c.get("parent") or None,
-                count=c.get("count", 0),
-            ))
-        result["synced_categories"] = len(raw_cats)
-
-    if body.pull_attributes:
-        try:
-            raw_attrs = await woo_client.get_product_attributes(store)
-        except Exception as exc:
-            raise HTTPException(502, f"Failed to fetch attributes from WooCommerce: {exc}")
-
-        await db.execute(delete(WooAttribute).where(WooAttribute.store_id == store_id))
-        await db.flush()
-
-        synced_terms = 0
-        for a in raw_attrs:
-            attr_obj = WooAttribute(
-                store_id=store_id,
-                woo_id=a["id"],
-                name=a["name"],
-                slug=a.get("slug", ""),
-            )
-            db.add(attr_obj)
-            await db.flush()
-
-            try:
-                terms = await woo_client.get_attribute_terms(store, a["id"])
-            except Exception:
-                terms = []
-
-            for t in terms:
-                db.add(WooAttributeTerm(
-                    attribute_id=attr_obj.id,
-                    store_id=store_id,
-                    woo_id=t["id"],
-                    name=t["name"],
-                    slug=t.get("slug", ""),
-                ))
-                synced_terms += 1
-
-        result["synced_attributes"] = len(raw_attrs)
-        result["synced_terms"] = synced_terms
-
-    await db.commit()
-    return result
 
 
 @router.post("/{store_id}/test-product")

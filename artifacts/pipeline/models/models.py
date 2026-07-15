@@ -151,26 +151,15 @@ class Job(Base):
     source_job = relationship("Job", foreign_keys=[source_job_id], remote_side="Job.id")
 
 
-class PipelineJobStatus(str, enum.Enum):
-    queued          = "queued"
-    running         = "running"
-    review          = "review"
-    enrich_review   = "enrich_review"
-    category_review = "category_review"
-    completed       = "completed"
-    failed          = "failed"
-    cancelled       = "cancelled"
-
-
 class PipelineJob(Base):
     """
     Represents one full pipeline run:
-    Fetch → Process → [Enrich] → [Generate] → [Category Review pause] → [Review pause] → Upload → Sync
+    Process → Generate (opt) → Review (pause) → Upload → Sync
 
     The `fetch_job_id` points to the fetch job whose products this pipeline
     will process.  Multiple pipelines can share the same store but only ONE
-    may be in status='running' or 'review' or 'category_review' per store at
-    a time — others are queued and auto-started when the current one finishes.
+    may be in status='running' or 'review' per store at a time — others are
+    queued and auto-started when the current one finishes.
     """
     __tablename__ = "pipeline_jobs"
 
@@ -178,12 +167,8 @@ class PipelineJob(Base):
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     fetch_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    status = Column(
-        SAEnum(PipelineJobStatus, name="pipeline_job_status"),
-        nullable=False,
-        default=PipelineJobStatus.queued,
-        index=True,
-    )
+    # Status: queued | running | review | completed | failed | cancelled
+    status = Column(String(20), nullable=False, default="queued", index=True)
     # Current execution step: process | generate | review | upload | sync
     current_step = Column(String(30), nullable=True)
 
