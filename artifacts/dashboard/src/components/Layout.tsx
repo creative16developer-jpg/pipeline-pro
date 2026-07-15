@@ -5,10 +5,6 @@ import {
   PackageSearch, 
   Activity, 
   Store, 
-  CloudDownload,
-  ArrowRightLeft,
-  Sparkles,
-  Zap,
   Settings,
   Bell
 } from "lucide-react";
@@ -17,13 +13,9 @@ import { cn } from "@/lib/utils";
 const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/pipelines", label: "Pipelines", icon: Activity },
-  { href: "/pipeline", label: "New Pipeline", icon: Zap },
   { href: "/products", label: "Products", icon: PackageSearch },
-  { href: "/jobs", label: "Import Jobs", icon: Activity },
   { href: "/stores", label: "Stores", icon: Store },
-  { href: "/sunsky", label: "Sunsky Fetch", icon: CloudDownload },
-  { href: "/sync", label: "Sync WooCommerce", icon: ArrowRightLeft },
-  { href: "/content", label: "Content Generation", icon: Sparkles },
+  { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -65,20 +57,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
-        
-        <div className="p-6 hidden md:block">
-          <Link href="/settings">
-            <div className={cn(
-              "flex items-center gap-3 px-4 py-3 rounded-xl transition-colors cursor-pointer relative",
-              location === "/settings"
-                ? "text-primary bg-primary/10 border border-primary/20"
-                : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-            )}>
-              <Settings className="w-5 h-5" />
-              <span className="font-medium text-sm">Settings</span>
-            </div>
-          </Link>
-        </div>
       </aside>
 
       {/* Main Content */}

@@ -84,6 +84,21 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _run_migrations(conn)
+    # T03: recover stuck pipelines — any pipeline left in 'running' from a
+    # previous server process is interrupted; mark it failed so the queue
+    # can auto-start the next queued pipeline for that store.
+    import sqlalchemy as _sa
+    from database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        await db.execute(
+            _sa.text(
+                "UPDATE pipeline_jobs "
+                "SET status = 'failed', "
+                "    error_message = 'Interrupted by server restart' "
+                "WHERE status = 'running'"
+            )
+        )
+        await db.commit()
     yield
 
 

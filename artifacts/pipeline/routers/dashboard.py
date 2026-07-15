@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
+from datetime import datetime, timedelta, timezone
 from database import get_db
-from models.models import Product, Job, Store, ProductStatus, JobStatus
-from schemas.schemas import DashboardStats, JobOut
+from models.models import Product, Job, Store, PipelineJob, ProductStatus, JobStatus
+from schemas.schemas import DashboardStats, PipelineJobOut
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -17,27 +18,42 @@ async def _count(db: AsyncSession, model, where=None):
 
 @router.get("/stats", response_model=DashboardStats)
 async def get_stats(db: AsyncSession = Depends(get_db)):
-    total = await _count(db, Product)
-    pending = await _count(db, Product, Product.status == ProductStatus.pending)
-    processing = await _count(db, Product, Product.status == ProductStatus.processing)
-    processed = await _count(db, Product, Product.status == ProductStatus.processed)
-    uploaded = await _count(db, Product, Product.status == ProductStatus.uploaded)
-    failed = await _count(db, Product, Product.status == ProductStatus.failed)
-    active_jobs = await _count(db, Job, Job.status == JobStatus.running)
+    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+
+    # Pipeline-level stats
+    active_pipelines = await _count(
+        db, PipelineJob, PipelineJob.status == "running"
+    )
+    waiting_for_input = (await db.execute(
+        select(func.count(PipelineJob.id)).where(
+            PipelineJob.status.in_(["review", "enrich_review", "category_review"])
+        )
+    )).scalar_one()
+    uploaded_30d = await _count(
+        db, Product,
+        (Product.status == ProductStatus.uploaded) &
+        (Product.updated_at >= thirty_days_ago)
+    )
+    failed_30d = (await db.execute(
+        select(func.count(PipelineJob.id)).where(
+            (PipelineJob.status == "failed") &
+            (PipelineJob.updated_at >= thirty_days_ago)
+        )
+    )).scalar_one()
+
+    # Per-store breakdown (used when >1 store connected)
     total_stores = await _count(db, Store)
 
-    recent_jobs = (await db.execute(
-        select(Job).order_by(Job.created_at.desc()).limit(10)
+    # Recent pipeline runs (last 10), newest first
+    recent_pipelines_rows = (await db.execute(
+        select(PipelineJob).order_by(PipelineJob.created_at.desc()).limit(10)
     )).scalars().all()
 
     return DashboardStats(
-        total_products=total,
-        pending_products=pending,
-        processing_products=processing,
-        processed_products=processed,
-        uploaded_products=uploaded,
-        failed_products=failed,
-        active_jobs=active_jobs,
+        active_pipelines=active_pipelines,
+        waiting_for_input=waiting_for_input,
+        uploaded_30d=uploaded_30d,
+        failed_30d=failed_30d,
         total_stores=total_stores,
-        recent_jobs=[JobOut.model_validate(j) for j in recent_jobs],
+        recent_pipelines=[PipelineJobOut.model_validate(p) for p in recent_pipelines_rows],
     )
