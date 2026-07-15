@@ -2,3 +2,4 @@
 - [Pipeline task dispatch](pipeline-task-dispatch.md) — Celery/Redis not available; use asyncio.create_task() for all background pipeline tasks
 - [Attribute mapping system](attr-mapping-system.md) — new DB tables, Express proxy pattern, enrich_service DB-driven rules
 - [asyncpg multi-statement migrations](asyncpg-migrations.md) — asyncpg rejects multi-statement SQL in one text(); split each CREATE TABLE into a separate execute() call
+- [asyncpg prepared statement cache](asyncpg-ps-cache.md) — add prepared_statement_cache_size=0 to connect_args in database.py to prevent stale-cache 500s after any schema DDL
