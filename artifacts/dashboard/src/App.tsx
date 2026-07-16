@@ -15,6 +15,7 @@ import Sync from "./pages/Sync";
 import ContentGeneration from "./pages/ContentGeneration";
 import Pipeline from "./pages/Pipeline";
 import Pipelines from "./pages/Pipelines";
+import PipelineDetail from "./pages/PipelineDetail";
 import Settings from "./pages/Settings";
 
 const queryClient = new QueryClient({
@@ -38,6 +39,7 @@ function Router() {
         <Route path="/sync" component={Sync} />
         <Route path="/content" component={ContentGeneration} />
         <Route path="/pipeline" component={Pipeline} />
+        <Route path="/pipelines/:id" component={PipelineDetail} />
         <Route path="/pipelines" component={Pipelines} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />

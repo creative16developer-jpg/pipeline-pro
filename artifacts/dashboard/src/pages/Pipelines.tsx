@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import {
   Plus, ChevronDown, ChevronRight, CheckCircle2, XCircle,
   Loader2, Clock, AlertTriangle, Square, Play, RefreshCw,
@@ -1526,6 +1526,12 @@ function PipelineRow({
         {/* Actions */}
         <td className="px-4 py-3">
           <div className="flex items-center gap-1 justify-end">
+            {/* View detail page */}
+            <Link href={`/pipelines/${pl.id}`}>
+              <button className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors">
+                <Eye className="w-3 h-3" /> View
+              </button>
+            </Link>
             {/* Logs toggle */}
             <button
               onClick={onToggleLogs}
