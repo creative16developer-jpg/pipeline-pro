@@ -133,6 +133,7 @@ export default function Pipeline() {
   const [parentCatId, setParentCatId] = useState("");
   const [subCatId, setSubCatId]   = useState("");
   const [fetchLimit, setFetchLimit] = useState("50");
+  const [fetchPage, setFetchPage]   = useState("1");
   const [loadingRootCats, setLoadingRootCats] = useState(false);
   const [loadingSubCats, setLoadingSubCats]   = useState(false);
   const [fetching, setFetching]   = useState(false);
@@ -231,6 +232,7 @@ export default function Pipeline() {
             store_id:    parseInt(storeId),
             category_id: categoryId,
             limit:       parseInt(fetchLimit) || 50,
+            page:        parseInt(fetchPage)  || 1,
           }),
         });
         if (!fetchRes.ok) throw new Error(await fetchRes.text());
@@ -442,16 +444,28 @@ export default function Pipeline() {
                   </select>
                 </div>
               </div>
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">Limit</label>
-                <input
-                  type="number"
-                  value={fetchLimit}
-                  onChange={(e) => setFetchLimit(e.target.value)}
-                  min={1}
-                  max={500}
-                  className={cn(inputCls, "max-w-[120px]")}
-                />
+              <div className="flex items-end gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Page</label>
+                  <input
+                    type="number"
+                    value={fetchPage}
+                    onChange={(e) => setFetchPage(e.target.value)}
+                    min={1}
+                    className={cn(inputCls, "max-w-[90px]")}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Limit</label>
+                  <input
+                    type="number"
+                    value={fetchLimit}
+                    onChange={(e) => setFetchLimit(e.target.value)}
+                    min={1}
+                    max={500}
+                    className={cn(inputCls, "max-w-[120px]")}
+                  />
+                </div>
               </div>
               <div className="flex items-start gap-2 text-xs text-sky-400 bg-sky-500/10 border border-sky-500/20 rounded-lg px-3 py-2">
                 <CloudDownload className="w-3.5 h-3.5 shrink-0 mt-0.5" />
