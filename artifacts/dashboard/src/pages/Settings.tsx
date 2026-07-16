@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useSearch } from "wouter";
+import { useSearch, Link } from "wouter";
 import {
   Settings as SettingsIcon, Key, Eye, EyeOff, CheckCircle2,
   XCircle, Save, Trash2, Loader2, Info, Sparkles, ExternalLink,
   RefreshCw, Tag, Search, ChevronDown, ChevronRight, Edit2, X, Plus,
-  Upload, FileSpreadsheet, AlertCircle, Wrench
+  Upload, FileSpreadsheet, AlertCircle, Wrench, ImageIcon
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useStores } from "@/hooks/use-stores";
@@ -1964,6 +1964,358 @@ function WooCategoriesTab() {
 // Stub placeholder for settings sections not yet implemented
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared toggle primitives
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SettingsToggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none",
+        checked ? "bg-primary" : "bg-input"
+      )}
+    >
+      <span className={cn(
+        "pointer-events-none block h-3.5 w-3.5 rounded-full bg-white shadow-lg ring-0 transition-transform",
+        checked ? "translate-x-4" : "translate-x-0.5"
+      )} />
+    </button>
+  );
+}
+
+function ToggleRow({ label, sub, checked, onChange }: {
+  label: string; sub?: string; checked: boolean; onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-3.5 border-b border-border/30 last:border-0">
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-foreground">{label}</p>
+        {sub && <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{sub}</p>}
+      </div>
+      <div className="pt-0.5 shrink-0">
+        <SettingsToggle checked={checked} onChange={onChange} />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image Settings Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ImageSettingsTab() {
+  const { toast } = useToast();
+  const [settings, setSettings] = useState({
+    output_format: "webp" as "webp" | "jpeg" | "png",
+    max_width: 1200,
+    max_height: 1200,
+    keep_original_size: false,
+    compression_enabled: true,
+    compression_quality: 85,
+    max_images_per_product: 5,
+    skip_last_image: false,
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/settings/image-settings")
+      .then(r => r.json())
+      .then(data => setSettings(prev => ({ ...prev, ...data })))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const set = <K extends keyof typeof settings>(k: K, v: (typeof settings)[K]) =>
+    setSettings(prev => ({ ...prev, [k]: v }));
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch("/api/settings/image-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Image settings saved", description: "Applied to all future pipeline runs." });
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return (
+    <div className="flex items-center gap-2 text-muted-foreground text-sm py-12 justify-center">
+      <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+    </div>
+  );
+
+  const fmts = [
+    { value: "webp" as const, label: "WebP", desc: "Best compression · recommended" },
+    { value: "jpeg" as const, label: "JPEG", desc: "Wide compatibility" },
+    { value: "png"  as const, label: "PNG",  desc: "Lossless, larger files" },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
+            <ImageIcon className="w-5 h-5 text-primary" /> Image Processing
+          </h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Controls how PipelinePro processes product images during the Process stage.
+          </p>
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50 shrink-0"
+        >
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          Save Settings
+        </button>
+      </div>
+
+      <div className="bg-card border border-border/50 rounded-2xl overflow-hidden shadow-sm">
+        {/* Output Format */}
+        <div className="px-6 py-5 border-b border-border/30">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Output Format</p>
+          <div className="flex gap-3 flex-wrap">
+            {fmts.map(f => (
+              <label key={f.value} className={cn(
+                "flex items-start gap-3 cursor-pointer rounded-xl border px-4 py-3 transition-colors min-w-[140px]",
+                settings.output_format === f.value
+                  ? "border-primary bg-primary/10"
+                  : "border-border/50 bg-secondary/20 hover:border-border"
+              )}>
+                <input
+                  type="radio"
+                  name="img-fmt"
+                  value={f.value}
+                  checked={settings.output_format === f.value}
+                  onChange={() => set("output_format", f.value)}
+                  className="mt-0.5 accent-primary"
+                />
+                <div>
+                  <p className={cn("text-sm font-semibold", settings.output_format === f.value ? "text-primary" : "text-foreground")}>{f.label}</p>
+                  <p className="text-xs text-muted-foreground">{f.desc}</p>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* Max Output Size */}
+        <div className="px-6 py-5 border-b border-border/30">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Max Output Size</p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="number"
+              value={settings.max_width}
+              onChange={e => set("max_width", parseInt(e.target.value) || 1200)}
+              disabled={settings.keep_original_size}
+              className={cn(inputCls, "max-w-[90px] disabled:opacity-40")}
+            />
+            <span className="text-muted-foreground text-sm">×</span>
+            <input
+              type="number"
+              value={settings.max_height}
+              onChange={e => set("max_height", parseInt(e.target.value) || 1200)}
+              disabled={settings.keep_original_size}
+              className={cn(inputCls, "max-w-[90px] disabled:opacity-40")}
+            />
+            <span className="text-xs text-muted-foreground">px</span>
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-muted-foreground ml-2">
+              <input
+                type="checkbox"
+                checked={settings.keep_original_size}
+                onChange={e => set("keep_original_size", e.target.checked)}
+                className="accent-primary"
+              />
+              Keep original size
+            </label>
+          </div>
+        </div>
+
+        {/* Compression */}
+        <div className="px-6 py-5 border-b border-border/30">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Compression</p>
+            <SettingsToggle checked={settings.compression_enabled} onChange={v => set("compression_enabled", v)} />
+          </div>
+          {settings.compression_enabled && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-4">
+                <input
+                  type="range"
+                  min={1}
+                  max={100}
+                  value={settings.compression_quality}
+                  onChange={e => set("compression_quality", parseInt(e.target.value))}
+                  className="flex-1 accent-primary"
+                />
+                <span className="text-sm font-bold text-primary min-w-[42px] text-right tabular-nums">
+                  {settings.compression_quality}%
+                </span>
+              </div>
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>Smallest file</span>
+                <span>Highest quality</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Max Images + Skip Last */}
+        <div className="px-6 py-2">
+          <div className="flex items-center justify-between py-3.5 border-b border-border/30">
+            <div>
+              <p className="text-sm font-medium text-foreground">Max Images per Product</p>
+              <p className="text-xs text-muted-foreground mt-0.5">Sunsky may provide up to 10 images per product.</p>
+            </div>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={settings.max_images_per_product}
+              onChange={e => set("max_images_per_product", parseInt(e.target.value) || 5)}
+              className={cn(inputCls, "max-w-[70px] text-center")}
+            />
+          </div>
+          <ToggleRow
+            label="Skip Last Image"
+            sub="Sunsky frequently includes a certificate or spec sheet as the final image — rarely suitable for product listings."
+            checked={settings.skip_last_image}
+            onChange={v => set("skip_last_image", v)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pipeline Defaults Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PipelineDefaultsTab() {
+  const { toast } = useToast();
+  const [defaults, setDefaults] = useState({
+    include_enrich: true,
+    include_generate: true,
+    force_rerun: false,
+    auto_review_pause: true,
+    compression: true,
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/settings/pipeline-defaults")
+      .then(r => r.json())
+      .then(data => setDefaults(prev => ({ ...prev, ...data })))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const set = <K extends keyof typeof defaults>(k: K, v: (typeof defaults)[K]) =>
+    setDefaults(prev => ({ ...prev, [k]: v }));
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const r = await fetch("/api/settings/pipeline-defaults", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(defaults),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Pipeline defaults saved", description: "New Pipeline form will pre-fill with these values." });
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return (
+    <div className="flex items-center gap-2 text-muted-foreground text-sm py-12 justify-center">
+      <Loader2 className="w-4 h-4 animate-spin" /> Loading…
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
+            <Wrench className="w-5 h-5 text-primary" /> Pipeline Defaults
+          </h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Pre-fill the New Pipeline form. Override for any individual run.
+          </p>
+        </div>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors disabled:opacity-50 shrink-0"
+        >
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+          Save Defaults
+        </button>
+      </div>
+
+      <div className="flex items-start gap-2 px-4 py-3 rounded-xl bg-secondary/40 border border-border/40 text-xs text-muted-foreground">
+        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+        <span>
+          These defaults pre-fill the New Pipeline form. You can change them for any individual run without affecting this saved configuration.
+        </span>
+      </div>
+
+      <div className="bg-card border border-border/50 rounded-2xl overflow-hidden shadow-sm px-6 py-2">
+        <ToggleRow
+          label="Include Attribute Enrichment"
+          sub="Extract product attributes with AI, pause for review before continuing."
+          checked={defaults.include_enrich}
+          onChange={v => set("include_enrich", v)}
+        />
+        <ToggleRow
+          label="Include Content Generation"
+          sub="Run AI content generation before upload. Uses Content Generation settings."
+          checked={defaults.include_generate}
+          onChange={v => set("include_generate", v)}
+        />
+        <ToggleRow
+          label="Force Re-run"
+          sub="Re-process and re-upload products that have already been handled in a previous pipeline."
+          checked={defaults.force_rerun}
+          onChange={v => set("force_rerun", v)}
+        />
+        <ToggleRow
+          label="Automatic Review Pause"
+          sub="Pause before upload so you can review products before anything is sent to WooCommerce."
+          checked={defaults.auto_review_pause}
+          onChange={v => set("auto_review_pause", v)}
+        />
+        <ToggleRow
+          label="Image Compression"
+          sub="Compress images using the quality level set in Image Processing settings."
+          checked={defaults.compression}
+          onChange={v => set("compression", v)}
+        />
+      </div>
+    </div>
+  );
+}
+
 function StubTab({ title, description }: { title: string; description: string }) {
   return (
     <div className="bg-card border border-border/50 rounded-2xl p-8 flex flex-col items-center text-center gap-4 shadow-sm">
@@ -2285,20 +2637,38 @@ export default function Settings() {
           description="Define how Sunsky product attributes map to WooCommerce attribute taxonomy terms. Set default mappings that apply across all stores, then override per-store as needed."
         />
       ) : activeTab === "content-gen" ? (
-        <StubTab
-          title="Content Generation Defaults"
-          description="Set the default AI model, prompt templates, and field-level generation rules used when pipelines include a Content Generation step."
-        />
+        <div className="space-y-5">
+          <div>
+            <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-primary" /> Content Generation
+            </h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Configure AI model, prompt templates, and field-level generation rules.
+            </p>
+          </div>
+          <div className="bg-card border border-border/50 rounded-2xl p-8 flex flex-col items-center text-center gap-4 shadow-sm">
+            <div className="w-12 h-12 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+              <Sparkles className="w-6 h-6 text-primary" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-foreground">Content Generation has a dedicated page</h3>
+              <p className="text-sm text-muted-foreground mt-1 max-w-md leading-relaxed">
+                Configure AI provider, model selection, field-level modes (logic / AI / derive), fallback strategies, and test live previews on sample products.
+              </p>
+            </div>
+            <Link
+              href="/content"
+              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors"
+            >
+              <Sparkles className="w-4 h-4" />
+              Open Content Generation
+            </Link>
+          </div>
+        </div>
       ) : activeTab === "images" ? (
-        <StubTab
-          title="Image Processing Defaults"
-          description="Configure default image compression quality, resize dimensions, watermark position and opacity, and output format (WebP) applied to all pipeline image steps."
-        />
+        <ImageSettingsTab />
       ) : (
-        <StubTab
-          title="Pipeline Defaults"
-          description="Set default toggle states for new pipeline runs — enrichment, content generation, auto-review pause, force re-run, and image compression. These become the pre-filled values in the New Pipeline form."
-        />
+        <PipelineDefaultsTab />
       )}
     </div>
   );

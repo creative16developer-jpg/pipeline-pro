@@ -80,6 +80,67 @@ async def save_api_keys(body: dict):
     return {"saved": True, "providers": saved}
 
 
+_IMAGE_SETTINGS_PATH  = _CONFIG_DIR / "image_settings.json"
+_PIPELINE_DEFAULTS_PATH = _CONFIG_DIR / "pipeline_defaults.json"
+
+DEFAULT_IMAGE_SETTINGS: dict = {
+    "output_format": "webp",
+    "max_width": 1200,
+    "max_height": 1200,
+    "keep_original_size": False,
+    "compression_enabled": True,
+    "compression_quality": 85,
+    "max_images_per_product": 5,
+    "skip_last_image": False,
+}
+
+DEFAULT_PIPELINE_DEFAULTS: dict = {
+    "include_enrich": True,
+    "include_generate": True,
+    "force_rerun": False,
+    "auto_review_pause": True,
+    "compression": True,
+}
+
+
+@router.get("/image-settings")
+async def get_image_settings():
+    if _IMAGE_SETTINGS_PATH.exists():
+        try:
+            stored = json.loads(_IMAGE_SETTINGS_PATH.read_text())
+            return {**DEFAULT_IMAGE_SETTINGS, **stored}
+        except Exception:
+            pass
+    return DEFAULT_IMAGE_SETTINGS
+
+
+@router.post("/image-settings")
+async def save_image_settings(body: dict):
+    merged = {**DEFAULT_IMAGE_SETTINGS, **body}
+    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _IMAGE_SETTINGS_PATH.write_text(json.dumps(merged, indent=2))
+    return {"saved": True}
+
+
+@router.get("/pipeline-defaults")
+async def get_pipeline_defaults():
+    if _PIPELINE_DEFAULTS_PATH.exists():
+        try:
+            stored = json.loads(_PIPELINE_DEFAULTS_PATH.read_text())
+            return {**DEFAULT_PIPELINE_DEFAULTS, **stored}
+        except Exception:
+            pass
+    return DEFAULT_PIPELINE_DEFAULTS
+
+
+@router.post("/pipeline-defaults")
+async def save_pipeline_defaults(body: dict):
+    merged = {**DEFAULT_PIPELINE_DEFAULTS, **body}
+    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _PIPELINE_DEFAULTS_PATH.write_text(json.dumps(merged, indent=2))
+    return {"saved": True}
+
+
 @router.delete("/api-keys/{provider}")
 async def delete_api_key(provider: str):
     """Remove a stored API key for a provider."""
