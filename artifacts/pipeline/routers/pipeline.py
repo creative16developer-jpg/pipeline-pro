@@ -4,7 +4,7 @@ import math
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, cast, String
 from pydantic import BaseModel
 from database import get_db
 from models.models import PipelineJob, PipelineLog, Job, JobType, Store
@@ -73,7 +73,7 @@ async def list_pipelines(
     if store_id:
         q = q.where(PipelineJob.store_id == store_id)
     if status:
-        q = q.where(PipelineJob.status == status)
+        q = q.where(cast(PipelineJob.status, String) == status)
 
     count_q = select(func.count()).select_from(q.subquery())
     total = (await db.execute(count_q)).scalar_one()
@@ -86,7 +86,7 @@ async def list_pipelines(
     running_by_store: dict[int, int] = {}
     for pl in (
         await db.execute(
-            select(PipelineJob).where(PipelineJob.status.in_(["queued", "running", "review"]))
+            select(PipelineJob).where(cast(PipelineJob.status, String).in_(["queued", "running", "review"]))
         )
     ).scalars().all():
         if pl.status == "queued":
@@ -127,7 +127,7 @@ async def create_pipeline(body: PipelineCreateRequest, db: AsyncSession = Depend
             select(PipelineJob)
             .where(
                 PipelineJob.store_id == body.store_id,
-                PipelineJob.status.in_(list(ACTIVE_STATUSES)),
+                cast(PipelineJob.status, String).in_(list(ACTIVE_STATUSES)),
             )
             .limit(1)
         )
@@ -262,7 +262,7 @@ async def continue_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
             select(PipelineJob)
             .where(
                 PipelineJob.store_id == pl.store_id,
-                PipelineJob.status.in_(list(ACTIVE_STATUSES)),
+                cast(PipelineJob.status, String).in_(list(ACTIVE_STATUSES)),
             )
             .limit(1)
         )
@@ -295,7 +295,7 @@ async def retry_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
             select(PipelineJob)
             .where(
                 PipelineJob.store_id == pl.store_id,
-                PipelineJob.status.in_(list(ACTIVE_STATUSES)),
+                cast(PipelineJob.status, String).in_(list(ACTIVE_STATUSES)),
             )
             .limit(1)
         )

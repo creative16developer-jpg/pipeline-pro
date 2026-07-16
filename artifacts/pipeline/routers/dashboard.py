@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, cast, String
 from datetime import datetime, timedelta, timezone
 from database import get_db
 from models.models import Product, Job, Store, PipelineJob, ProductStatus, JobStatus
@@ -22,11 +22,11 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
 
     # Pipeline-level stats
     active_pipelines = await _count(
-        db, PipelineJob, PipelineJob.status == "running"
+        db, PipelineJob, cast(PipelineJob.status, String) == "running"
     )
     waiting_for_input = (await db.execute(
         select(func.count(PipelineJob.id)).where(
-            PipelineJob.status.in_(["review", "enrich_review", "category_review"])
+            cast(PipelineJob.status, String).in_(["review", "enrich_review", "category_review"])
         )
     )).scalar_one()
     uploaded_30d = await _count(
@@ -36,7 +36,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     )
     failed_30d = (await db.execute(
         select(func.count(PipelineJob.id)).where(
-            (PipelineJob.status == "failed") &
+            (cast(PipelineJob.status, String) == "failed") &
             (PipelineJob.updated_at >= thirty_days_ago)
         )
     )).scalar_one()

@@ -16,6 +16,7 @@ if _pkg_dir not in sys.path:
 import asyncio
 from datetime import datetime, timezone
 from typing import Optional
+from sqlalchemy import cast, String
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -71,7 +72,7 @@ async def _advance_queue(db, store_id: int, finished_pl_id: int):
             select(PipelineJob)
             .where(
                 PipelineJob.store_id == store_id,
-                PipelineJob.status == "queued",
+                cast(PipelineJob.status, String) == "queued",
                 PipelineJob.id != finished_pl_id,
             )
             .order_by(PipelineJob.created_at.asc())
