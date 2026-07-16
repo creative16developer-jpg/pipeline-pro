@@ -1,0 +1,42 @@
+0|pipeline-api  | ERROR:    Exception in ASGI application
+0|pipeline-api  | Traceback (most recent call last):
+0|pipeline-api  |   File "/home/dev/public_html/pipeline-pro/artifacts/pipeline/venv/lib/python3.13/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 526, in _prepare_and_execute
+0|pipeline-api  |     prepared_stmt, attributes = await adapt_connection._prepare(
+0|pipeline-api  |                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+0|pipeline-api  |         operation, self._invalidate_schema_cache_asof
+0|pipeline-api  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+0|pipeline-api  |     )
+0|pipeline-api  |     ^
+0|pipeline-api  |   File "/home/dev/public_html/pipeline-pro/artifacts/pipeline/venv/lib/python3.13/site-packages/sqlalchemy/dialects/postgresql/asyncpg.py", line 773, in _prepare
+0|pipeline-api  |     prepared_stmt = await self._connection.prepare(
+0|pipeline-api  |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+0|pipeline-api  |         operation, name=self._prepared_statement_name_func()
+0|pipeline-api  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+0|pipeline-api  |     )
+0|pipeline-api  |     ^
+0|pipeline-api  |   File "/home/dev/public_html/pipeline-pro/artifacts/pipeline/venv/lib/python3.13/site-packages/asyncpg/connection.py", line 638, in prepare
+0|pipeline-api  |     return await self._prepare(
+0|pipeline-api  |            ^^^^^^^^^^^^^^^^^^^^
+0|pipeline-api  |     ...<4 lines>...
+0|pipeline-api  |     )
+0|pipeline-api  |     ^
+0|pipeline-api  |   File "/home/dev/public_html/pipeline-pro/artifacts/pipeline/venv/lib/python3.13/site-packages/asyncpg/connection.py", line 657, in _prepare
+0|pipeline-api  |     stmt = await self._get_statement(
+0|pipeline-api  |            ^^^^^^^^^^^^^^^^^^^^^^^^^^
+0|pipeline-api  |     ...<5 lines>...
+0|pipeline-api  |     )
+0|pipeline-api  |     ^
+0|pipeline-api  |   File "/home/dev/public_html/pipeline-pro/artifacts/pipeline/venv/lib/python3.13/site-packages/asyncpg/connection.py", line 443, in _get_statement
+0|pipeline-api  |     statement = await self._protocol.prepare(
+0|pipeline-api  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+0|pipeline-api  |     ...<5 lines>...
+0|pipeline-api  |     )
+0|pipeline-api  |     ^
+0|pipeline-api  |   File "asyncpg/protocol/protocol.pyx", line 165, in prepare
+0|pipeline-api  | asyncpg.exceptions.DatatypeMismatchError: column "status" is of type pipeline_job_status but expression is of type character varying
+0|pipeline-api  | HINT:  You will need to rewrite or cast the expression.
+0|pipeline-api  | The above exception was the direct cause of the following exception:
+0|pipeline-api  | Traceback (most recent call last):
+0|pipeline-api  |   File "/home/dev/public_html/pipeline-pro/artifacts/pipeline/venv/lib/python3.13/site-packages/sqlalchemy/engine/base.py", line 1967, in _exec_single_context
+0|pipeline-api  |     self.dialect.do_execute(
+0|pipeline-api  |     ~~~~~~~~~~~~~~~~~~~~~~~^
