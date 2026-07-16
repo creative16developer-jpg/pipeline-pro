@@ -74,7 +74,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "Settings — Defaults",
     items: [
-      { href: "/settings?tab=content-gen",      label: "Content Generation", icon: Sparkles, matchTab: "content-gen"      },
+      { href: "/content",                        label: "Content Generation", icon: Sparkles },
       { href: "/settings?tab=images",           label: "Images",             icon: Image,    matchTab: "images"           },
       { href: "/settings?tab=pipeline-defaults",label: "Pipeline Defaults",  icon: Wrench,   matchTab: "pipeline-defaults"},
     ],

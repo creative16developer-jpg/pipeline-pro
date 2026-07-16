@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useSearch, Link } from "wouter";
+import { useSearch, Link, useLocation } from "wouter";
 import {
   Settings as SettingsIcon, Key, Eye, EyeOff, CheckCircle2,
   XCircle, Save, Trash2, Loader2, Info, Sparkles, ExternalLink,
@@ -2316,6 +2316,16 @@ function PipelineDefaultsTab() {
   );
 }
 
+function ContentGenRedirect() {
+  const [, navigate] = useLocation();
+  useEffect(() => { navigate("/content"); }, [navigate]);
+  return (
+    <div className="flex items-center gap-2 text-muted-foreground text-sm py-12 justify-center">
+      <Loader2 className="w-4 h-4 animate-spin" /> Redirecting…
+    </div>
+  );
+}
+
 function StubTab({ title, description }: { title: string; description: string }) {
   return (
     <div className="bg-card border border-border/50 rounded-2xl p-8 flex flex-col items-center text-center gap-4 shadow-sm">
@@ -2637,34 +2647,7 @@ export default function Settings() {
           description="Define how Sunsky product attributes map to WooCommerce attribute taxonomy terms. Set default mappings that apply across all stores, then override per-store as needed."
         />
       ) : activeTab === "content-gen" ? (
-        <div className="space-y-5">
-          <div>
-            <h2 className="text-lg font-semibold text-foreground flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-primary" /> Content Generation
-            </h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Configure AI model, prompt templates, and field-level generation rules.
-            </p>
-          </div>
-          <div className="bg-card border border-border/50 rounded-2xl p-8 flex flex-col items-center text-center gap-4 shadow-sm">
-            <div className="w-12 h-12 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-              <Sparkles className="w-6 h-6 text-primary" />
-            </div>
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Content Generation has a dedicated page</h3>
-              <p className="text-sm text-muted-foreground mt-1 max-w-md leading-relaxed">
-                Configure AI provider, model selection, field-level modes (logic / AI / derive), fallback strategies, and test live previews on sample products.
-              </p>
-            </div>
-            <Link
-              href="/content"
-              className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors"
-            >
-              <Sparkles className="w-4 h-4" />
-              Open Content Generation
-            </Link>
-          </div>
-        </div>
+        <ContentGenRedirect />
       ) : activeTab === "images" ? (
         <ImageSettingsTab />
       ) : (
