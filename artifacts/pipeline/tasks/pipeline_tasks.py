@@ -152,8 +152,20 @@ async def _execute_pipeline(pipeline_job_id: int):
                                 "Enrich step: AI attribute extraction starting…")
                     enrich_count, enrich_products = await _run_enrich_extraction(db, pl, cfg)
                     if enrich_products == 0:
-                        await _plog(db, pl.id, "enrich", "info",
-                                    "No products to enrich — skipping review pause, continuing pipeline.")
+                        fetch_job = (await db.execute(
+                            select(Job).where(Job.id == pl.fetch_job_id)
+                        )).scalar_one_or_none() if pl.fetch_job_id else None
+                        if fetch_job is None or fetch_job.total_items == 0:
+                            reason = "Sunsky returned 0 products for this fetch (check category / page / limit settings)."
+                        elif fetch_job.processed_items == 0:
+                            reason = (f"All {fetch_job.total_items} product(s) fetched from Sunsky were already in the "
+                                      f"database with no changes — nothing new to enrich.")
+                        else:
+                            reason = (f"{fetch_job.total_items} product(s) from Sunsky — "
+                                      f"{fetch_job.processed_items} updated existing record(s), "
+                                      f"0 newly saved — no new products linked to this run to enrich.")
+                        await _plog(db, pl.id, "enrich", "warn",
+                                    f"0 products to enrich. {reason} Skipping review pause.")
                     else:
                         await _plog(db, pl.id, "enrich", "info",
                                     f"Attribute extraction complete — {enrich_count} attrs extracted. "
@@ -602,8 +614,20 @@ async def _continue_pipeline(pipeline_job_id: int, from_step: str):
                                 "Enrich step: AI attribute extraction starting…")
                     enrich_count, enrich_products = await _run_enrich_extraction(db, pl, cfg)
                     if enrich_products == 0:
-                        await _plog(db, pl.id, "enrich", "info",
-                                    "No products to enrich — skipping review pause, continuing pipeline.")
+                        fetch_job = (await db.execute(
+                            select(Job).where(Job.id == pl.fetch_job_id)
+                        )).scalar_one_or_none() if pl.fetch_job_id else None
+                        if fetch_job is None or fetch_job.total_items == 0:
+                            reason = "Sunsky returned 0 products for this fetch (check category / page / limit settings)."
+                        elif fetch_job.processed_items == 0:
+                            reason = (f"All {fetch_job.total_items} product(s) fetched from Sunsky were already in the "
+                                      f"database with no changes — nothing new to enrich.")
+                        else:
+                            reason = (f"{fetch_job.total_items} product(s) from Sunsky — "
+                                      f"{fetch_job.processed_items} updated existing record(s), "
+                                      f"0 newly saved — no new products linked to this run to enrich.")
+                        await _plog(db, pl.id, "enrich", "warn",
+                                    f"0 products to enrich. {reason} Skipping review pause.")
                     else:
                         await _plog(db, pl.id, "enrich", "info",
                                     f"Attribute extraction complete — {enrich_count} attrs extracted. "
