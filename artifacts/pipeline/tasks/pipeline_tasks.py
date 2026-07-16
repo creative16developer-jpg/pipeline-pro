@@ -150,15 +150,19 @@ async def _execute_pipeline(pipeline_job_id: int):
                     await db.commit()
                     await _plog(db, pl.id, "enrich", "info",
                                 "Enrich step: AI attribute extraction starting…")
-                    enrich_count = await _run_enrich_extraction(db, pl, cfg)
-                    await _plog(db, pl.id, "enrich", "info",
-                                f"Attribute extraction complete — {enrich_count} attrs extracted. "
-                                f"Pausing for review.")
-                    pl.status = "enrich_review"
-                    pl.current_step = "enrich"
-                    pl.updated_at = datetime.now(timezone.utc)
-                    await db.commit()
-                    return  # Resumed by enrich_resume_pipeline_job after user confirms
+                    enrich_count, enrich_products = await _run_enrich_extraction(db, pl, cfg)
+                    if enrich_products == 0:
+                        await _plog(db, pl.id, "enrich", "info",
+                                    "No products to enrich — skipping review pause, continuing pipeline.")
+                    else:
+                        await _plog(db, pl.id, "enrich", "info",
+                                    f"Attribute extraction complete — {enrich_count} attrs extracted. "
+                                    f"Pausing for review.")
+                        pl.status = "enrich_review"
+                        pl.current_step = "enrich"
+                        pl.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        return  # Resumed by enrich_resume_pipeline_job after user confirms
 
                 # ── Step 2: Generate (optional) ───────────────────────────
                 include_generate = cfg.get("include_generate", False)
@@ -443,7 +447,7 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
     await _plog(db, pl.id, "enrich", "info",
                 f"  {len(products)} products · {total_attrs} attributes · "
                 f"{len(suggestions)} variant group suggestion(s)")
-    return total_attrs
+    return total_attrs, len(products)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -596,15 +600,19 @@ async def _continue_pipeline(pipeline_job_id: int, from_step: str):
                     await db.commit()
                     await _plog(db, pl.id, "enrich", "info",
                                 "Enrich step: AI attribute extraction starting…")
-                    enrich_count = await _run_enrich_extraction(db, pl, cfg)
-                    await _plog(db, pl.id, "enrich", "info",
-                                f"Attribute extraction complete — {enrich_count} attrs extracted. "
-                                f"Pausing for review.")
-                    pl.status = "enrich_review"
-                    pl.current_step = "enrich"
-                    pl.updated_at = datetime.now(timezone.utc)
-                    await db.commit()
-                    return  # Resumed by enrich confirm
+                    enrich_count, enrich_products = await _run_enrich_extraction(db, pl, cfg)
+                    if enrich_products == 0:
+                        await _plog(db, pl.id, "enrich", "info",
+                                    "No products to enrich — skipping review pause, continuing pipeline.")
+                    else:
+                        await _plog(db, pl.id, "enrich", "info",
+                                    f"Attribute extraction complete — {enrich_count} attrs extracted. "
+                                    f"Pausing for review.")
+                        pl.status = "enrich_review"
+                        pl.current_step = "enrich"
+                        pl.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        return  # Resumed by enrich confirm
 
                 # ── Generate (optional) ────────────────────────────────────
                 include_generate = cfg.get("include_generate", False)

@@ -1171,7 +1171,20 @@ function EnrichReviewPanel({ pl, onConfirmed }: { pl: Pipeline; onConfirmed: () 
             <pre className="text-xs text-red-400/70 whitespace-pre-wrap break-all font-mono max-h-32 overflow-y-auto">{enrichError}</pre>
           </div>
         ) : !enrichData?.products?.length ? (
-          <div className="py-3 text-sm text-muted-foreground italic">No attributes extracted yet.</div>
+          <div className="space-y-3">
+            <div className="py-3 text-sm text-muted-foreground italic">No products were extracted — nothing to review.</div>
+            <div className="flex items-center justify-between pt-2 border-t border-border/30">
+              <span className="text-xs text-muted-foreground">0 products — ready to continue</span>
+              <button
+                onClick={handleAttrConfirm}
+                disabled={saving}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors"
+              >
+                {saving && <Loader2 className="w-3 h-3 animate-spin" />}
+                Confirm &amp; continue ›
+              </button>
+            </div>
+          </div>
         ) : (
           <div className="space-y-3">
             {/* 4-stat summary */}
