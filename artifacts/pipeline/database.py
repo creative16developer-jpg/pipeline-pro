@@ -25,9 +25,8 @@ def _build_engine_url(raw_url: str) -> tuple[str, dict]:
 
     ssl_mode = qs.pop("sslmode", ["disable"])[0]
     connect_args: dict = {
-        # Disable asyncpg's prepared-statement cache so schema changes
-        # (CREATE TABLE, ALTER TABLE, etc.) never cause stale-cache 500 errors.
-        "prepared_statement_cache_size": 0,
+        # asyncpg native param — disables per-connection prepared-statement cache
+        "statement_cache_size": 0,
     }
 
     if ssl_mode in ("require", "verify-ca", "verify-full"):
@@ -75,7 +74,7 @@ def make_session_factory():
     connection pool is never shared across loops.
     """
     raw_url = os.environ.get("DATABASE_URL", "")
-    url, connect_args = _build_engine_url(raw_url)  # already includes prepared_statement_cache_size=0
+    url, connect_args = _build_engine_url(raw_url)
     fresh_engine = create_async_engine(
         url,
         echo=False,
