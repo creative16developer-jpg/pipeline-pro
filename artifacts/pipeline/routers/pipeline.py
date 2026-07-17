@@ -266,10 +266,11 @@ async def content_confirm(pl_id: int, db: AsyncSession = Depends(get_db)):
     if pl.status != "content_review":
         raise HTTPException(400, f"Pipeline is not in content review state (current: {pl.status})")
 
-    pl.status = "running"
-    pl.current_step = "upload"
+    # Set back to "review" so _resume_pipeline passes its guard check
+    # (_resume_pipeline handles the running/upload transition itself)
+    pl.status = "review"
+    pl.current_step = "review"
     pl.updated_at = datetime.now(timezone.utc)
-    await db.commit()
 
     db.add(PipelineLog(
         pipeline_job_id=pl.id, level="info",
