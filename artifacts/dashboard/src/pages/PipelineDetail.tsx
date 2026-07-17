@@ -3,7 +3,7 @@ import { useRoute, Link, useLocation } from "wouter";
 import {
   ArrowLeft, CheckCircle2, XCircle, Loader2, Clock, Play,
   RotateCcw, Square, RefreshCw, AlertTriangle, Check, X as XIcon,
-  Upload, Eye, Terminal, Zap, ChevronDown, ChevronRight,
+  Upload, Eye, Terminal, Zap, ChevronDown, ChevronRight, Trash2, Plus,
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -394,6 +394,35 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
   const [loading, setLoading] = useState(true);
   const [saving, setSaving]   = useState(false);
   const [sel, setSel]         = useState<Record<string, { woo_cat_id: number|null; profile_id: number|null; save_as_rule: boolean }>>({});
+  const [newCatForm, setNewCatForm] = useState<Record<string, { open: boolean; name: string; saving: boolean }>>({});
+
+  const openNewCatForm = (sunsky_cat: string) =>
+    setNewCatForm(f => ({ ...f, [sunsky_cat]: { open: true, name: "", saving: false } }));
+
+  const handleCreateCategory = async (sunsky_cat: string, storeId: number) => {
+    const form = newCatForm[sunsky_cat];
+    if (!form?.name.trim()) return;
+    setNewCatForm(f => ({ ...f, [sunsky_cat]: { ...f[sunsky_cat], saving: true } }));
+    try {
+      const r = await fetch(`/api/stores/${storeId}/categories/new`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: form.name.trim(), parent_woo_id: 0 }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const created = await r.json();
+      setData((prev: any) => ({
+        ...prev,
+        woo_options: [...(prev?.woo_options ?? []), { id: created.id, woo_id: created.woo_id, name: created.name, parent_id: null }],
+      }));
+      setSel(s => ({ ...s, [sunsky_cat]: { ...(s[sunsky_cat] ?? {}), woo_cat_id: created.id } as any }));
+      setNewCatForm(f => ({ ...f, [sunsky_cat]: { open: false, name: "", saving: false } }));
+      toast({ title: `Category "${created.name}" created and selected` });
+    } catch (e: any) {
+      toast({ title: "Failed to create category", description: e.message, variant: "destructive" });
+      setNewCatForm(f => ({ ...f, [sunsky_cat]: { ...f[sunsky_cat], saving: false } }));
+    }
+  };
 
   useEffect(() => {
     fetch(`/api/pipelines/${pl.id}/map-data`)
@@ -518,7 +547,34 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
                 <div className="text-[12px] text-muted-foreground/60 mt-0.5">Future pipelines with this Sunsky category will not pause again.</div>
               </div>
             </label>
-            <button className="text-violet-400 text-[12px] mt-3 hover:underline">+ Create new WooCommerce category</button>
+            {newCatForm[c.sunsky_cat]?.open ? (
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="New category name…"
+                  value={newCatForm[c.sunsky_cat]?.name ?? ""}
+                  onChange={e => setNewCatForm(f => ({ ...f, [c.sunsky_cat]: { ...f[c.sunsky_cat], name: e.target.value } }))}
+                  onKeyDown={e => { if (e.key === "Enter") handleCreateCategory(c.sunsky_cat, pl.store_id); if (e.key === "Escape") setNewCatForm(f => ({ ...f, [c.sunsky_cat]: { open: false, name: "", saving: false } })); }}
+                  className="flex-1 min-w-[180px] px-3 py-1.5 border border-border rounded-lg text-[13px] text-foreground bg-background focus:outline-none focus:border-violet-400"
+                />
+                <button
+                  onClick={() => handleCreateCategory(c.sunsky_cat, pl.store_id)}
+                  disabled={newCatForm[c.sunsky_cat]?.saving || !newCatForm[c.sunsky_cat]?.name.trim()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-[12px] font-medium disabled:opacity-50 transition-colors">
+                  {newCatForm[c.sunsky_cat]?.saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />} Create
+                </button>
+                <button
+                  onClick={() => setNewCatForm(f => ({ ...f, [c.sunsky_cat]: { open: false, name: "", saving: false } }))}
+                  className="px-3 py-1.5 rounded-lg bg-card border border-border text-foreground/60 text-[12px] hover:bg-background transition-colors">
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => openNewCatForm(c.sunsky_cat)} className="inline-flex items-center gap-1 text-violet-400 text-[12px] mt-3 hover:underline">
+                <Plus className="w-3 h-3" /> Create new WooCommerce category
+              </button>
+            )}
           </div>
         );
       })}
@@ -888,6 +944,7 @@ export default function PipelineDetail() {
   const [error, setError]     = useState<string | null>(null);
   const pollRef               = useRef<ReturnType<typeof setInterval> | null>(null);
   const [logOpen, setLogOpen] = useState(true);
+  const [deleting, setDeleting] = useState(false);
 
   const storeMap = Object.fromEntries((stores ?? []).map(s => [s.id, s.name]));
 
@@ -927,6 +984,20 @@ export default function PipelineDetail() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!confirm(`Delete ${pl?.pl_id ?? "this pipeline"}? This cannot be undone.`)) return;
+    setDeleting(true);
+    try {
+      const r = await fetch(`/api/pipelines/${plId}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Pipeline deleted" });
+      navigate("/pipelines");
+    } catch (e: any) {
+      toast({ title: "Delete failed", description: e.message, variant: "destructive" });
+      setDeleting(false);
+    }
+  };
+
   if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-violet-500" /></div>;
 
   if (error || !pl) return (
@@ -960,6 +1031,12 @@ export default function PipelineDetail() {
             <button onClick={() => handleAction("cancel")}
               className="px-3 py-1.5 rounded-lg bg-card border border-border text-red-400 text-[12px] font-medium hover:bg-red-500/10 transition-colors flex items-center gap-1.5">
               <Square className="w-3 h-3 fill-current" /> Cancel
+            </button>
+          )}
+          {!isDemo && !isLive && !isReview && (
+            <button onClick={handleDelete} disabled={deleting}
+              className="px-3 py-1.5 rounded-lg bg-card border border-border text-red-400 text-[12px] font-medium hover:bg-red-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50">
+              {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />} Delete
             </button>
           )}
           <button onClick={fetchPipeline}

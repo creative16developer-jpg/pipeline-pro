@@ -53,6 +53,11 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/pipeline",           label: "New Pipeline — Sunsky", icon: Zap },
       { href: "/pipeline?source=csv",label: "New Pipeline — CSV",    icon: FileSpreadsheet },
       { href: "/products",           label: "Products",              icon: PackageSearch },
+      { href: "/pipelines/demo?state=running",        label: "Demo — Running",      icon: Play },
+      { href: "/pipelines/demo?state=review",         label: "Demo — Cat. Review",  icon: Pause },
+      { href: "/pipelines/demo?state=enrich_review",  label: "Demo — Review A",     icon: Pause },
+      { href: "/pipelines/demo?state=content_review", label: "Demo — Review B",     icon: Pause },
+      { href: "/pipelines/demo?state=completed",      label: "Demo — Completed",    icon: CheckCircle },
     ],
   },
   {
@@ -80,16 +85,6 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/content",                        label: "Content Generation", icon: Sparkles },
       { href: "/settings?tab=images",           label: "Images",             icon: Image,    matchTab: "images"           },
       { href: "/settings?tab=pipeline-defaults",label: "Pipeline Defaults",  icon: Wrench,   matchTab: "pipeline-defaults"},
-    ],
-  },
-  {
-    label: "Prototype Views",
-    items: [
-      { href: "/pipelines/demo?state=running",        label: "Detail — Running",      icon: Play },
-      { href: "/pipelines/demo?state=review",         label: "Detail — Cat. Review",  icon: Pause },
-      { href: "/pipelines/demo?state=enrich_review",  label: "Detail — Review A",     icon: Pause },
-      { href: "/pipelines/demo?state=content_review", label: "Detail — Review B",     icon: Pause },
-      { href: "/pipelines/demo?state=completed",      label: "Detail — Completed",    icon: CheckCircle },
     ],
   },
 ];

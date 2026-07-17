@@ -283,6 +283,24 @@ async def content_confirm(pl_id: int, db: AsyncSession = Depends(get_db)):
     return {"ok": True, "message": f"PL-{str(pl_id).zfill(3)} upload starting"}
 
 
+# ── Delete ───────────────────────────────────────────────────────────────────
+
+@router.delete("/{pl_id}")
+async def delete_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
+    pl = await db.get(PipelineJob, pl_id)
+    if not pl:
+        raise HTTPException(404, f"Pipeline #{pl_id} not found")
+    if pl.status in ("running", "review", "enrich_review", "content_review", "queued"):
+        raise HTTPException(400, "Cannot delete an active or queued pipeline — cancel it first")
+
+    await db.execute(
+        __import__("sqlalchemy", fromlist=["delete"]).delete(PipelineLog).where(PipelineLog.pipeline_job_id == pl_id)
+    )
+    await db.delete(pl)
+    await db.commit()
+    return {"ok": True, "message": f"PL-{str(pl_id).zfill(3)} deleted"}
+
+
 # ── Cancel ───────────────────────────────────────────────────────────────────
 
 @router.post("/{pl_id}/cancel")

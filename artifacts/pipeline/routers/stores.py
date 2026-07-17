@@ -108,6 +108,38 @@ async def sync_store_categories(store_id: int, db: AsyncSession = Depends(get_db
     return {"synced": len(raw_cats)}
 
 
+from pydantic import BaseModel as _BaseModel
+
+class NewCategoryRequest(_BaseModel):
+    name: str
+    parent_woo_id: int = 0
+
+
+@router.post("/{store_id}/categories/new")
+async def create_store_category(store_id: int, body: NewCategoryRequest, db: AsyncSession = Depends(get_db)):
+    """Create a new WooCommerce category and save it locally."""
+    store = await db.get(Store, store_id)
+    if not store:
+        raise HTTPException(404, "Store not found")
+    try:
+        created = await woo_client.create_woo_category(store, body.name, body.parent_woo_id)
+    except Exception as e:
+        raise HTTPException(502, f"WooCommerce category creation failed: {e}")
+
+    cat = WooCategory(
+        store_id=store_id,
+        woo_id=created["id"],
+        name=created["name"],
+        slug=created.get("slug", ""),
+        parent_id=created.get("parent") or None,
+        count=0,
+    )
+    db.add(cat)
+    await db.commit()
+    await db.refresh(cat)
+    return {"id": cat.id, "woo_id": cat.woo_id, "name": cat.name, "slug": cat.slug}
+
+
 @router.get("/{store_id}/woo-attributes")
 async def list_store_attributes(store_id: int, db: AsyncSession = Depends(get_db)):
     """Return synced WooCommerce product attributes with their terms."""
