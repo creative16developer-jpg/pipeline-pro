@@ -306,7 +306,7 @@ export default function Pipeline() {
         title: d.status === "queued" ? "Pipeline queued" : "Pipeline started",
         description: `${d.pl_id} — ${d.status === "queued" ? "will auto-start when current run finishes" : "processing step is running"}`,
       });
-      navigate("/pipelines");
+      navigate(`/pipelines/${d.id}`);
     } catch (e: any) {
       toast({ title: "Failed to start pipeline", description: e.message, variant: "destructive" });
       setRunning(false);

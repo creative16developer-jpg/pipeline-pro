@@ -95,10 +95,10 @@ function StageTrail({ pl }: { pl: Pipeline }) {
           <div key={stage.key} className="flex items-center">
             <span className={cn(
               "inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border whitespace-nowrap",
-              isDone   && "bg-emerald-50 border-emerald-200 text-emerald-700",
-              isActive && isPaused  && "bg-amber-50 border-amber-300 text-amber-800 font-semibold",
-              isActive && !isPaused && "bg-violet-50 border-violet-300 text-violet-800 font-semibold",
-              isFail   && "bg-red-50 border-red-200 text-red-700",
+              isDone   && "bg-emerald-500/15 border-emerald-500/30 text-emerald-400",
+              isActive && isPaused  && "bg-amber-500/15 border-amber-500/40 text-amber-300 font-semibold",
+              isActive && !isPaused && "bg-violet-500/15 border-violet-500/40 text-violet-300 font-semibold",
+              isFail   && "bg-red-500/15 border-red-500/30 text-red-400",
               !isDone && !isActive && !isFail && "border-border/40 text-muted-foreground/60 bg-background",
             )}>
               {isDone   && "✓ "}
@@ -121,9 +121,9 @@ function StageTrail({ pl }: { pl: Pipeline }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const LOG_STYLE: Record<string, string> = {
-  ok:    "text-emerald-600",
-  warn:  "text-amber-600",
-  error: "text-red-600",
+  ok:    "text-emerald-400",
+  warn:  "text-amber-400",
+  error: "text-red-400",
   info:  "text-foreground/80",
   debug: "text-muted-foreground",
 };
@@ -154,11 +154,11 @@ function LogPanel({ plId, isLive }: { plId: number; isLive: boolean }) {
   if (logs.length === 0) return <div className="p-4 text-sm text-muted-foreground italic">No log entries yet.</div>;
 
   return (
-    <div className="max-h-[150px] overflow-y-auto bg-[#F8FAFC] font-mono text-[12px] p-3 space-y-0.5">
+    <div className="max-h-[150px] overflow-y-auto bg-background font-mono text-[12px] p-3 space-y-0.5">
       {logs.map(log => (
         <div key={log.id} className="flex gap-2">
-          <span className="text-[#94A3B8] shrink-0">{log.created_at ? format(new Date(log.created_at), "HH:mm:ss") : ""}</span>
-          {log.level === "ok"   && <span className="text-emerald-600 shrink-0">✓</span>}
+          <span className="text-muted-foreground/60 shrink-0">{log.created_at ? format(new Date(log.created_at), "HH:mm:ss") : ""}</span>
+          {log.level === "ok"   && <span className="text-emerald-400 shrink-0">✓</span>}
           {log.level === "warn" && <span className="text-amber-500 shrink-0">⚠</span>}
           <span className={cn("break-all", LOG_STYLE[log.level] ?? "")}>{log.message}</span>
         </div>
@@ -200,27 +200,27 @@ function RunningSection({ pl }: { pl: Pipeline }) {
     <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* PROGRESS */}
-        <div className="bg-white border border-[#E2E8F0] rounded-[10px] p-5">
-          <div className="text-[11px] font-semibold text-[#64748B] uppercase tracking-[0.6px] mb-3">Progress</div>
-          <div className="text-[30px] font-bold text-[#0F172A] leading-none tracking-[-1px] mb-2">
+        <div className="bg-card border border-border rounded-[10px] p-5">
+          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.6px] mb-3">Progress</div>
+          <div className="text-[30px] font-bold text-foreground leading-none tracking-[-1px] mb-2">
             {total > 0 ? done : "—"}{" "}
-            <span className="text-[15px] font-normal text-[#94A3B8]">
+            <span className="text-[15px] font-normal text-muted-foreground/60">
               {total > 0 ? `/ ${total} products` : "products"}
             </span>
           </div>
-          <div className="bg-[#F1F5F9] rounded-full h-1.5 overflow-hidden mb-2">
+          <div className="bg-muted/50 rounded-full h-1.5 overflow-hidden mb-2">
             <div className="h-full bg-violet-500 rounded-full transition-all duration-500" style={{ width: `${Math.min(100, pct)}%` }} />
           </div>
-          <div className="text-[12px] text-[#64748B]">
+          <div className="text-[12px] text-muted-foreground">
             {pct}% · {stageLabel}{total > 0 ? "" : " · starting…"}
           </div>
         </div>
 
         {/* CURRENT STAGE */}
-        <div className="bg-white border border-[#E2E8F0] rounded-[10px] p-5">
-          <div className="text-[11px] font-semibold text-[#64748B] uppercase tracking-[0.6px] mb-3">Current Stage</div>
-          <div className="text-[14px] font-semibold text-violet-700 mb-2">{stageLabel}</div>
-          <div className="text-[13px] text-[#64748B] whitespace-pre-line leading-[1.7]">
+        <div className="bg-card border border-border rounded-[10px] p-5">
+          <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.6px] mb-3">Current Stage</div>
+          <div className="text-[14px] font-semibold text-violet-400 mb-2">{stageLabel}</div>
+          <div className="text-[13px] text-muted-foreground whitespace-pre-line leading-[1.7]">
             {STAGE_DESCRIPTIONS[step] ?? "Processing…"}
           </div>
         </div>
@@ -279,40 +279,40 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
   return (
     <div className="space-y-4">
       {/* Substep A card */}
-      <div className="bg-white border border-[#C4B5FD] border-l-[3px] border-l-violet-500 rounded-[10px] p-5">
+      <div className="bg-card border border-violet-500/30 border-l-[3px] border-l-violet-500 rounded-[10px] p-5">
         <div className="flex items-center gap-3 mb-2 flex-wrap">
-          <span className="w-[22px] h-[22px] rounded-full bg-violet-100 text-violet-700 flex items-center justify-center text-[12px] font-bold flex-shrink-0">1</span>
-          <div className="text-[13px] font-semibold text-violet-700">Substep A — AI extracts attribute values from raw Sunsky data</div>
+          <span className="w-[22px] h-[22px] rounded-full bg-violet-500/20 text-violet-400 flex items-center justify-center text-[12px] font-bold flex-shrink-0">1</span>
+          <div className="text-[13px] font-semibold text-violet-400">Substep A — AI extracts attribute values from raw Sunsky data</div>
           <div className="ml-auto flex gap-2 flex-shrink-0 flex-wrap">
-            {needsReview > 0 && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">{needsReview} need review</span>}
-            {ready > 0       && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">{ready} auto-confirmed</span>}
+            {needsReview > 0 && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-400">{needsReview} need review</span>}
+            {ready > 0       && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-400">{ready} auto-confirmed</span>}
           </div>
         </div>
-        <div className="text-[12px] text-[#64748B] mb-4">AI reads raw Sunsky title + spec block and extracts structured values. You confirm or correct.</div>
+        <div className="text-[12px] text-muted-foreground mb-4">AI reads raw Sunsky title + spec block and extracts structured values. You confirm or correct.</div>
 
         {/* Legend */}
-        <div className="flex gap-4 text-[12px] text-[#64748B] mb-4 flex-wrap">
+        <div className="flex gap-4 text-[12px] text-muted-foreground mb-4 flex-wrap">
           <span className="flex items-center gap-1.5">
-            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-50 border border-emerald-200 text-emerald-700">high confidence</span>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">high confidence</span>
             auto-confirmed, editable
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-amber-50 border border-amber-200 text-amber-700">low confidence</span>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-amber-500/15 border border-amber-500/30 text-amber-400">low confidence</span>
             needs your review
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-red-50 border border-red-200 text-red-700">missing</span>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-medium bg-red-500/15 border border-red-500/30 text-red-400">missing</span>
             AI could not extract — set manually
           </span>
         </div>
 
         {/* Tab bar */}
         {allProducts.length > 0 && (
-          <div className="flex gap-1 bg-[#F1F5F9] rounded-lg p-1 mb-4 w-fit">
+          <div className="flex gap-1 bg-muted/50 rounded-lg p-1 mb-4 w-fit">
             {(["all","review","ok"] as const).map(t => (
               <button key={t} onClick={() => setTab(t)}
                 className={cn("px-3 py-1.5 rounded-md text-[13px] font-medium transition-colors",
-                  tab === t ? "bg-white text-violet-600 shadow-sm" : "text-[#64748B] hover:text-foreground"
+                  tab === t ? "bg-muted text-violet-400 shadow-sm" : "text-muted-foreground hover:text-foreground"
                 )}>
                 {t === "all" ? `All (${allProducts.length})` : t === "review" ? `Needs attention (${needsReview})` : `Ready (${ready})`}
               </button>
@@ -322,33 +322,33 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
 
         {/* Products table */}
         {allProducts.length > 0 ? (
-          <div className="rounded-lg border border-[#E2E8F0] overflow-hidden mb-4">
+          <div className="rounded-lg border border-border overflow-hidden mb-4">
             <table className="w-full border-collapse text-[13px]">
               <thead>
-                <tr className="bg-[#F8FAFC]">
-                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-[#64748B] uppercase tracking-[0.5px] border-b border-[#E2E8F0]">Product</th>
-                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-[#64748B] uppercase tracking-[0.5px] border-b border-[#E2E8F0]">Extracted Attributes</th>
+                <tr className="bg-background">
+                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.5px] border-b border-border">Product</th>
+                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.5px] border-b border-border">Extracted Attributes</th>
                 </tr>
               </thead>
               <tbody>
                 {displayed.slice(0, 30).map((p: any) => (
-                  <tr key={p.id} className="border-b border-[#F1F5F9] last:border-0 hover:bg-[#FAFBFF]">
+                  <tr key={p.id} className="border-b border-border/20 last:border-0 hover:bg-card/50">
                     <td className="px-4 py-3 align-top">
-                      <div className="font-medium text-[#0F172A]">{p.name}</div>
-                      <div className="text-[12px] text-[#64748B] font-mono">{p.sku}</div>
+                      <div className="font-medium text-foreground">{p.name}</div>
+                      <div className="text-[12px] text-muted-foreground font-mono">{p.sku}</div>
                     </td>
                     <td className="px-4 py-3 align-top">
                       <div className="flex flex-wrap gap-1.5">
                         {(p.attrs ?? []).map((a: any, idx: number) => (
                           <span key={idx} className={cn(
                             "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium border-[1.5px]",
-                            a.confidence === "high" ? "bg-emerald-50 border-emerald-200 text-emerald-700" :
-                            a.confidence === "low"  ? "bg-amber-50 border-amber-200 text-amber-700" :
-                            !a.value               ? "bg-red-50 border-red-200 text-red-700" :
-                            "bg-[#F1F5F9] border-[#E2E8F0] text-[#475569]"
+                            a.confidence === "high" ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400" :
+                            a.confidence === "low"  ? "bg-amber-500/15 border-amber-500/30 text-amber-400" :
+                            !a.value               ? "bg-red-500/15 border-red-500/30 text-red-400" :
+                            "bg-muted/50 border-border text-foreground/70"
                           )}>
                             {a.attribute} : {a.value ?? "not found"}
-                            {a.confidence && <span className={cn("text-[11px] ml-0.5", a.confidence === "low" ? "text-amber-600" : "")}>
+                            {a.confidence && <span className={cn("text-[11px] ml-0.5", a.confidence === "low" ? "text-amber-400" : "")}>
                               {typeof a.score === "number" ? ` ${Math.round(a.score * 100)}%` : ""}
                             </span>}
                           </span>
@@ -367,12 +367,12 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
             </table>
           </div>
         ) : (
-          <div className="text-[13px] text-[#64748B] mb-4">No attribute data available yet.</div>
+          <div className="text-[13px] text-muted-foreground mb-4">No attribute data available yet.</div>
         )}
 
         {/* Bottom bar */}
-        <div className="flex items-center justify-between pt-3 border-t border-[#E2E8F0]">
-          <div className="text-[12px] text-[#64748B]">High-confidence extractions auto-confirm on next run if the same raw value is seen again</div>
+        <div className="flex items-center justify-between pt-3 border-t border-border">
+          <div className="text-[12px] text-muted-foreground">High-confidence extractions auto-confirm on next run if the same raw value is seen again</div>
           <button onClick={handleConfirm} disabled={saving}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-[13px] font-medium transition-colors disabled:opacity-50">
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
@@ -464,7 +464,7 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
     <div className="space-y-4">
       {/* Info box */}
       {newCats.length > 0 && (
-        <div className="bg-[#EFF6FF] border border-[#BFDBFE] border-l-[3px] border-l-violet-500 rounded-lg px-4 py-3 text-[13px] text-[#1E40AF]">
+        <div className="bg-blue-500/10 border border-blue-500/30 border-l-[3px] border-l-violet-500 rounded-lg px-4 py-3 text-[13px] text-blue-300">
           {newCats.length} Sunsky {newCats.length === 1 ? "category" : "categories"} in this batch {newCats.length === 1 ? "has" : "have"} no mapping rule. Assign a WooCommerce category and Attribute Profile for each.
         </div>
       )}
@@ -473,33 +473,33 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
       {newCats.map((c: any) => {
         const s = sel[c.sunsky_cat] ?? { woo_cat_id: null, profile_id: null, save_as_rule: true };
         return (
-          <div key={c.sunsky_cat} className="bg-white border border-[#E2E8F0] rounded-[10px] p-5">
+          <div key={c.sunsky_cat} className="bg-card border border-border rounded-[10px] p-5">
             <div className="flex items-center gap-3 mb-4 flex-wrap">
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[12px] font-medium bg-amber-100 text-amber-800">Unmapped</span>
+              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[12px] font-medium bg-amber-500/15 text-amber-400">Unmapped</span>
               <strong className="text-[15px]">{c.sunsky_cat}</strong>
-              <span className="text-[12px] text-[#94A3B8]">{c.product_count} product{c.product_count !== 1 ? "s" : ""} in this batch</span>
+              <span className="text-[12px] text-muted-foreground/60">{c.product_count} product{c.product_count !== 1 ? "s" : ""} in this batch</span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
               <div>
-                <label className="block text-[12px] font-medium text-[#475569] mb-1.5">WooCommerce Category</label>
+                <label className="block text-[12px] font-medium text-foreground/70 mb-1.5">WooCommerce Category</label>
                 <select
                   value={s.woo_cat_id ?? ""}
                   onChange={e => setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...s, woo_cat_id: e.target.value ? parseInt(e.target.value) : null } }))}
-                  className="w-full px-3 py-2 border border-[#E2E8F0] rounded-lg text-[13px] text-[#1E293B] bg-white focus:outline-none focus:border-violet-400"
+                  className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
                 >
                   <option value="">Select category…</option>
                   {wooOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
                 </select>
                 {s.woo_cat_id && (
-                  <div className="text-[11px] text-violet-600 mt-1">★ AI suggestion: {wooOptions.find(o => o.id === s.woo_cat_id)?.label}</div>
+                  <div className="text-[11px] text-violet-400 mt-1">★ AI suggestion: {wooOptions.find(o => o.id === s.woo_cat_id)?.label}</div>
                 )}
               </div>
               <div>
-                <label className="block text-[12px] font-medium text-[#475569] mb-1.5">Attribute Profile</label>
+                <label className="block text-[12px] font-medium text-foreground/70 mb-1.5">Attribute Profile</label>
                 <select
                   value={s.profile_id ?? ""}
                   onChange={e => setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...s, profile_id: e.target.value ? parseInt(e.target.value) : null } }))}
-                  className="w-full px-3 py-2 border border-[#E2E8F0] rounded-lg text-[13px] text-[#1E293B] bg-white focus:outline-none focus:border-violet-400"
+                  className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
                 >
                   <option value="">— No profile —</option>
                   {profiles.map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -509,23 +509,23 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
             <label className="flex items-start gap-2.5 cursor-pointer mt-2">
               <span className={cn(
                 "w-4 h-4 min-w-[16px] border-2 rounded flex items-center justify-center mt-0.5 text-[11px] transition-colors",
-                s.save_as_rule ? "bg-violet-600 border-violet-600 text-white" : "border-[#CBD5E1] bg-white"
+                s.save_as_rule ? "bg-violet-600 border-violet-600 text-white" : "border-border bg-card"
               )} onClick={() => setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...s, save_as_rule: !s.save_as_rule } }))}>
                 {s.save_as_rule && "✓"}
               </span>
               <div>
-                <div className="text-[13px] text-[#334155]">Save as permanent rule in Category Mapping</div>
-                <div className="text-[12px] text-[#94A3B8] mt-0.5">Future pipelines with this Sunsky category will not pause again.</div>
+                <div className="text-[13px] text-foreground/80">Save as permanent rule in Category Mapping</div>
+                <div className="text-[12px] text-muted-foreground/60 mt-0.5">Future pipelines with this Sunsky category will not pause again.</div>
               </div>
             </label>
-            <button className="text-violet-600 text-[12px] mt-3 hover:underline">+ Create new WooCommerce category</button>
+            <button className="text-violet-400 text-[12px] mt-3 hover:underline">+ Create new WooCommerce category</button>
           </div>
         );
       })}
 
       {/* Already mapped */}
       {knownCats.length > 0 && (
-        <div className="bg-[#F0FDF4] border border-[#BBF7D0] border-l-[3px] border-l-emerald-500 rounded-lg px-4 py-3 text-[13px] text-[#166534]">
+        <div className="bg-emerald-500/10 border border-emerald-500/30 border-l-[3px] border-l-emerald-500 rounded-lg px-4 py-3 text-[13px] text-emerald-300">
           <strong>✓ Already mapped — applied automatically</strong><br />
           <span className="text-[12px] mt-0.5 block">
             {knownCats.map(c => `${c.sunsky_cat} → ${c.woo_cats?.[0]?.name ?? "?"}`).join(" · ")}
@@ -596,16 +596,16 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   return (
     <div className="space-y-4">
       {/* Substep B card */}
-      <div className="bg-white border border-[#BBF7D0] border-l-[3px] border-l-emerald-500 rounded-[10px] p-5">
+      <div className="bg-card border border-emerald-500/30 border-l-[3px] border-l-emerald-500 rounded-[10px] p-5">
         <div className="flex items-center gap-3 mb-4 flex-wrap">
-          <span className="w-[22px] h-[22px] rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-[12px] font-bold flex-shrink-0">2</span>
-          <div className="text-[13px] font-semibold text-emerald-700">Substep B — Review generated content</div>
+          <span className="w-[22px] h-[22px] rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[12px] font-bold flex-shrink-0">2</span>
+          <div className="text-[13px] font-semibold text-emerald-400">Substep B — Review generated content</div>
           <div className="ml-auto">
-            <div className="flex gap-1 bg-[#F1F5F9] rounded-lg p-1">
+            <div className="flex gap-1 bg-muted/50 rounded-lg p-1">
               {(["all","attention","ready"] as const).map(t => (
                 <button key={t} onClick={() => setTab(t)}
                   className={cn("px-3 py-1 rounded-md text-[13px] font-medium transition-colors",
-                    tab === t ? "bg-white text-violet-600 shadow-sm" : "text-[#64748B] hover:text-foreground"
+                    tab === t ? "bg-muted text-violet-400 shadow-sm" : "text-muted-foreground hover:text-foreground"
                   )}>
                   {t === "all" ? `All (${allProducts.length})` : t === "attention" ? `Needs attention (${needsAttention.length})` : `Ready (${ready.length})`}
                 </button>
@@ -619,39 +619,39 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
           {displayed.slice(0, 50).map((p: any) => {
             const isExp = expanded.has(p.id);
             return (
-              <div key={p.id} className="border border-[#E2E8F0] rounded-lg overflow-hidden">
+              <div key={p.id} className="border border-border rounded-lg overflow-hidden">
                 <div
-                  className="flex items-center gap-3 px-4 py-3 cursor-pointer bg-white hover:bg-[#FAFBFF]"
+                  className="flex items-center gap-3 px-4 py-3 cursor-pointer bg-card hover:bg-card/50"
                   onClick={() => setExpanded(prev => { const s = new Set(prev); s.has(p.id) ? s.delete(p.id) : s.add(p.id); return s; })}
                 >
                   {p.needs_attention
-                    ? <span className="inline-flex px-2 py-0.5 rounded-full text-[12px] font-medium bg-amber-100 text-amber-800 flex-shrink-0">Needs attention</span>
-                    : <span className="inline-flex px-2 py-0.5 rounded-full text-[12px] font-medium bg-emerald-100 text-emerald-800 flex-shrink-0">Ready</span>
+                    ? <span className="inline-flex px-2 py-0.5 rounded-full text-[12px] font-medium bg-amber-500/15 text-amber-400 flex-shrink-0">Needs attention</span>
+                    : <span className="inline-flex px-2 py-0.5 rounded-full text-[12px] font-medium bg-emerald-500/15 text-emerald-400 flex-shrink-0">Ready</span>
                   }
                   <strong className="text-[13px]">{p.name}</strong>
-                  <span className="text-[12px] text-[#64748B]">{p.sku}{p.price ? ` · $${p.price}` : ""}</span>
-                  <span className="ml-auto text-[#94A3B8] text-[12px]">{isExp ? "▾" : "›"}</span>
+                  <span className="text-[12px] text-muted-foreground">{p.sku}{p.price ? ` · $${p.price}` : ""}</span>
+                  <span className="ml-auto text-muted-foreground/60 text-[12px]">{isExp ? "▾" : "›"}</span>
                 </div>
                 {isExp && (
-                  <div className="px-4 pb-4 bg-[#FAFBFF] border-t border-[#E2E8F0]">
+                  <div className="px-4 pb-4 bg-card/50 border-t border-border">
                     <div className="grid grid-cols-1 gap-3 mt-3">
                       <div>
-                        <label className="block text-[12px] font-medium text-[#475569] mb-1">Product Title</label>
-                        <input defaultValue={p.name} className="w-full px-3 py-2 border border-[#E2E8F0] rounded-lg text-[13px] text-[#1E293B] bg-white focus:outline-none focus:border-violet-400" />
+                        <label className="block text-[12px] font-medium text-foreground/70 mb-1">Product Title</label>
+                        <input defaultValue={p.name} className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400" />
                       </div>
                       {p.description && (
                         <div>
-                          <label className="block text-[12px] font-medium text-[#475569] mb-1">Description</label>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Description</label>
                           <textarea defaultValue={p.description} rows={3}
-                            className="w-full px-3 py-2 border border-[#E2E8F0] rounded-lg text-[13px] text-[#1E293B] bg-white focus:outline-none focus:border-violet-400 resize-y" />
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400 resize-y" />
                         </div>
                       )}
                       {p.image_count > 0 && (
                         <div>
-                          <label className="block text-[12px] font-medium text-[#475569] mb-1">Images</label>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Images</label>
                           <div className="flex gap-2 flex-wrap">
                             {Array.from({ length: p.image_count }).map((_, idx) => (
-                              <div key={idx} className="w-11 h-11 bg-[#E2E8F0] border border-[#CBD5E1] rounded-lg flex items-center justify-center text-[10px] text-[#94A3B8]">
+                              <div key={idx} className="w-11 h-11 bg-muted/50 border border-border rounded-lg flex items-center justify-center text-[10px] text-muted-foreground/60">
                                 img{idx + 1}
                               </div>
                             ))}
@@ -659,9 +659,9 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                         </div>
                       )}
                     </div>
-                    <div className="mt-3 pt-3 border-t border-[#E2E8F0] flex gap-2">
+                    <div className="mt-3 pt-3 border-t border-border flex gap-2">
                       <button onClick={() => setExcluded(prev => { const s = new Set(prev); s.add(p.id); return s; })}
-                        className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]">
+                        className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">
                         Exclude from upload
                       </button>
                     </div>
@@ -675,13 +675,13 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
         </div>
 
         {/* Footer actions */}
-        <div className="flex items-center justify-between pt-3 border-t border-[#E2E8F0] flex-wrap gap-3">
+        <div className="flex items-center justify-between pt-3 border-t border-border flex-wrap gap-3">
           <div className="flex gap-2 flex-wrap">
-            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]">Exclude selected</button>
-            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]">Re-generate content</button>
-            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]">Assign category</button>
+            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">Exclude selected</button>
+            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">Re-generate content</button>
+            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">Assign category</button>
           </div>
-          <button onClick={handleUploadAll} disabled={saving || readyCount === 0}
+          <button onClick={handleUploadAll} disabled={saving}
             className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[13px] font-medium transition-colors disabled:opacity-50">
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
             Upload All Ready ({readyCount}) →
@@ -717,50 +717,50 @@ function CompletedSection({ pl, plId }: { pl: Pipeline; plId: number }) {
     <div className="space-y-5">
       {/* 3 stat cards */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white border border-[#E2E8F0] rounded-[10px] px-5 py-4">
-          <div className="text-[12px] text-[#64748B] mb-1.5">Uploaded successfully</div>
-          <div className="text-[28px] font-bold text-[#16A34A] leading-none tracking-[-1px]">{uploaded}</div>
+        <div className="bg-card border border-border rounded-[10px] px-5 py-4">
+          <div className="text-[12px] text-muted-foreground mb-1.5">Uploaded successfully</div>
+          <div className="text-[28px] font-bold text-emerald-400 leading-none tracking-[-1px]">{uploaded}</div>
         </div>
-        <div className="bg-white border border-[#E2E8F0] rounded-[10px] px-5 py-4">
-          <div className="text-[12px] text-[#64748B] mb-1.5">Failed</div>
-          <div className="text-[28px] font-bold leading-none tracking-[-1px]" style={{ color: failed > 0 ? "#DC2626" : "#0F172A" }}>{failed}</div>
+        <div className="bg-card border border-border rounded-[10px] px-5 py-4">
+          <div className="text-[12px] text-muted-foreground mb-1.5">Failed</div>
+          <div className="text-[28px] font-bold leading-none tracking-[-1px]" style={{ color: failed > 0 ? "rgb(248 113 113)" : "currentColor" }}>{failed}</div>
         </div>
-        <div className="bg-white border border-[#E2E8F0] rounded-[10px] px-5 py-4">
-          <div className="text-[12px] text-[#64748B] mb-1.5">Excluded</div>
-          <div className="text-[28px] font-bold text-[#94A3B8] leading-none tracking-[-1px]">{excluded}</div>
+        <div className="bg-card border border-border rounded-[10px] px-5 py-4">
+          <div className="text-[12px] text-muted-foreground mb-1.5">Excluded</div>
+          <div className="text-[28px] font-bold text-muted-foreground/60 leading-none tracking-[-1px]">{excluded}</div>
         </div>
       </div>
 
       {/* Failed Products table */}
       {failed > 0 && (
-        <div className="bg-white border border-[#FCA5A5] rounded-[10px] overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-[#FEE2E2]">
-            <div className="text-[11px] font-semibold text-[#DC2626] uppercase tracking-[0.6px]">Failed Products ({failed})</div>
-            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC]">↺ Retry all failed</button>
+        <div className="bg-card border border-red-500/30 rounded-[10px] overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-red-500/20">
+            <div className="text-[11px] font-semibold text-red-400 uppercase tracking-[0.6px]">Failed Products ({failed})</div>
+            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">↺ Retry all failed</button>
           </div>
           {failedProducts.length > 0 ? (
             <table className="w-full border-collapse text-[13px]">
               <thead>
-                <tr className="bg-[#FFF5F5]">
-                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-[#64748B] uppercase tracking-[0.5px]">SKU</th>
-                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-[#64748B] uppercase tracking-[0.5px]">Product</th>
-                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-[#64748B] uppercase tracking-[0.5px]">Error</th>
-                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-[#64748B] uppercase tracking-[0.5px]">Action</th>
+                <tr className="bg-red-500/10">
+                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.5px]">SKU</th>
+                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.5px]">Product</th>
+                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.5px]">Error</th>
+                  <th className="text-left px-4 py-2.5 text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.5px]">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {failedProducts.map((p: any) => (
-                  <tr key={p.id} className="border-t border-[#FEE2E2] hover:bg-[#FFF5F5]">
-                    <td className="px-4 py-3 text-[12px] text-[#64748B] font-mono">{p.sku}</td>
+                  <tr key={p.id} className="border-t border-red-500/20 hover:bg-red-500/10">
+                    <td className="px-4 py-3 text-[12px] text-muted-foreground font-mono">{p.sku}</td>
                     <td className="px-4 py-3 font-medium">{p.name}</td>
-                    <td className="px-4 py-3 text-[12px] text-[#DC2626]">{p.error_message ?? "Unknown error"}</td>
-                    <td className="px-4 py-3"><button className="px-2.5 py-1 rounded-md text-[11px] bg-white border border-[#E2E8F0] text-[#475569] hover:bg-[#F8FAFC] cursor-pointer">Retry</button></td>
+                    <td className="px-4 py-3 text-[12px] text-red-400">{p.error_message ?? "Unknown error"}</td>
+                    <td className="px-4 py-3"><button className="px-2.5 py-1 rounded-md text-[11px] bg-card border border-border text-foreground/70 hover:bg-background cursor-pointer">Retry</button></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           ) : (
-            <div className="px-5 py-4 text-[13px] text-[#64748B] italic">Check the log below for details on failed products.</div>
+            <div className="px-5 py-4 text-[13px] text-muted-foreground italic">Check the log below for details on failed products.</div>
           )}
         </div>
       )}
@@ -768,7 +768,7 @@ function CompletedSection({ pl, plId }: { pl: Pipeline; plId: number }) {
       {/* Footer */}
       <div className="flex items-center gap-3 justify-end">
         <Link href="/products">
-          <button className="px-4 py-2 rounded-lg bg-white border border-[#E2E8F0] text-[#475569] text-[13px] font-medium hover:bg-[#F8FAFC] transition-colors">
+          <button className="px-4 py-2 rounded-lg bg-card border border-border text-foreground/70 text-[13px] font-medium hover:bg-background transition-colors">
             View Products
           </button>
         </Link>
@@ -789,22 +789,22 @@ function CompletedSection({ pl, plId }: { pl: Pipeline; plId: number }) {
 function FailedSection({ pl, onAction }: { pl: Pipeline; onAction: (a: string) => void }) {
   return (
     <div className="space-y-4">
-      <div className="bg-[#FFF5F5] border border-[#FCA5A5] border-l-[3px] border-l-red-500 rounded-lg px-4 py-3">
+      <div className="bg-red-500/10 border border-red-500/30 border-l-[3px] border-l-red-500 rounded-lg px-4 py-3">
         <div className="flex items-start gap-2">
           <XCircle className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
           <div>
-            <p className="font-semibold text-[#991B1B] text-[13px]">Pipeline {pl.status === "cancelled" ? "Cancelled" : "Failed"}</p>
-            {pl.error_message && <p className="text-[12px] text-[#DC2626] mt-1 font-mono">{pl.error_message}</p>}
+            <p className="font-semibold text-red-400 text-[13px]">Pipeline {pl.status === "cancelled" ? "Cancelled" : "Failed"}</p>
+            {pl.error_message && <p className="text-[12px] text-red-400 mt-1 font-mono">{pl.error_message}</p>}
           </div>
         </div>
       </div>
       <div className="flex gap-3">
         <button onClick={() => onAction("continue")}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[13px] font-medium transition-colors">
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 text-[13px] font-medium transition-colors">
           <Play className="w-3.5 h-3.5 fill-current" /> Continue from last step
         </button>
         <button onClick={() => onAction("retry")}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-[#E2E8F0] text-[#475569] text-[13px] font-medium hover:bg-[#F8FAFC] transition-colors">
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-card border border-border text-foreground/70 text-[13px] font-medium hover:bg-background transition-colors">
           <RotateCcw className="w-3.5 h-3.5" /> Retry from scratch
         </button>
       </div>
@@ -830,18 +830,18 @@ function pageTitle(status: string): string {
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "running")
-    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-[#EDE9FE] text-[#5B21B6]"><span className="w-1.5 h-1.5 rounded-full bg-[#8B5CF6] inline-block" /> Running</span>;
+    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-violet-500/20 text-violet-300"><span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse inline-block" /> Running</span>;
   if (["enrich_review","review","content_review"].includes(status))
-    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-[#FEF3C7] text-[#92400E]"><span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse inline-block" /> Waiting for input</span>;
+    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-amber-500/20 text-amber-300"><span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block" /> Waiting for input</span>;
   if (status === "completed")
-    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-[#DCFCE7] text-[#166534] text-[13px]"><span className="w-1.5 h-1.5 rounded-full bg-[#22C55E] inline-block" /> Completed</span>;
+    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-emerald-500/20 text-emerald-300"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" /> Completed</span>;
   if (status === "failed")
-    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-[#FEE2E2] text-[#991B1B]"><span className="w-1.5 h-1.5 rounded-full bg-[#EF4444] inline-block" /> Failed</span>;
+    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-red-500/20 text-red-400"><span className="w-1.5 h-1.5 rounded-full bg-red-400 inline-block" /> Failed</span>;
   if (status === "cancelled")
-    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-[#F1F5F9] text-[#475569]">Cancelled</span>;
+    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-muted text-muted-foreground">Cancelled</span>;
   if (status === "queued")
-    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-[#F1F5F9] text-[#475569]"><span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8] inline-block" /> Queued</span>;
-  return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-[#F1F5F9] text-[#475569]">{status}</span>;
+    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-muted text-muted-foreground"><span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 inline-block" /> Queued</span>;
+  return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-muted text-muted-foreground">{status}</span>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -931,8 +931,8 @@ export default function PipelineDetail() {
 
   if (error || !pl) return (
     <div className="space-y-4 p-6">
-      <Link href="/pipelines"><button className="flex items-center gap-1.5 text-[13px] text-[#64748B] hover:text-[#1E293B]"><ArrowLeft className="w-4 h-4" /> All Runs</button></Link>
-      <div className="bg-[#FEE2E2] border border-[#FCA5A5] rounded-[10px] p-6 text-[#991B1B]">{error ?? "Pipeline not found"}</div>
+      <Link href="/pipelines"><button className="flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"><ArrowLeft className="w-4 h-4" /> All Runs</button></Link>
+      <div className="bg-red-500/10 border border-red-500/30 rounded-[10px] p-6 text-red-400">{error ?? "Pipeline not found"}</div>
     </div>
   );
 
@@ -943,7 +943,7 @@ export default function PipelineDetail() {
     <div className="space-y-5 max-w-4xl">
       {/* Breadcrumb */}
       <Link href="/pipelines">
-        <button className="flex items-center gap-1.5 text-[12px] text-[#64748B] hover:text-[#1E293B] transition-colors">
+        <button className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground transition-colors">
           <ArrowLeft className="w-3.5 h-3.5" /> All Runs
         </button>
       </Link>
@@ -951,27 +951,27 @@ export default function PipelineDetail() {
       {/* Header */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <div className="text-[12px] text-[#64748B] mb-1">{pl.pl_id} · {storeName ?? `Store #${pl.store_id}`}{pl.status === "completed" && pl.updated_at ? ` · ${format(new Date(pl.updated_at), "MMM d, yyyy — hh:mm aa")}` : ""}</div>
-          <h1 className="text-[22px] font-bold text-[#0F172A] tracking-[-0.3px]">{pageTitle(pl.status)}</h1>
+          <div className="text-[12px] text-muted-foreground mb-1">{pl.pl_id} · {storeName ?? `Store #${pl.store_id}`}{pl.status === "completed" && pl.updated_at ? ` · ${format(new Date(pl.updated_at), "MMM d, yyyy — hh:mm aa")}` : ""}</div>
+          <h1 className="text-[22px] font-bold text-foreground tracking-[-0.3px]">{pageTitle(pl.status)}</h1>
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={pl.status} />
           {(isLive || isReview) && (
             <button onClick={() => handleAction("cancel")}
-              className="px-3 py-1.5 rounded-lg bg-white border border-[#E2E8F0] text-[#EF4444] text-[12px] font-medium hover:bg-[#FFF5F5] transition-colors flex items-center gap-1.5">
+              className="px-3 py-1.5 rounded-lg bg-card border border-border text-red-400 text-[12px] font-medium hover:bg-red-500/10 transition-colors flex items-center gap-1.5">
               <Square className="w-3 h-3 fill-current" /> Cancel
             </button>
           )}
           <button onClick={fetchPipeline}
-            className="px-3 py-1.5 rounded-lg bg-white border border-[#E2E8F0] text-[#475569] text-[12px] font-medium hover:bg-[#F8FAFC] transition-colors flex items-center gap-1.5">
+            className="px-3 py-1.5 rounded-lg bg-card border border-border text-foreground/70 text-[12px] font-medium hover:bg-background transition-colors flex items-center gap-1.5">
             <RefreshCw className="w-3 h-3" /> Refresh
           </button>
         </div>
       </div>
 
       {/* Stage Trail */}
-      <div className="bg-white border border-[#E2E8F0] rounded-[10px] p-4">
-        <div className="text-[11px] font-semibold text-[#64748B] uppercase tracking-[0.6px] mb-3">Pipeline Stages</div>
+      <div className="bg-card border border-border rounded-[10px] p-4">
+        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.6px] mb-3">Pipeline Stages</div>
         <StageTrail pl={pl} />
       </div>
 
@@ -979,11 +979,11 @@ export default function PipelineDetail() {
       {pl.status === "running" && <RunningSection pl={pl} />}
 
       {pl.status === "queued" && (
-        <div className="bg-white border border-[#E2E8F0] rounded-[10px] p-5 flex items-start gap-3">
-          <Clock className="w-5 h-5 text-[#94A3B8] mt-0.5 flex-shrink-0" />
+        <div className="bg-card border border-border rounded-[10px] p-5 flex items-start gap-3">
+          <Clock className="w-5 h-5 text-muted-foreground/60 mt-0.5 flex-shrink-0" />
           <div>
-            <p className="font-semibold text-[#0F172A]">Queued</p>
-            <p className="text-[13px] text-[#64748B] mt-1">This pipeline is waiting for another pipeline on the same store to complete. It will start automatically.</p>
+            <p className="font-semibold text-foreground">Queued</p>
+            <p className="text-[13px] text-muted-foreground mt-1">This pipeline is waiting for another pipeline on the same store to complete. It will start automatically.</p>
           </div>
         </div>
       )}
@@ -999,13 +999,13 @@ export default function PipelineDetail() {
       {(pl.status === "failed" || pl.status === "cancelled") && <FailedSection pl={pl} onAction={handleAction} />}
 
       {/* Log Panel */}
-      <div className="bg-white border border-[#E2E8F0] rounded-[10px] overflow-hidden">
+      <div className="bg-card border border-border rounded-[10px] overflow-hidden">
         <button onClick={() => setLogOpen(x => !x)}
-          className="w-full flex items-center gap-2 px-4 py-3 border-b border-[#E2E8F0] hover:bg-[#F8FAFC] text-left">
-          <Terminal className="w-4 h-4 text-[#94A3B8]" />
-          <span className="text-[13px] font-medium text-[#475569]">Pipeline Log</span>
-          {isLive && <span className="flex items-center gap-1 text-[12px] text-violet-600 ml-2"><span className="w-1.5 h-1.5 bg-violet-500 rounded-full animate-pulse inline-block" /> Live</span>}
-          <span className="ml-auto text-[#94A3B8] text-[12px]">{logOpen ? "▲" : "▼"}</span>
+          className="w-full flex items-center gap-2 px-4 py-3 border-b border-border hover:bg-background text-left">
+          <Terminal className="w-4 h-4 text-muted-foreground/60" />
+          <span className="text-[13px] font-medium text-foreground/70">Pipeline Log</span>
+          {isLive && <span className="flex items-center gap-1 text-[12px] text-violet-400 ml-2"><span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-pulse inline-block" /> Live</span>}
+          <span className="ml-auto text-muted-foreground/60 text-[12px]">{logOpen ? "▲" : "▼"}</span>
         </button>
         {logOpen && <LogPanel plId={plId} isLive={isLive} />}
       </div>
