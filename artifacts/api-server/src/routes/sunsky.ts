@@ -91,9 +91,10 @@ router.post("/fetch", async (req, res) => {
   }
 });
 
-router.get("/categories", async (_req, res) => {
+router.get("/categories", async (req, res) => {
   try {
-    const categories = await fetchSunskyCategories();
+    const parentId = (req.query.parent_id as string) ?? "0";
+    const categories = await fetchSunskyCategories(parentId);
     res.json(categories);
   } catch (err) {
     res.status(500).json({ error: "Failed to fetch categories" });

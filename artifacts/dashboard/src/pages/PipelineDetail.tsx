@@ -845,18 +845,46 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Main Page
+// Demo mode — build a mock Pipeline for each prototype state
 // ─────────────────────────────────────────────────────────────────────────────
+
+function buildDemoPipeline(state: string): Pipeline {
+  const base: Pipeline = {
+    id: 0,
+    pl_id: "PL-069",
+    store_id: 1,
+    fetch_job_id: 1,
+    status: state || "running",
+    current_step: state === "running" ? "enrich" : null,
+    config: {},
+    stats_json: state === "completed" ? { uploaded: 42, failed: 3, excluded: 2 } : null,
+    error_message: null,
+    created_at: new Date(Date.now() - 3_600_000).toISOString(),
+    updated_at: new Date().toISOString(),
+    step_jobs: state === "running" ? [{
+      id: 1, type: "enrich", status: "running",
+      total_items: 47, processed_items: 23, failed_items: 0,
+      progress_percent: 49, error_message: null,
+      started_at: new Date(Date.now() - 120_000).toISOString(),
+      completed_at: null,
+    }] : [],
+  };
+  return base;
+}
 
 export default function PipelineDetail() {
   const [, params] = useRoute("/pipelines/:id");
   const [, navigate] = useLocation();
+  const search = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const { toast } = useToast();
   const { data: stores } = useStores();
 
-  const plId = parseInt(params?.id ?? "0");
-  const [pl, setPl]           = useState<Pipeline | null>(null);
-  const [loading, setLoading] = useState(true);
+  const isDemo = params?.id === "demo";
+  const demoState = search.get("state") ?? "running";
+  const plId = isDemo ? 0 : parseInt(params?.id ?? "0");
+
+  const [pl, setPl]           = useState<Pipeline | null>(isDemo ? buildDemoPipeline(demoState) : null);
+  const [loading, setLoading] = useState(!isDemo);
   const [error, setError]     = useState<string | null>(null);
   const pollRef               = useRef<ReturnType<typeof setInterval> | null>(null);
   const [logOpen, setLogOpen] = useState(true);
@@ -864,6 +892,7 @@ export default function PipelineDetail() {
   const storeMap = Object.fromEntries((stores ?? []).map(s => [s.id, s.name]));
 
   const fetchPipeline = useCallback(async () => {
+    if (isDemo) { setPl(buildDemoPipeline(demoState)); return; }
     try {
       const r = await fetch(`/api/pipelines/${plId}`);
       if (!r.ok) throw new Error(`Pipeline not found (${r.status})`);
@@ -873,7 +902,7 @@ export default function PipelineDetail() {
     } finally {
       setLoading(false);
     }
-  }, [plId]);
+  }, [plId, isDemo, demoState]);
 
   const isLive   = pl ? ["running","queued"].includes(pl.status) : false;
   const isReview = pl ? ["review","enrich_review","content_review"].includes(pl.status) : false;

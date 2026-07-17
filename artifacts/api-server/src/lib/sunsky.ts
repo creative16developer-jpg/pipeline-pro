@@ -70,19 +70,31 @@ function getMockProducts(page: number, limit: number): SunskyProduct[] {
   return products;
 }
 
-function getMockCategories(): SunskyCategory[] {
-  return [
-    { id: "electronics", name: "Electronics", parentId: null },
-    { id: "accessories", name: "Accessories", parentId: null },
-    { id: "gadgets", name: "Gadgets", parentId: "electronics" },
-    { id: "toys", name: "Toys & Games", parentId: null },
-    { id: "sports", name: "Sports & Outdoors", parentId: null },
-    { id: "mobile", name: "Mobile Accessories", parentId: "accessories" },
-    { id: "audio", name: "Audio", parentId: "electronics" },
-    { id: "wearables", name: "Wearables", parentId: "electronics" },
-    { id: "smart-home", name: "Smart Home", parentId: "electronics" },
-    { id: "office", name: "Office & Stationery", parentId: null },
-  ];
+const ALL_MOCK_CATEGORIES: SunskyCategory[] = [
+  { id: "electronics",   name: "Electronics",              parentId: null },
+  { id: "accessories",   name: "Accessories",              parentId: null },
+  { id: "toys",          name: "Toys & Games",             parentId: null },
+  { id: "sports",        name: "Sports & Outdoors",        parentId: null },
+  { id: "office",        name: "Office & Stationery",      parentId: null },
+  { id: "home",          name: "Home & Garden",            parentId: null },
+  { id: "fashion",       name: "Fashion & Apparel",        parentId: null },
+  // Children of electronics
+  { id: "gadgets",       name: "Gadgets",                  parentId: "electronics" },
+  { id: "audio",         name: "Audio",                    parentId: "electronics" },
+  { id: "wearables",     name: "Wearables",                parentId: "electronics" },
+  { id: "smart-home",    name: "Smart Home",               parentId: "electronics" },
+  { id: "cameras",       name: "Cameras & Photo",          parentId: "electronics" },
+  // Children of accessories
+  { id: "mobile",        name: "Mobile Accessories",       parentId: "accessories" },
+  { id: "bags",          name: "Bags & Cases",             parentId: "accessories" },
+  { id: "cables",        name: "Cables & Adapters",        parentId: "accessories" },
+];
+
+function getMockCategories(parentId?: string | null): SunskyCategory[] {
+  if (!parentId || parentId === "0") {
+    return ALL_MOCK_CATEGORIES.filter(c => c.parentId === null);
+  }
+  return ALL_MOCK_CATEGORIES.filter(c => c.parentId === parentId);
 }
 
 export async function fetchSunskyProducts(options: SunskyFetchOptions): Promise<{
@@ -134,13 +146,15 @@ export async function fetchSunskyProducts(options: SunskyFetchOptions): Promise<
   }
 }
 
-export async function fetchSunskyCategories(): Promise<SunskyCategory[]> {
+export async function fetchSunskyCategories(parentId?: string | null): Promise<SunskyCategory[]> {
   if (!SUNSKY_API_KEY) {
-    return getMockCategories();
+    return getMockCategories(parentId);
   }
 
   try {
-    const response = await fetch(`${SUNSKY_API_BASE}/categories`, {
+    const params = new URLSearchParams();
+    if (parentId && parentId !== "0") params.set("parentId", parentId);
+    const response = await fetch(`${SUNSKY_API_BASE}/categories?${params}`, {
       headers: {
         Authorization: `Bearer ${SUNSKY_API_KEY}`,
         "X-Api-Secret": SUNSKY_API_SECRET,
@@ -151,9 +165,12 @@ export async function fetchSunskyCategories(): Promise<SunskyCategory[]> {
       throw new Error(`Sunsky API error: ${response.status}`);
     }
 
-    return (await response.json()) as SunskyCategory[];
+    const all = (await response.json()) as SunskyCategory[];
+    // Filter client-side if the real API doesn't support parentId filtering
+    if (!parentId || parentId === "0") return all.filter(c => !c.parentId);
+    return all.filter(c => c.parentId === parentId);
   } catch (err) {
     logger.error({ err }, "Failed to fetch Sunsky categories, using mock");
-    return getMockCategories();
+    return getMockCategories(parentId);
   }
 }

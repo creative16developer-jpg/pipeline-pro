@@ -28,7 +28,7 @@ interface SourceJob {
 interface SunskyCategory {
   id: string;
   name: string;
-  parent_id?: string | null;
+  parentId?: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

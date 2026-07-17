@@ -19,6 +19,9 @@ import {
   Image,
   Wrench,
   Bell,
+  Play,
+  Pause,
+  CheckCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -79,6 +82,16 @@ const NAV_GROUPS: NavGroup[] = [
       { href: "/settings?tab=pipeline-defaults",label: "Pipeline Defaults",  icon: Wrench,   matchTab: "pipeline-defaults"},
     ],
   },
+  {
+    label: "Prototype Views",
+    items: [
+      { href: "/pipelines/demo?state=running",        label: "Detail — Running",      icon: Play },
+      { href: "/pipelines/demo?state=review",         label: "Detail — Cat. Review",  icon: Pause },
+      { href: "/pipelines/demo?state=enrich_review",  label: "Detail — Review A",     icon: Pause },
+      { href: "/pipelines/demo?state=content_review", label: "Detail — Review B",     icon: Pause },
+      { href: "/pipelines/demo?state=completed",      label: "Detail — Completed",    icon: CheckCircle },
+    ],
+  },
 ];
 
 // ─── Layout ────────────────────────────────────────────────────────────────────
@@ -99,6 +112,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
     // For /pipeline?source=csv — active when on /pipeline with source=csv
     if (item.href === "/pipeline?source=csv") {
       return location === "/pipeline" && searchParams.get("source") === "csv";
+    }
+    // For items with query params (e.g. demo views) — match path + all query params
+    if (item.href.includes("?")) {
+      const [hrefPath, hrefQuery] = item.href.split("?");
+      if (location !== hrefPath) return false;
+      const hrefParams = new URLSearchParams(hrefQuery);
+      for (const [key, val] of hrefParams.entries()) {
+        if (searchParams.get(key) !== val) return false;
+      }
+      return true;
     }
     // Default: path match
     return location === item.href;
