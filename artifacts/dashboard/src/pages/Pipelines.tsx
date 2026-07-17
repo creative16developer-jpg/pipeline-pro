@@ -4,7 +4,7 @@ import {
   Plus, ChevronDown, ChevronRight, CheckCircle2, XCircle,
   Loader2, Clock, AlertTriangle, Square, Play, RefreshCw,
   RotateCcw, Eye, Info, ChevronUp, Activity, Layers, Tag,
-  Check, X as XIcon, ChevronLeft
+  Check, X as XIcon, ChevronLeft, Trash2
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -1608,6 +1608,17 @@ function PipelineRow({
                 </button>
               </>
             )}
+
+            {/* Delete (completed | failed | cancelled) */}
+            {["completed", "failed", "cancelled"].includes(pl.status) && (
+              <button
+                onClick={() => onAction("delete", pl.id)}
+                title="Delete pipeline and all its logs"
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
+              >
+                <Trash2 className="w-3 h-3" /> Delete
+              </button>
+            )}
           </div>
         </td>
       </tr>
@@ -1731,6 +1742,18 @@ export default function Pipelines() {
   const handleAction = async (action: string, id: number) => {
     if (action === "_refresh") {
       await fetchPipelines();
+      return;
+    }
+    if (action === "delete") {
+      if (!confirm("Delete this pipeline and all its logs? This cannot be undone.")) return;
+      try {
+        const r = await fetch(`/api/pipelines/${id}`, { method: "DELETE" });
+        if (!r.ok) throw new Error(await r.text());
+        setPipelines((prev) => prev.filter((p) => p.id !== id));
+        toast({ title: "Pipeline deleted" });
+      } catch (e: any) {
+        toast({ title: "Delete failed", description: e.message, variant: "destructive" });
+      }
       return;
     }
     try {
