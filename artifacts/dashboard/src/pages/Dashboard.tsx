@@ -16,34 +16,27 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { getStoreColor } from "@/lib/store-colors";
 
-const REVIEW_STATUSES = new Set(["review", "enrich_review", "category_review"]);
-
-function pipelineLabel(status: string): string {
-  if (status === "review") return "Cat. Review";
-  if (status === "enrich_review") return "Attr. Review";
-  if (status === "category_review") return "Cat. Review";
-  return status.charAt(0).toUpperCase() + status.slice(1);
-}
+const REVIEW_STATUSES = new Set(["review", "enrich_review", "category_review", "content_review"]);
 
 function PipelineStatusChip({ status }: { status: string }) {
   const base = "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap";
   if (status === "running")
     return (
-      <span className={cn(base, "bg-blue-500/15 text-blue-400 border border-blue-500/20")}>
-        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+      <span className={cn(base, "bg-[#EDE9FE] text-[#5B21B6]")}>
+        <span className="w-1.5 h-1.5 rounded-full bg-[#8B5CF6] animate-pulse" />
         Running
       </span>
     );
   if (REVIEW_STATUSES.has(status))
     return (
-      <span className={cn(base, "bg-amber-500/15 text-amber-400 border border-amber-500/20")}>
-        <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-        {pipelineLabel(status)}
+      <span className={cn(base, "bg-[#FEF3C7] text-[#92400E]")}>
+        <span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] animate-pulse" />
+        Waiting for input
       </span>
     );
   if (status === "completed")
     return (
-      <span className={cn(base, "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20")}>
+      <span className={cn(base, "bg-[#DCFCE7] text-[#166534]")}>
         <CheckCircle className="w-3 h-3" />
         Completed
       </span>

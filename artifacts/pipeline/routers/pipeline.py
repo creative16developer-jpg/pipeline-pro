@@ -11,7 +11,7 @@ from models.models import PipelineJob, PipelineLog, Job, JobType, Store
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
-ACTIVE_STATUSES = ("running", "review", "enrich_review")
+ACTIVE_STATUSES = ("running", "review", "enrich_review", "content_review")
 
 
 def _pl_dict(pl: PipelineJob, step_jobs: list = None) -> dict:
@@ -194,13 +194,92 @@ async def resume_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
     pl = await db.get(PipelineJob, pl_id)
     if not pl:
         raise HTTPException(404, f"Pipeline #{pl_id} not found")
-    if pl.status != "review":
-        raise HTTPException(400, "Pipeline is not in review state")
+    if pl.status not in ("review", "content_review"):
+        raise HTTPException(400, f"Pipeline is not in a resumable state (current: {pl.status})")
+
+    if pl.status == "content_review":
+        pl.status = "review"
+        pl.updated_at = datetime.now(timezone.utc)
+        await db.commit()
 
     from tasks.pipeline_tasks import _resume_pipeline
     asyncio.create_task(_resume_pipeline(pl.id))
 
     return {"message": f"PL-{str(pl_id).zfill(3)} resuming — upload step starting"}
+
+
+# ── Content Review data ───────────────────────────────────────────────────────
+
+@router.get("/{pl_id}/content-data")
+async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
+    """Return products from this pipeline's fetch job for content review."""
+    from models.models import Product
+    pl = await db.get(PipelineJob, pl_id)
+    if not pl:
+        raise HTTPException(404, f"Pipeline #{pl_id} not found")
+
+    products = (
+        await db.execute(
+            select(Product)
+            .where(Product.fetch_job_id == pl.fetch_job_id)
+            .order_by(Product.id.asc())
+            .limit(200)
+        )
+    ).scalars().all()
+
+    product_list = []
+    for p in products:
+        has_description = bool(p.description)
+        product_list.append({
+            "id": p.id,
+            "sku": p.sku,
+            "name": p.name,
+            "description": p.description or "",
+            "short_description": p.short_description or "",
+            "price": p.price or "",
+            "status": p.status.value if hasattr(p.status, "value") else str(p.status),
+            "image_count": p.image_count,
+            "category_id": p.category_id or "",
+            "error_message": p.error_message or "",
+            "content_source": p.content_source or {},
+            "needs_attention": not has_description or bool(p.error_message),
+        })
+
+    ready = sum(1 for p in product_list if not p["needs_attention"])
+    return {
+        "pipeline_id": pl_id,
+        "total": len(product_list),
+        "needs_attention": len(product_list) - ready,
+        "ready": ready,
+        "products": product_list,
+    }
+
+
+# ── Content Confirm (Review B → start upload) ─────────────────────────────────
+
+@router.post("/{pl_id}/content-confirm")
+async def content_confirm(pl_id: int, db: AsyncSession = Depends(get_db)):
+    """Confirm content review and start the upload step."""
+    pl = await db.get(PipelineJob, pl_id)
+    if not pl:
+        raise HTTPException(404, f"Pipeline #{pl_id} not found")
+    if pl.status != "content_review":
+        raise HTTPException(400, f"Pipeline is not in content review state (current: {pl.status})")
+
+    pl.status = "review"
+    pl.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    db.add(PipelineLog(
+        pipeline_job_id=pl.id, level="info",
+        message="Content review confirmed — starting upload",
+    ))
+    await db.commit()
+
+    from tasks.pipeline_tasks import _resume_pipeline
+    asyncio.create_task(_resume_pipeline(pl.id))
+
+    return {"ok": True, "message": f"PL-{str(pl_id).zfill(3)} upload starting"}
 
 
 # ── Cancel ───────────────────────────────────────────────────────────────────

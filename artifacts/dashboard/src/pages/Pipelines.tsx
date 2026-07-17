@@ -64,8 +64,9 @@ interface QueueInfo {
 const STATUS_META: Record<string, { icon: any; cls: string; dot: string; label: string }> = {
   running:       { icon: Loader2,       cls: "bg-primary/10 text-primary border-primary/25",               dot: "bg-primary animate-pulse",        label: "Running" },
   queued:        { icon: Clock,         cls: "bg-secondary text-muted-foreground border-border",            dot: "bg-muted-foreground",             label: "Queued" },
-  review:        { icon: Eye,           cls: "bg-amber-500/10 text-amber-400 border-amber-500/25",          dot: "bg-amber-400 animate-pulse",      label: "Review" },
-  enrich_review: { icon: Layers,        cls: "bg-orange-500/10 text-orange-400 border-orange-500/25",      dot: "bg-orange-400 animate-pulse",     label: "Enrich Review" },
+  review:         { icon: Eye,           cls: "bg-amber-500/10 text-amber-400 border-amber-500/25",         dot: "bg-amber-400 animate-pulse",     label: "Waiting for input" },
+  enrich_review:  { icon: Layers,       cls: "bg-amber-500/10 text-amber-400 border-amber-500/25",         dot: "bg-amber-400 animate-pulse",     label: "Waiting for input" },
+  content_review: { icon: Eye,          cls: "bg-amber-500/10 text-amber-400 border-amber-500/25",         dot: "bg-amber-400 animate-pulse",     label: "Waiting for input" },
   completed:     { icon: CheckCircle2,  cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/25",   dot: "bg-emerald-400",                  label: "Completed" },
   failed:        { icon: XCircle,       cls: "bg-red-500/10 text-red-400 border-red-500/25",               dot: "bg-red-400",                      label: "Failed" },
   cancelled:     { icon: Square,        cls: "bg-orange-500/10 text-orange-400 border-orange-500/25",      dot: "bg-orange-400",                   label: "Cancelled" },
@@ -1478,7 +1479,7 @@ function PipelineRow({
 }) {
   const [enrichPanelOpen, setEnrichPanelOpen] = useState(pl.status === "enrich_review");
   const [mapPanelOpen, setMapPanelOpen] = useState(pl.status === "review");
-  const isLive = ["running", "review", "enrich_review"].includes(pl.status);
+  const isLive = ["running", "review", "enrich_review", "content_review"].includes(pl.status);
 
   return (
     <>

@@ -284,10 +284,17 @@ async def map_confirm(
 
     await db.commit()
 
-    # Trigger resume — _resume_pipeline owns the status transition (review → running)
-    # DO NOT set pl.status here; _resume_pipeline checks pl.status == "review" on entry
-    from tasks.pipeline_tasks import _resume_pipeline
-    asyncio.create_task(_resume_pipeline(pipeline_id))
+    # Transition to content_review so the user can review generated content before upload
+    pl.status = "content_review"
+    pl.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    from models.models import PipelineLog
+    db.add(PipelineLog(
+        pipeline_job_id=pipeline_id, level="info",
+        message="Category mapping confirmed — pausing for content review before upload",
+    ))
+    await db.commit()
 
     return {"ok": True, "pipeline_id": pipeline_id, "mapped": len(req.mappings)}
 
