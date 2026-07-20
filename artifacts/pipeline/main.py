@@ -25,7 +25,7 @@ from database import engine, Base
 from routers import dashboard, stores, products, jobs, sunsky, content, pipeline, csv_import
 from routers import settings as settings_router
 from routers import map_step, enrich as enrich_router
-from routers import attr_rules, attr_profiles, inventory_mapping
+from routers import attr_rules, attr_profiles, inventory_mapping, attr_mapping as attr_mapping_router
 import models.models  # noqa: F401 — registers all ORM models with Base
 
 STATIC_DIR = Path(__file__).parent.parent / "dashboard" / "dist" / "public"
@@ -131,6 +131,7 @@ app.include_router(enrich_router.router, prefix="/api")
 app.include_router(attr_rules.router, prefix="/api")
 app.include_router(attr_profiles.router, prefix="/api")
 app.include_router(inventory_mapping.router, prefix="/api")
+app.include_router(attr_mapping_router.router, prefix="/api")
 
 # Serve processed images publicly so WooCommerce can sideload them
 # URL pattern: {SERVER_BASE_URL}/media/images/{sku}_{pos}.webp

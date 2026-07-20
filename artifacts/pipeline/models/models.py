@@ -450,6 +450,32 @@ class AIExtractionRule(Base):
 # Inventory Mapping Config (per store)
 # ─────────────────────────────────────────────────────────────────────────────
 
+class AttributeMappingRule(Base):
+    """
+    Defines how a WooCommerce attribute value is derived from Sunsky product data.
+    rule_type:      "from_sunsky" | "ai_extract" | "fixed_value"
+    condition_type: "always" | "if_category"
+    store_id=None means the rule applies globally to all stores.
+    """
+    __tablename__ = "attribute_mapping_rules"
+    __table_args__ = (UniqueConstraint("store_id", "woo_attr_name", name="uq_attr_mapping_store_attr"),)
+
+    id             = Column(Integer, primary_key=True, index=True)
+    store_id       = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=True, index=True)
+    woo_attr_name  = Column(Text, nullable=False)
+    rule_type      = Column(String(20), nullable=False, default="fixed_value")
+    source_field   = Column(Text, nullable=True)
+    fixed_value    = Column(Text, nullable=True)
+    instruction    = Column(Text, nullable=True)
+    condition_type = Column(String(20), nullable=False, default="always")
+    condition_value= Column(Text, nullable=True)
+    sort_order     = Column(Integer, nullable=False, default=0)
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at     = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    store = relationship("Store", foreign_keys=[store_id])
+
+
 class StarredSunskyCategory(Base):
     """User-starred Sunsky categories — appear in dropdowns/filters throughout the app."""
     __tablename__ = "starred_sunsky_categories"

@@ -2326,6 +2326,491 @@ function ContentGenRedirect() {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Attribute Mapping Tab
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface AttrMappingRule {
+  id: number;
+  store_id: number | null;
+  woo_attr_name: string;
+  rule_type: string;
+  source_field: string | null;
+  fixed_value: string | null;
+  instruction: string | null;
+  condition_type: string;
+  condition_value: string | null;
+  sort_order: number;
+}
+
+const RULE_TYPE_META: Record<string, { label: string; cls: string }> = {
+  from_sunsky:  { label: "From Sunsky",  cls: "bg-sky-500/15 text-sky-400 border border-sky-500/25" },
+  ai_extract:   { label: "AI extract",   cls: "bg-violet-500/15 text-violet-400 border border-violet-500/25" },
+  fixed_value:  { label: "Fixed value",  cls: "bg-emerald-500/15 text-emerald-400 border border-emerald-500/25" },
+};
+
+const SUNSKY_FIELDS = [
+  "Brand", "CompatibleBrand", "Color", "Material", "Feature",
+  "Weight", "CountryOfOrigin", "Certification", "PackageContents",
+  "ModelNumber", "Size", "Voltage", "Wattage", "Frequency",
+  "Capacity", "Quantity", "Shape", "Interface", "Compatibility",
+];
+
+const EMPTY_FORM = {
+  woo_attr_name: "",
+  rule_type: "fixed_value",
+  source_field: "",
+  fixed_value: "",
+  instruction: "",
+  condition_type: "always",
+  condition_value: "",
+};
+
+function AttrRuleBadge({ type }: { type: string }) {
+  const m = RULE_TYPE_META[type] ?? { label: type, cls: "bg-secondary text-muted-foreground border border-border" };
+  return (
+    <span className={cn("inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium", m.cls)}>
+      {m.label}
+    </span>
+  );
+}
+
+function ConditionBadge({ type, value }: { type: string; value: string | null }) {
+  if (type === "if_category" && value) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-500/15 text-amber-400 border border-amber-500/25">
+        If category: {value}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-muted-foreground border border-border/50">
+      Always
+    </span>
+  );
+}
+
+function AttrMappingModal({
+  rule,
+  onClose,
+  onSaved,
+  storeId,
+}: {
+  rule: AttrMappingRule | null;
+  onClose: () => void;
+  onSaved: (r: AttrMappingRule) => void;
+  storeId: number | null;
+}) {
+  const { toast } = useToast();
+  const [form, setForm] = useState(
+    rule
+      ? {
+          woo_attr_name: rule.woo_attr_name,
+          rule_type: rule.rule_type,
+          source_field: rule.source_field ?? "",
+          fixed_value: rule.fixed_value ?? "",
+          instruction: rule.instruction ?? "",
+          condition_type: rule.condition_type,
+          condition_value: rule.condition_value ?? "",
+        }
+      : { ...EMPTY_FORM }
+  );
+  const [saving, setSaving] = useState(false);
+
+  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  const handleSave = async () => {
+    if (!form.woo_attr_name.trim()) {
+      toast({ title: "WooCommerce attribute name required", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
+    try {
+      const body = {
+        store_id: storeId,
+        woo_attr_name: form.woo_attr_name.trim(),
+        rule_type: form.rule_type,
+        source_field: form.rule_type === "from_sunsky" ? (form.source_field || null) : null,
+        fixed_value: form.rule_type === "fixed_value" ? (form.fixed_value || null) : null,
+        instruction: form.rule_type === "ai_extract" ? (form.instruction || null) : null,
+        condition_type: form.condition_type,
+        condition_value: form.condition_type === "if_category" ? (form.condition_value || null) : null,
+        sort_order: 0,
+      };
+      const url = rule ? `/api/attr-mapping/${rule.id}` : "/api/attr-mapping";
+      const method = rule ? "PUT" : "POST";
+      const r = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const saved = await r.json();
+      onSaved(saved);
+      toast({ title: rule ? "Rule updated" : "Rule created" });
+      onClose();
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="bg-card border border-border/60 rounded-2xl shadow-2xl w-full max-w-lg mx-4 p-6 flex flex-col gap-5"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="text-base font-semibold text-foreground">
+            {rule ? "Edit Rule" : "Add Attribute Mapping Rule"}
+          </h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
+              WooCommerce Attribute Name
+            </label>
+            <input
+              className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
+              placeholder="e.g. Color, Brand, Material"
+              value={form.woo_attr_name}
+              onChange={e => set("woo_attr_name", e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
+              Rule Type
+            </label>
+            <div className="flex gap-2">
+              {(["from_sunsky", "ai_extract", "fixed_value"] as const).map(rt => (
+                <button
+                  key={rt}
+                  onClick={() => set("rule_type", rt)}
+                  className={cn(
+                    "flex-1 py-2 px-3 rounded-lg text-xs font-medium border transition-colors",
+                    form.rule_type === rt
+                      ? RULE_TYPE_META[rt].cls
+                      : "bg-secondary text-muted-foreground border-border hover:border-border/80"
+                  )}
+                >
+                  {RULE_TYPE_META[rt].label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {form.rule_type === "from_sunsky" && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
+                Sunsky Source Field
+              </label>
+              <div className="relative">
+                <select
+                  className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60 appearance-none"
+                  value={form.source_field}
+                  onChange={e => set("source_field", e.target.value)}
+                >
+                  <option value="">— select field —</option>
+                  {SUNSKY_FIELDS.map(f => <option key={f} value={f}>{f}</option>)}
+                  <option value="__custom__">Custom field name…</option>
+                </select>
+                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+              </div>
+              {form.source_field === "__custom__" && (
+                <input
+                  className="w-full mt-2 px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
+                  placeholder="Custom Sunsky field name"
+                  onChange={e => set("source_field", e.target.value)}
+                />
+              )}
+            </div>
+          )}
+
+          {form.rule_type === "ai_extract" && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
+                AI Instruction <span className="normal-case font-normal">(hint for the model)</span>
+              </label>
+              <textarea
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60 min-h-[80px] resize-y"
+                placeholder="e.g. Find the color in the product title or description. Return only the color name."
+                value={form.instruction}
+                onChange={e => set("instruction", e.target.value)}
+              />
+            </div>
+          )}
+
+          {form.rule_type === "fixed_value" && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
+                Fixed Value
+              </label>
+              <input
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
+                placeholder="e.g. In Stock, Waterproof, New"
+                value={form.fixed_value}
+                onChange={e => set("fixed_value", e.target.value)}
+              />
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
+              Condition
+            </label>
+            <div className="flex gap-2 mb-2">
+              {(["always", "if_category"] as const).map(ct => (
+                <button
+                  key={ct}
+                  onClick={() => set("condition_type", ct)}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                    form.condition_type === ct
+                      ? "bg-primary/15 text-primary border-primary/30"
+                      : "bg-secondary text-muted-foreground border-border"
+                  )}
+                >
+                  {ct === "always" ? "Always" : "If category"}
+                </button>
+              ))}
+            </div>
+            {form.condition_type === "if_category" && (
+              <input
+                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
+                placeholder="Category name, e.g. Waterproof Cases"
+                value={form.condition_value}
+                onChange={e => set("condition_value", e.target.value)}
+              />
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-2 justify-end pt-1">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground bg-secondary hover:bg-secondary/80 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+          >
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            {rule ? "Save Changes" : "Add Rule"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AttributeMappingTab() {
+  const { data: storesData } = useStores();
+  const stores = storesData?.stores ?? [];
+  const { toast } = useToast();
+  const [storeId, setStoreId] = useState<number | null>(null);
+  const [rules, setRules] = useState<AttrMappingRule[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [modalRule, setModalRule] = useState<AttrMappingRule | "new" | null>(null);
+  const [deleting, setDeleting] = useState<number | null>(null);
+
+  const fetchRules = async (sid: number | null) => {
+    setLoading(true);
+    try {
+      const url = sid !== null ? `/api/attr-mapping?store_id=${sid}` : "/api/attr-mapping";
+      const r = await fetch(url);
+      const d = await r.json();
+      setRules(d.rules ?? []);
+    } catch { /* ignore */ }
+    setLoading(false);
+  };
+
+  useEffect(() => { fetchRules(storeId); }, [storeId]);
+
+  const handleDelete = async (id: number) => {
+    if (!confirm("Delete this mapping rule?")) return;
+    setDeleting(id);
+    try {
+      const r = await fetch(`/api/attr-mapping/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(await r.text());
+      setRules(prev => prev.filter(x => x.id !== id));
+      toast({ title: "Rule deleted" });
+    } catch (e: any) {
+      toast({ title: "Delete failed", description: e.message, variant: "destructive" });
+    }
+    setDeleting(null);
+  };
+
+  const handleSaved = (saved: AttrMappingRule) => {
+    setRules(prev => {
+      const idx = prev.findIndex(r => r.id === saved.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = saved;
+        return next;
+      }
+      return [...prev, saved];
+    });
+  };
+
+  const handleExportCsv = () => {
+    const url = storeId !== null
+      ? `/api/attr-mapping/export-csv?store_id=${storeId}`
+      : "/api/attr-mapping/export-csv";
+    window.open(url, "_blank");
+  };
+
+  const sourceLabel = (r: AttrMappingRule) => {
+    if (r.rule_type === "from_sunsky") return r.source_field || "—";
+    if (r.rule_type === "fixed_value") return r.fixed_value || "—";
+    if (r.rule_type === "ai_extract") {
+      const instr = r.instruction || "";
+      return instr.length > 50 ? instr.slice(0, 50) + "…" : instr || "—";
+    }
+    return "—";
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Header row */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative flex-shrink-0">
+          <select
+            className="pl-3 pr-8 py-2 rounded-xl bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60 appearance-none min-w-[180px]"
+            value={storeId ?? ""}
+            onChange={e => setStoreId(e.target.value === "" ? null : Number(e.target.value))}
+          >
+            <option value="">All Stores (global)</option>
+            {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+        </div>
+
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={handleExportCsv}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground border border-border/50 transition-colors"
+          >
+            <Upload className="w-3.5 h-3.5" /> Export CSV
+          </button>
+          <button
+            onClick={() => setModalRule("new")}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            <Plus className="w-4 h-4" /> Add Rule
+          </button>
+        </div>
+      </div>
+
+      {/* Info banner */}
+      <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-secondary/40 border border-border/40 text-xs text-muted-foreground">
+        <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+        <span>
+          Attribute mapping rules define how each WooCommerce product attribute gets its value during upload.
+          <strong className="text-foreground"> From Sunsky</strong> copies a Sunsky field directly,{" "}
+          <strong className="text-foreground">AI extract</strong> uses AI to pull values from titles/descriptions, and{" "}
+          <strong className="text-foreground">Fixed value</strong> always sets a static value.
+          Global rules apply to all stores; per-store rules override globals.
+        </span>
+      </div>
+
+      {/* Table */}
+      <div className="bg-card border border-border/50 rounded-2xl overflow-hidden shadow-sm">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border/40 bg-secondary/30">
+              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">WooCommerce Attribute</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Rule</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Source / Value</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Condition</th>
+              <th className="px-4 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground text-sm">
+                  <Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Loading rules…
+                </td>
+              </tr>
+            ) : rules.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground text-sm">
+                  <div className="flex flex-col items-center gap-3">
+                    <Tag className="w-8 h-8 text-muted-foreground/40" />
+                    <div>
+                      <p className="font-medium text-foreground">No rules yet</p>
+                      <p className="text-xs mt-1">Add rules to define how WooCommerce attributes are populated during upload.</p>
+                    </div>
+                    <button
+                      onClick={() => setModalRule("new")}
+                      className="px-4 py-2 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90"
+                    >
+                      + Add First Rule
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ) : (
+              rules.map(rule => (
+                <tr key={rule.id} className="border-b border-border/30 hover:bg-secondary/10 transition-colors">
+                  <td className="px-4 py-3 font-semibold text-foreground">{rule.woo_attr_name}</td>
+                  <td className="px-4 py-3"><AttrRuleBadge type={rule.rule_type} /></td>
+                  <td className="px-4 py-3 text-muted-foreground text-xs max-w-[220px] truncate">{sourceLabel(rule)}</td>
+                  <td className="px-4 py-3"><ConditionBadge type={rule.condition_type} value={rule.condition_value} /></td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5 justify-end">
+                      <button
+                        onClick={() => setModalRule(rule)}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <Edit2 className="w-3 h-3" /> Edit
+                      </button>
+                      <button
+                        onClick={() => handleDelete(rule.id)}
+                        disabled={deleting === rule.id}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors disabled:opacity-50"
+                      >
+                        {deleting === rule.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Rule count */}
+      {rules.length > 0 && (
+        <p className="text-xs text-muted-foreground text-right">{rules.length} rule{rules.length !== 1 ? "s" : ""}</p>
+      )}
+
+      {/* Add/Edit modal */}
+      {modalRule !== null && (
+        <AttrMappingModal
+          rule={modalRule === "new" ? null : modalRule}
+          storeId={storeId}
+          onClose={() => setModalRule(null)}
+          onSaved={handleSaved}
+        />
+      )}
+    </div>
+  );
+}
+
+
 function StubTab({ title, description }: { title: string; description: string }) {
   return (
     <div className="bg-card border border-border/50 rounded-2xl p-8 flex flex-col items-center text-center gap-4 shadow-sm">
@@ -2642,10 +3127,7 @@ export default function Settings() {
       ) : activeTab === "woo-cats" ? (
         <WooCategoriesTab />
       ) : activeTab === "attr-mapping" ? (
-        <StubTab
-          title="Attribute Mapping"
-          description="Define how Sunsky product attributes map to WooCommerce attribute taxonomy terms. Set default mappings that apply across all stores, then override per-store as needed."
-        />
+        <AttributeMappingTab />
       ) : activeTab === "content-gen" ? (
         <ContentGenRedirect />
       ) : activeTab === "images" ? (
