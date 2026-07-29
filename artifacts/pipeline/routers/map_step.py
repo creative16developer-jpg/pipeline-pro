@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from models.models import (
-    PipelineJob, Product, SunskyCategoryMapping, WooCategory, AttributeProfile
+    PipelineJob, Product, SunskyCategoryMapping, WooCategory, AttributeProfile, Job, JobType
 )
 
 router = APIRouter(tags=["map-step"])
@@ -156,6 +156,27 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         categories.append({
             "sunsky_cat":         cat,
             "product_count":      count,
+            "woo_cats":           woo_cat_list,
+            "primary_woo_cat_id": primary_id,
+            "profile_id":         m.profile_id if m else None,
+            "is_new":             m is None,
+            "times_used":         m.times_used if m else 0,
+        })
+
+    # ── CSV import fallback ──────────────────────────────────────────────────
+    # When products have no Sunsky category in raw_data (e.g. CSV-sourced
+    # pipelines), cat_counts is empty.  Inject a synthetic entry so the user
+    # can still assign a WooCommerce category to the whole batch.
+    if not categories and total_products > 0:
+        fetch_job = await db.get(Job, pl.fetch_job_id) if pl.fetch_job_id else None
+        is_csv = fetch_job and fetch_job.type == JobType.csv_import
+        label = "CSV Import" if is_csv else "Uncategorised Products"
+        m = saved.get(label)
+        woo_cat_list = _mapping_woo_cats(m) if m else []
+        primary_id = m.primary_woo_cat_id if m else (woo_cat_list[0]["id"] if woo_cat_list else None)
+        categories.append({
+            "sunsky_cat":         label,
+            "product_count":      total_products,
             "woo_cats":           woo_cat_list,
             "primary_woo_cat_id": primary_id,
             "profile_id":         m.profile_id if m else None,
