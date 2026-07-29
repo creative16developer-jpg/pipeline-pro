@@ -20,6 +20,8 @@ import json
 import re
 from typing import Optional, TYPE_CHECKING
 
+from sqlalchemy import select
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
