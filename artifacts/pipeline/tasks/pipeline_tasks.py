@@ -100,6 +100,7 @@ def _make_pl_id(n: int) -> str:
 async def _execute_pipeline(pipeline_job_id: int):
     from database import make_session_factory
     from models.models import PipelineJob, Job, JobType, JobStatus
+    from sqlalchemy import select
 
     CelerySession, celery_engine = make_session_factory()
     try:
