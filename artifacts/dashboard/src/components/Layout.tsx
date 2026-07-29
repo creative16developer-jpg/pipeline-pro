@@ -8,6 +8,7 @@ import {
   Zap,
   Settings,
   FileSpreadsheet,
+  FileUp,
   Key,
   Star,
   ArrowRightLeft,
@@ -65,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/stores",                  label: "Stores",             icon: Store },
       { href: "/settings?tab=keys",       label: "AI Provider Keys",   icon: Key,            matchTab: "keys" },
+      { href: "/sunsky",                  label: "CSV Import",         icon: FileUp },
     ],
   },
   {
