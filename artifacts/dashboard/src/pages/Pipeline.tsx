@@ -557,15 +557,21 @@ export default function Pipeline() {
                     No CSV imports found. Upload a CSV file to continue.
                   </p>
                   {/* Required columns hint */}
-                  <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="grid grid-cols-2 gap-2 text-xs">
                     {[
-                      { col: "Sunsky SKU", desc: "Unique product ID" },
-                      { col: "Site SKU",   desc: "Your WooCommerce SKU" },
-                      { col: "Product Title", desc: "Name for the product" },
-                    ].map(({ col, desc }) => (
-                      <div key={col} className="bg-background/60 rounded-lg p-2">
-                        <p className="font-mono text-primary font-semibold">{col}</p>
-                        <p className="text-muted-foreground mt-0.5">{desc}</p>
+                      { col: "Sunsky SKU",    desc: "Unique product ID",         required: true },
+                      { col: "Site SKU",      desc: "Your WooCommerce SKU",       required: true },
+                      { col: "Product Title", desc: "Name for the product",       required: true },
+                      { col: "Price",         desc: "WooCommerce regular_price",  required: false },
+                    ].map(({ col, desc, required }) => (
+                      <div key={col} className="bg-background/60 rounded-lg p-2 flex items-start justify-between gap-1">
+                        <div>
+                          <p className="font-mono text-primary font-semibold">{col}</p>
+                          <p className="text-muted-foreground mt-0.5">{desc}</p>
+                        </div>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${required ? "bg-red-500/20 text-red-400" : "bg-secondary text-muted-foreground"}`}>
+                          {required ? "required" : "optional"}
+                        </span>
                       </div>
                     ))}
                   </div>

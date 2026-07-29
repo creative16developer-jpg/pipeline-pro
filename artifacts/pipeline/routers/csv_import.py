@@ -83,12 +83,21 @@ async def upload_csv(
         sunsky_sku = (row.get("Sunsky SKU") or "").strip()
         site_sku   = (row.get("Site SKU") or "").strip()
         csv_title  = (row.get("Product Title") or "").strip()
+        price_raw  = (row.get("Price") or "").strip()
 
         if not sunsky_sku:
             errors.append(f"Row {i + 2}: missing Sunsky SKU — skipped")
             continue
 
-        rows.append({"sunsky_sku": sunsky_sku, "site_sku": site_sku, "csv_title": csv_title})
+        # Validate price if provided
+        price: str | None = None
+        if price_raw:
+            try:
+                price = str(round(float(price_raw.replace(",", ".")), 2))
+            except ValueError:
+                errors.append(f"Row {i + 2}: invalid price '{price_raw}' — price ignored")
+
+        rows.append({"sunsky_sku": sunsky_sku, "site_sku": site_sku, "csv_title": csv_title, "price": price})
 
     if not rows:
         raise HTTPException(400, f"No valid rows found. Errors: {errors[:5]}")
@@ -116,27 +125,35 @@ async def upload_csv(
     #       always wins; reset status→pending so the pipeline re-processes.
     for r in rows:
         name = r["csv_title"] or r["sunsky_sku"]
+        values: dict = dict(
+            sunsky_id=r["sunsky_sku"],
+            sku=r["sunsky_sku"],
+            name=name,
+            site_sku=r["site_sku"] or None,
+            status=M.ProductStatus.pending,
+            fetch_job_id=job.id,
+            raw_data={},
+        )
+        if r["price"] is not None:
+            values["price"] = r["price"]
+
+        conflict_set: dict = {
+            "name": name,
+            "site_sku": r["site_sku"] or None,
+            "fetch_job_id": job.id,
+            "status": M.ProductStatus.pending,
+            "woo_product_id": None,
+            "error_message": None,
+        }
+        if r["price"] is not None:
+            conflict_set["price"] = r["price"]
+
         stmt = (
             pg_insert(M.Product)
-            .values(
-                sunsky_id=r["sunsky_sku"],
-                sku=r["sunsky_sku"],
-                name=name,
-                site_sku=r["site_sku"] or None,
-                status=M.ProductStatus.pending,
-                fetch_job_id=job.id,
-                raw_data={},
-            )
+            .values(**values)
             .on_conflict_do_update(
                 index_elements=["sunsky_id"],
-                set_={
-                    "name": name,
-                    "site_sku": r["site_sku"] or None,
-                    "fetch_job_id": job.id,
-                    "status": M.ProductStatus.pending,
-                    "woo_product_id": None,
-                    "error_message": None,
-                },
+                set_=conflict_set,
             )
         )
         await db.execute(stmt)

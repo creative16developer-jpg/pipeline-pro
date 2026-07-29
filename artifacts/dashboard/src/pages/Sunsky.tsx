@@ -219,16 +219,22 @@ export default function Sunsky() {
 
         {/* Format guide */}
         <div className="bg-secondary/30 rounded-xl p-4 mb-5 text-sm space-y-1">
-          <p className="font-medium text-foreground mb-2">Required CSV columns (exact names):</p>
-          <div className="grid grid-cols-3 gap-2">
+          <p className="font-medium text-foreground mb-2">CSV columns (exact names):</p>
+          <div className="grid grid-cols-2 gap-2">
             {[
-              { col: "Sunsky SKU", desc: "Sunsky product SKU — used for matching" },
-              { col: "Site SKU", desc: "Your internal SKU — saved to WooCommerce" },
-              { col: "Product Title", desc: "Replaces Sunsky title in generation" },
-            ].map(({ col, desc }) => (
-              <div key={col} className="bg-background/60 rounded-lg p-3">
-                <p className="font-mono text-xs text-primary font-semibold">{col}</p>
-                <p className="text-xs text-muted-foreground mt-1">{desc}</p>
+              { col: "Sunsky SKU",    desc: "Sunsky product SKU — used for matching",        required: true },
+              { col: "Site SKU",      desc: "Your internal SKU — saved to WooCommerce",       required: true },
+              { col: "Product Title", desc: "Replaces Sunsky title in generation",            required: true },
+              { col: "Price",         desc: "Sets WooCommerce regular_price on the product",  required: false },
+            ].map(({ col, desc, required }) => (
+              <div key={col} className="bg-background/60 rounded-lg p-3 flex items-start justify-between gap-2">
+                <div>
+                  <p className="font-mono text-xs text-primary font-semibold">{col}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{desc}</p>
+                </div>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 mt-0.5 ${required ? "bg-red-500/20 text-red-400" : "bg-secondary text-muted-foreground"}`}>
+                  {required ? "required" : "optional"}
+                </span>
               </div>
             ))}
           </div>
