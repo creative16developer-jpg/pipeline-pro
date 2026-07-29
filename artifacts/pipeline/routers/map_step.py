@@ -148,6 +148,11 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         )
     ).scalars().all()
 
+    # Total product count in this batch (products may have no extractable category)
+    total_products = (await db.execute(
+        select(func.count(Product.id)).where(Product.fetch_job_id == pl.fetch_job_id)
+    )).scalar_one()
+
     categories = []
     for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1]):
         m = saved.get(cat)
@@ -183,11 +188,6 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             "is_new":             m is None,
             "times_used":         m.times_used if m else 0,
         })
-
-    # Total product count in this batch (products may have no extractable category)
-    total_products = (await db.execute(
-        select(func.count(Product.id)).where(Product.fetch_job_id == pl.fetch_job_id)
-    )).scalar_one()
 
     return {
         "pipeline_id":    pipeline_id,
