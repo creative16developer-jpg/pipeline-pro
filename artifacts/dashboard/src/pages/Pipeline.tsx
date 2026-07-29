@@ -1,9 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useLocation, useSearch } from "wouter";
 import {
   Play, Zap, ChevronDown, ChevronRight, RotateCcw,
   CloudDownload, Cpu, Upload, ArrowRightLeft, Sparkles,
-  Info, Loader2, AlertTriangle, FileText, Layers, Check
+  Info, Loader2, AlertTriangle, FileText, Layers, Check, CheckCircle2
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -143,6 +143,12 @@ export default function Pipeline() {
   const [sourceJobs, setSourceJobs]   = useState<SourceJob[]>([]);
   const [loadingJobs, setLoadingJobs] = useState(false);
 
+  // ── Inline CSV upload ──────────────────────────────────────────────────────
+  const csvInputRef = useRef<HTMLInputElement>(null);
+  const [csvFile, setCsvFile]           = useState<File | null>(null);
+  const [csvUploading, setCsvUploading] = useState(false);
+  const [csvUploadDone, setCsvUploadDone] = useState(false);
+
   // ── Options ────────────────────────────────────────────────────────────────
   const [includeEnrich,   setIncludeEnrich]   = useState(false);
   const [includeGenerate, setIncludeGenerate] = useState(false);
@@ -210,6 +216,36 @@ export default function Pipeline() {
   const fetchJobs     = sourceJobs.filter((j) => j.type === "fetch");
   const csvJobs       = sourceJobs.filter((j) => j.type === "csv_import");
   const selectedJob   = sourceJobs.find((j) => String(j.id) === fetchJobId);
+
+  // ── Inline CSV upload ──────────────────────────────────────────────────────
+  const handleInlineCsvUpload = async () => {
+    if (!csvFile) return;
+    setCsvUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", csvFile);
+      const res = await fetch("/api/csv/upload", { method: "POST", body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.detail || `Upload failed (${res.status})`);
+      toast({ title: "CSV imported", description: `${data.imported} products loaded.` });
+      setCsvUploadDone(true);
+      // Reload source jobs so the new import appears in the selector
+      setLoadingJobs(true);
+      const csvData = await fetch("/api/jobs?type=csv_import&status=completed&limit=50").then((r) => r.json());
+      const newCsvJobs: SourceJob[] = (csvData.jobs ?? []).map((j: any) => ({ ...j, type: "csv_import" as const }));
+      setSourceJobs((prev) => {
+        const others = prev.filter((j) => j.type !== "csv_import");
+        const all = [...others, ...newCsvJobs].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        if (newCsvJobs.length > 0) setFetchJobId(String(newCsvJobs[0].id));
+        return all;
+      });
+      setLoadingJobs(false);
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err.message, variant: "destructive" });
+    } finally {
+      setCsvUploading(false);
+    }
+  };
 
   // ── Run pipeline ───────────────────────────────────────────────────────────
   const handleRun = async () => {
@@ -515,9 +551,53 @@ export default function Pipeline() {
                   <Loader2 className="w-4 h-4 animate-spin" /> Loading imports…
                 </div>
               ) : csvJobs.length === 0 ? (
-                <div className="flex items-center gap-2 text-sm text-amber-400">
-                  <AlertTriangle className="w-4 h-4" />
-                  No CSV imports found. Upload a CSV file first.
+                <div className="rounded-xl border border-border/50 bg-secondary/30 p-4 space-y-3">
+                  <p className="text-sm text-amber-400 flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    No CSV imports found. Upload a CSV file to continue.
+                  </p>
+                  {/* Required columns hint */}
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    {[
+                      { col: "Sunsky SKU", desc: "Unique product ID" },
+                      { col: "Site SKU",   desc: "Your WooCommerce SKU" },
+                      { col: "Product Title", desc: "Name for the product" },
+                    ].map(({ col, desc }) => (
+                      <div key={col} className="bg-background/60 rounded-lg p-2">
+                        <p className="font-mono text-primary font-semibold">{col}</p>
+                        <p className="text-muted-foreground mt-0.5">{desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Upload row */}
+                  <div className="flex gap-2">
+                    <label className="flex-1 cursor-pointer">
+                      <input
+                        ref={csvInputRef}
+                        type="file"
+                        accept=".csv"
+                        className="hidden"
+                        onChange={(e) => { setCsvFile(e.target.files?.[0] ?? null); setCsvUploadDone(false); }}
+                      />
+                      <div className="h-10 rounded-lg border-2 border-dashed border-border hover:border-primary transition-colors flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+                        <Upload className="w-3.5 h-3.5" />
+                        {csvFile ? <span className="text-foreground font-medium truncate max-w-[180px]">{csvFile.name}</span> : "Click to select CSV file"}
+                      </div>
+                    </label>
+                    <button
+                      disabled={!csvFile || csvUploading}
+                      onClick={handleInlineCsvUpload}
+                      className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium flex items-center gap-2 disabled:opacity-50 hover:opacity-90 transition-opacity whitespace-nowrap"
+                    >
+                      {csvUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                      {csvUploading ? "Uploading…" : "Upload"}
+                    </button>
+                  </div>
+                  {csvUploadDone && (
+                    <p className="text-xs text-emerald-400 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Import complete — select it below.
+                    </p>
+                  )}
                 </div>
               ) : (
                 <>
