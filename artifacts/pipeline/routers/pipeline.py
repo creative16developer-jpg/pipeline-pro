@@ -53,6 +53,7 @@ class PipelineCreateRequest(BaseModel):
     include_enrich: bool = False
     include_generate: bool = False
     force_rerun: bool = False
+    automatic_review_pause: Optional[bool] = None
     process_config: dict = {}
     upload_config: dict = {}
     sync_config: dict = {}
@@ -135,6 +136,21 @@ async def create_pipeline(body: PipelineCreateRequest, db: AsyncSession = Depend
 
     initial_status = "queued" if active else "running"
 
+    automatic_review_pause = body.automatic_review_pause
+    if automatic_review_pause is None:
+        # Not sent explicitly — fall back to the saved
+        # Settings -> Default Pipeline Options value (spec Section 4.1:
+        # "Default from Settings -> Default Pipeline Options").
+        try:
+            from routers.settings import _PIPELINE_DEFAULTS_PATH, DEFAULT_PIPELINE_DEFAULTS
+            import json as _json
+            saved = {}
+            if _PIPELINE_DEFAULTS_PATH.exists():
+                saved = _json.loads(_PIPELINE_DEFAULTS_PATH.read_text())
+            automatic_review_pause = {**DEFAULT_PIPELINE_DEFAULTS, **saved}.get("auto_review_pause", True)
+        except Exception:
+            automatic_review_pause = True
+
     pl = PipelineJob(
         store_id=body.store_id,
         fetch_job_id=body.fetch_job_id,
@@ -143,6 +159,7 @@ async def create_pipeline(body: PipelineCreateRequest, db: AsyncSession = Depend
             "include_enrich":   body.include_enrich,
             "include_generate": body.include_generate,
             "force_rerun": body.force_rerun,
+            "automatic_review_pause": automatic_review_pause,
             "process_config": body.process_config,
             "upload_config": body.upload_config,
             "sync_config": body.sync_config,

@@ -267,19 +267,41 @@ async def _execute_pipeline(pipeline_job_id: int):
                         f"Click Resume to continue with Upload.",
                     )
                 else:
-                    pl.status = "content_review"
-                    pl.current_step = "review"
-                    pl.updated_at = datetime.now(timezone.utc)
-                    await db.commit()
-                    await _plog(
-                        db, pl.id, "review", "info",
-                        f"All Sunsky categories in this batch are already mapped — "
-                        f"skipping category review. Pausing for content review — "
-                        f"{stats.get('total', 0)} total | "
-                        f"{stats.get('ok', 0)} OK | "
-                        f"{stats.get('fallback', 0)} fallback | "
-                        f"{stats.get('failed', 0)} failed.",
-                    )
+                    auto_pause = cfg.get("automatic_review_pause", True)
+                    if auto_pause:
+                        pl.status = "content_review"
+                        pl.current_step = "review"
+                        pl.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        await _plog(
+                            db, pl.id, "review", "info",
+                            f"All Sunsky categories in this batch are already mapped — "
+                            f"skipping category review. Pausing for content review — "
+                            f"{stats.get('total', 0)} total | "
+                            f"{stats.get('ok', 0)} OK | "
+                            f"{stats.get('fallback', 0)} fallback | "
+                            f"{stats.get('failed', 0)} failed.",
+                        )
+                    else:
+                        # Categories already mapped AND Automatic Review Pause
+                        # is off for this run — go straight to Upload/Sync by
+                        # reusing _resume_pipeline (the same code path
+                        # content_confirm uses), rather than duplicating the
+                        # upload/sync logic inline here.
+                        pl.status = "review"
+                        pl.current_step = "review"
+                        pl.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        await _plog(
+                            db, pl.id, "review", "info",
+                            f"All Sunsky categories already mapped and Automatic "
+                            f"Review Pause is off — skipping straight to Upload — "
+                            f"{stats.get('total', 0)} total | "
+                            f"{stats.get('ok', 0)} OK | "
+                            f"{stats.get('fallback', 0)} fallback | "
+                            f"{stats.get('failed', 0)} failed.",
+                        )
+                        await _resume_pipeline(pl.id)
 
             except Exception as e:
                 pl.status = "failed"
@@ -624,19 +646,36 @@ async def _enrich_resume_pipeline(pipeline_job_id: int):
                         f"Confirm category mapping and click Resume.",
                     )
                 else:
-                    pl.status = "content_review"
-                    pl.current_step = "review"
-                    pl.updated_at = datetime.now(timezone.utc)
-                    await db.commit()
-                    await _plog(
-                        db, pl.id, "review", "info",
-                        f"All Sunsky categories in this batch are already mapped — "
-                        f"skipping category review. Pausing for content review — "
-                        f"{stats.get('total', 0)} total | "
-                        f"{stats.get('ok', 0)} OK | "
-                        f"{stats.get('fallback', 0)} fallback | "
-                        f"{stats.get('failed', 0)} failed.",
-                    )
+                    auto_pause = cfg.get("automatic_review_pause", True)
+                    if auto_pause:
+                        pl.status = "content_review"
+                        pl.current_step = "review"
+                        pl.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        await _plog(
+                            db, pl.id, "review", "info",
+                            f"All Sunsky categories in this batch are already mapped — "
+                            f"skipping category review. Pausing for content review — "
+                            f"{stats.get('total', 0)} total | "
+                            f"{stats.get('ok', 0)} OK | "
+                            f"{stats.get('fallback', 0)} fallback | "
+                            f"{stats.get('failed', 0)} failed.",
+                        )
+                    else:
+                        pl.status = "review"
+                        pl.current_step = "review"
+                        pl.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        await _plog(
+                            db, pl.id, "review", "info",
+                            f"All Sunsky categories already mapped and Automatic "
+                            f"Review Pause is off — skipping straight to Upload — "
+                            f"{stats.get('total', 0)} total | "
+                            f"{stats.get('ok', 0)} OK | "
+                            f"{stats.get('fallback', 0)} fallback | "
+                            f"{stats.get('failed', 0)} failed.",
+                        )
+                        await _resume_pipeline(pl.id)
 
             except Exception as e:
                 pl.status = "failed"
@@ -791,17 +830,32 @@ async def _continue_pipeline(pipeline_job_id: int, from_step: str):
                             f"{'…' if len(unmapped) > 5 else ''}). "
                             f"Confirm category mapping and click Resume.")
                     else:
-                        pl.status = "content_review"
-                        pl.current_step = "review"
-                        pl.updated_at = datetime.now(timezone.utc)
-                        await db.commit()
-                        await _plog(db, pl.id, "review", "info",
-                            f"All Sunsky categories in this batch are already mapped — "
-                            f"skipping category review. Pausing for content review — "
-                            f"{stats.get('total', 0)} total | "
-                            f"{stats.get('ok', 0)} OK | "
-                            f"{stats.get('fallback', 0)} fallback | "
-                            f"{stats.get('failed', 0)} failed.")
+                        auto_pause = cfg.get("automatic_review_pause", True)
+                        if auto_pause:
+                            pl.status = "content_review"
+                            pl.current_step = "review"
+                            pl.updated_at = datetime.now(timezone.utc)
+                            await db.commit()
+                            await _plog(db, pl.id, "review", "info",
+                                f"All Sunsky categories in this batch are already mapped — "
+                                f"skipping category review. Pausing for content review — "
+                                f"{stats.get('total', 0)} total | "
+                                f"{stats.get('ok', 0)} OK | "
+                                f"{stats.get('fallback', 0)} fallback | "
+                                f"{stats.get('failed', 0)} failed.")
+                        else:
+                            pl.status = "review"
+                            pl.current_step = "review"
+                            pl.updated_at = datetime.now(timezone.utc)
+                            await db.commit()
+                            await _plog(db, pl.id, "review", "info",
+                                f"All Sunsky categories already mapped and Automatic "
+                                f"Review Pause is off — skipping straight to Upload — "
+                                f"{stats.get('total', 0)} total | "
+                                f"{stats.get('ok', 0)} OK | "
+                                f"{stats.get('fallback', 0)} fallback | "
+                                f"{stats.get('failed', 0)} failed.")
+                            await _resume_pipeline(pl.id)
                     return  # Resumed by _resume_pipeline after user confirms
 
                 # ── Upload ────────────────────────────────────────────────

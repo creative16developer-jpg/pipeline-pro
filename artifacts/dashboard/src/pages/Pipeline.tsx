@@ -3,7 +3,7 @@ import { useLocation, useSearch } from "wouter";
 import {
   Play, Zap, ChevronDown, ChevronRight, RotateCcw,
   CloudDownload, Cpu, Upload, ArrowRightLeft, Sparkles,
-  Info, Loader2, AlertTriangle, FileText, Layers, Check, CheckCircle2
+  Info, Loader2, AlertTriangle, FileText, Layers, Check, CheckCircle2, Eye
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -153,6 +153,7 @@ export default function Pipeline() {
   const [includeEnrich,   setIncludeEnrich]   = useState(false);
   const [includeGenerate, setIncludeGenerate] = useState(false);
   const [forceRerun,      setForceRerun]      = useState(false);
+  const [automaticReviewPause, setAutomaticReviewPause] = useState(true);
   const [showAdvanced,    setShowAdvanced]    = useState(false);
 
   // ── Advanced step config ───────────────────────────────────────────────────
@@ -320,6 +321,7 @@ export default function Pipeline() {
         include_enrich:   includeEnrich,
         include_generate: includeGenerate,
         force_rerun:      forceRerun,
+        automatic_review_pause: automaticReviewPause,
         process_config:   { limit: parseInt(processLimit) || 200 },
         upload_config:    { limit: parseInt(uploadLimit) || 200, skip_images: uploadSkipImages },
         sync_config: {
@@ -666,6 +668,20 @@ export default function Pipeline() {
               </p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 Re-process and re-upload already handled products. Updates in-place.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-start gap-3 p-3 rounded-xl bg-secondary/30 border border-border/40">
+            <Toggle checked={automaticReviewPause} onChange={setAutomaticReviewPause} />
+            <div>
+              <p className="text-sm font-medium flex items-center gap-1.5">
+                <Eye className="w-3.5 h-3.5 text-sky-400" />
+                Automatic Review Pause
+              </p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Pause before upload for a final content review. If off, products upload
+                automatically once ready (category mapping still pauses if needed).
               </p>
             </div>
           </div>
