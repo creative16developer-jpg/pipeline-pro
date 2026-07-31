@@ -175,7 +175,7 @@ function LogPanel({ plId, isLive }: { plId: number; isLive: boolean }) {
 
 const STAGE_DESCRIPTIONS: Record<string, string> = {
   fetch:   "Fetching product list and data from Sunsky API.",
-  process: "Downloading images, resizing, watermarking, converting to WebP.",
+  process: "Downloading images, resizing, converting to WebP.",
   enrich:  "Reading Sunsky title + spec block.\nExtracting attributes via AI.\nConfidence threshold: 70%",
   generate:"Running AI content generation for titles, descriptions, and attributes.",
   upload:  "Uploading products to WooCommerce as drafts.",

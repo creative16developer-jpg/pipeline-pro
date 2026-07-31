@@ -765,7 +765,7 @@ export default function Pipeline() {
         </p>
         <ul className="space-y-1.5 list-disc list-inside text-xs leading-relaxed">
           {productSource === "sunsky" && <li><strong className="text-foreground">Fetch</strong> — products pulled from Sunsky API and saved to your database</li>}
-          <li><strong className="text-foreground">Process</strong> — images downloaded, compressed, watermarked</li>
+          <li><strong className="text-foreground">Process</strong> — images downloaded, compressed, converted to WebP</li>
           {includeEnrich && <li><strong className="text-foreground">Enrich</strong> — AI extracts attributes; pauses for your review</li>}
           {includeGenerate && <li><strong className="text-foreground">Generate</strong> — AI content created for each product</li>}
           <li><strong className="text-foreground">Review</strong> — pipeline pauses; confirm category mappings before upload</li>

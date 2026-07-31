@@ -26,11 +26,59 @@ MAX_RETRIES = 3
 RETRY_DELAY = 2.0
 
 
+class _SunskyAuthError(Exception):
+    """Raised when Sunsky returns 401/403 — IP not whitelisted for this key."""
+
+
 def _build_signature(params: dict) -> str:
     sorted_keys = sorted(params.keys())
     value_string = "".join(str(params[k]) for k in sorted_keys)
     raw = value_string + "@" + settings.sunsky_api_secret
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+# T01 — Mock fallback: when no real Sunsky credentials are configured
+# (IP-whitelist restriction means most dev/staging environments can't reach
+# the real API), return realistic mock data instead of failing.
+_MOCK_KEYS = {"", "TESTKEY"}
+
+
+def _is_mock_mode() -> bool:
+    return settings.sunsky_api_key in _MOCK_KEYS
+
+
+_MOCK_CATEGORY_NAMES = ["Mobile Phones", "Phone Accessories", "Tablets", "Wearables", "Audio"]
+
+
+def _mock_products(count: int = 20, category_id: Optional[str] = None, keyword: Optional[str] = None) -> list[dict]:
+    """Generate mock product dicts in the exact shape _normalise_product() returns."""
+    products = []
+    for i in range(1, count + 1):
+        cat_id = category_id or str(1000 + (i % len(_MOCK_CATEGORY_NAMES)))
+        cat_name = _MOCK_CATEGORY_NAMES[i % len(_MOCK_CATEGORY_NAMES)]
+        name = f"Mock {cat_name} Item {i}"
+        if keyword:
+            name = f"{keyword.title()} {name}"
+        sku = f"MOCK-{i:05d}"
+        products.append({
+            "id": sku,
+            "sku": sku,
+            "name": name,
+            "description": f"Mock product description for {name}. Generated because SUNSKY_API_KEY is unset or TESTKEY.",
+            "price": f"{9.99 + i:.2f}",
+            "stock_status": "in_stock" if i % 5 != 0 else "out_of_stock",
+            "category_id": cat_id,
+            "images": [f"https://placehold.co/600x600?text=Mock+{i}"],
+            "raw_data": {"mock": True, "itemNo": sku, "categoryId": cat_id},
+        })
+    return products
+
+
+def _mock_categories() -> list[dict]:
+    return [
+        {"id": str(1000 + idx), "alias_id": "", "name": name, "parent_id": None}
+        for idx, name in enumerate(_MOCK_CATEGORY_NAMES)
+    ]
 
 
 async def _post(endpoint: str, params: dict) -> dict:
@@ -43,6 +91,10 @@ async def _post(endpoint: str, params: dict) -> dict:
         try:
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                 resp = await client.post(f"{SUNSKY_BASE}/{endpoint.lstrip('/')}", data=params)
+                if resp.status_code in (401, 403):
+                    # Secondary fallback: whitelist restriction on this IP —
+                    # signal to callers to use mock data instead of failing.
+                    raise _SunskyAuthError(f"Sunsky API returned {resp.status_code} for {endpoint}")
                 resp.raise_for_status()
                 data = resp.json()
 
@@ -157,9 +209,14 @@ def _normalise_images(raw: dict) -> list[str]:
 
 
 async def get_categories(parent_id: str = "0") -> list[dict]:
-    data = await _post("category!getChildren.do", {"parentId": parent_id})
-    categories = _extract_list(data)
-    return [_normalise_category(c) for c in categories if c.get("id") or c.get("categoryId")]
+    if _is_mock_mode():
+        return _mock_categories() if parent_id in ("0", "", None) else []
+    try:
+        data = await _post("category!getChildren.do", {"parentId": parent_id})
+        categories = _extract_list(data)
+        return [_normalise_category(c) for c in categories if c.get("id") or c.get("categoryId")]
+    except _SunskyAuthError:
+        return _mock_categories() if parent_id in ("0", "", None) else []
 
 
 async def get_category_tree() -> list[dict]:
@@ -185,13 +242,23 @@ async def search_products(
     page: int = 1,
     page_size: int = 50,
 ) -> dict:
+    if _is_mock_mode():
+        mock = _mock_products(count=min(page_size, 20), category_id=category_id, keyword=keyword)
+        return {"products": mock, "total": len(mock), "pages": 1}
+
     params: dict = {"pageNo": page, "pageSize": page_size}
     if category_id:
         params["categoryId"] = category_id
     if keyword:
         params["keyword"] = keyword
 
-    data = await _post("product!search.do", params)
+    try:
+        data = await _post("product!search.do", params)
+    except _SunskyAuthError:
+        # Real key configured but this IP isn't whitelisted — fall back to mock.
+        mock = _mock_products(count=min(page_size, 20), category_id=category_id, keyword=keyword)
+        return {"products": mock, "total": len(mock), "pages": 1}
+
     raw_products = _extract_list(data)
     total = _extract_total(data, len(raw_products))
 
@@ -277,12 +344,20 @@ async def get_product_detail(item_no: str) -> Optional[dict]:
     Fetch full product information using the correct endpoint:
       POST product!detail.do  with param itemNo=<SKU>
     """
+    if _is_mock_mode():
+        mocks = _mock_products(count=1)
+        mocks[0]["id"] = mocks[0]["sku"] = item_no
+        return mocks[0]
     try:
         data = await _post("product!detail.do", {"itemNo": item_no, "lang": "en"})
         raw = data.get("data", {})
         if not raw or not isinstance(raw, dict):
             return None
         return _normalise_product(raw)
+    except _SunskyAuthError:
+        mocks = _mock_products(count=1)
+        mocks[0]["id"] = mocks[0]["sku"] = item_no
+        return mocks[0]
     except Exception as exc:
         print(f"[sunsky_client] get_product_detail({item_no!r}) failed: {exc}")
         return None

@@ -8,10 +8,8 @@ import NotFound from "@/pages/not-found";
 // Pages
 import Dashboard from "./pages/Dashboard";
 import Products from "./pages/Products";
-import Jobs from "./pages/Jobs";
 import Stores from "./pages/Stores";
 import Sunsky from "./pages/Sunsky";
-import Sync from "./pages/Sync";
 import ContentGeneration from "./pages/ContentGeneration";
 import Pipeline from "./pages/Pipeline";
 import Pipelines from "./pages/Pipelines";
@@ -33,10 +31,8 @@ function Router() {
       <Switch>
         <Route path="/" component={Dashboard} />
         <Route path="/products" component={Products} />
-        <Route path="/jobs" component={Jobs} />
         <Route path="/stores" component={Stores} />
         <Route path="/sunsky" component={Sunsky} />
-        <Route path="/sync" component={Sync} />
         <Route path="/content" component={ContentGeneration} />
         <Route path="/pipeline" component={Pipeline} />
         <Route path="/pipelines/:id" component={PipelineDetail} />

@@ -2,8 +2,10 @@
 Image processing pipeline:
   1. Download image from URL
   2. Lossless compress (PNG) or quality-optimise (JPEG/WebP)
-  3. Apply watermark (text overlay via Pillow)
-  4. Save as WebP for web delivery
+  3. Save as WebP for web delivery
+
+Watermarking has been removed entirely per client requirement (Developer
+Guidelines v2.0, Section 9.2): no watermark setting, no watermark processing.
 
 Usage:
     processor = ImageProcessor(output_dir="images/processed")
@@ -17,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 
 
 class ImageProcessor:
@@ -25,15 +27,11 @@ class ImageProcessor:
         self,
         output_dir: str = "images/processed",
         raw_dir: str = "images/raw",
-        watermark_text: str = "",
-        watermark_opacity: int = 80,
         max_size: tuple[int, int] = (1200, 1200),
         webp_quality: int = 85,
     ):
         self.output_dir = Path(output_dir)
         self.raw_dir = Path(raw_dir)
-        self.watermark_text = watermark_text
-        self.watermark_opacity = watermark_opacity
         self.max_size = max_size
         self.webp_quality = webp_quality
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -106,43 +104,8 @@ class ImageProcessor:
 
             img.thumbnail(self.max_size, Image.LANCZOS)
 
-            if self.watermark_text:
-                img = self._apply_watermark(img)
-
             rgb = Image.new("RGB", img.size, (255, 255, 255))
             rgb.paste(img, mask=img.split()[3])
             rgb.save(str(out_file), "WEBP", quality=self.webp_quality, method=6)
 
         return str(out_file)
-
-    def _apply_watermark(self, img: Image.Image) -> Image.Image:
-        overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
-        draw = ImageDraw.Draw(overlay)
-
-        font_size = max(20, img.width // 20)
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
-        except OSError:
-            font = ImageFont.load_default()
-
-        bbox = draw.textbbox((0, 0), self.watermark_text, font=font)
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
-
-        x = (img.width - text_w) // 2
-        y = img.height - text_h - 20
-
-        draw.text(
-            (x + 1, y + 1),
-            self.watermark_text,
-            font=font,
-            fill=(0, 0, 0, self.watermark_opacity),
-        )
-        draw.text(
-            (x, y),
-            self.watermark_text,
-            font=font,
-            fill=(255, 255, 255, self.watermark_opacity),
-        )
-
-        return Image.alpha_composite(img, overlay)

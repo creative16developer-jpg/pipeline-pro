@@ -42,6 +42,11 @@ class ImageStatus(str, enum.Enum):
     pending = "pending"
     downloaded = "downloaded"
     compressed = "compressed"
+    # Deprecated: watermarking was removed per client requirement. Kept here
+    # only so SQLAlchemy can still read any pre-existing rows written by
+    # older code before this fix. Never written by current code — a startup
+    # migration backfills existing rows to `compressed`. Safe to drop once
+    # confirmed no rows use it (`SELECT count(*) FROM images WHERE status='watermarked'`).
     watermarked = "watermarked"
     uploaded = "uploaded"
     failed = "failed"
@@ -167,7 +172,11 @@ class PipelineJob(Base):
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     fetch_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    # Status: queued | running | review | completed | failed | cancelled
+    # Status: queued | running | review | enrich_review | category_review |
+    #         content_review | completed | failed | cancelled
+    # T02: enforced at the DB level via a CHECK constraint (see
+    # migrations/008_pipeline_status_check_constraint.sql) rather than a
+    # native Postgres ENUM type — see that file for why.
     status = Column(String(20), nullable=False, default="queued", index=True)
     # Current execution step: process | generate | review | upload | sync
     current_step = Column(String(30), nullable=True)

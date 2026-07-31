@@ -5,9 +5,7 @@ import {
   PackageSearch,
   Activity,
   Store,
-  Zap,
   Settings,
-  FileSpreadsheet,
   FileUp,
   Key,
   Star,
@@ -51,8 +49,6 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Pipelines",
     items: [
       { href: "/pipelines",          label: "All Runs",              icon: Activity },
-      { href: "/pipeline",           label: "New Pipeline — Sunsky", icon: Zap },
-      { href: "/pipeline?source=csv",label: "New Pipeline — CSV",    icon: FileSpreadsheet },
       { href: "/products",           label: "Products",              icon: PackageSearch },
       { href: "/pipelines/demo?state=running",        label: "Demo — Running",      icon: Play },
       { href: "/pipelines/demo?state=review",         label: "Demo — Cat. Review",  icon: Pause },

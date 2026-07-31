@@ -436,7 +436,7 @@ async def _run_process(db, job):
                                 original_url=f"sunsky-zip://{item_no}/{name}",
                                 processed_path=processed_path,
                                 position=pos,
-                                status=ImageStatus.watermarked,
+                                status=ImageStatus.compressed,
                                 is_main=(pos == 0),
                             ))
                             processed_count += 1
@@ -484,7 +484,7 @@ async def _run_process(db, job):
                         original_url=url,
                         processed_path=processed_path,
                         position=pos,
-                        status=ImageStatus.watermarked,
+                        status=ImageStatus.compressed,
                         is_main=(pos == 0),
                     ))
                     processed_count += 1
@@ -545,7 +545,7 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
     For a product, return a list of image URLs to send to WooCommerce.
 
     Priority order:
-      1. Upload processed/watermarked WebP files to WordPress media library
+      1. Upload processed WebP files to WordPress media library
          (requires wp_username + wp_app_password set on the store).
       2. Build public static URL for the processed file so WooCommerce can
          sideload it from this server (requires SERVER_BASE_URL in .env).
@@ -561,7 +561,7 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
         select(Image)
         .where(
             Image.product_id == product.id,
-            Image.status == ImageStatus.watermarked,
+            Image.status == ImageStatus.compressed,
             Image.processed_path.isnot(None),
         )
         .order_by(Image.position)

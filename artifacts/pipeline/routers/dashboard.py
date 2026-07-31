@@ -26,7 +26,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     )
     waiting_for_input = (await db.execute(
         select(func.count(PipelineJob.id)).where(
-            cast(PipelineJob.status, String).in_(["review", "enrich_review", "category_review"])
+            cast(PipelineJob.status, String).in_(["review", "enrich_review", "category_review", "content_review"])
         )
     )).scalar_one()
     uploaded_30d = await _count(

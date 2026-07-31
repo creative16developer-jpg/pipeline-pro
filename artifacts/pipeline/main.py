@@ -98,6 +98,15 @@ async def lifespan(app: FastAPI):
                 "WHERE status = 'running'"
             )
         )
+        # Watermarking was removed from the pipeline per client requirement.
+        # Backfill any images left in the old 'watermarked' status (written
+        # by older code) to 'compressed', which is now the terminal
+        # pre-upload status. Idempotent — no-op once no rows remain.
+        await db.execute(
+            _sa.text(
+                "UPDATE images SET status = 'compressed' WHERE status = 'watermarked'"
+            )
+        )
         await db.commit()
     yield
 
