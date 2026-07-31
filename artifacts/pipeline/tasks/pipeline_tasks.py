@@ -29,6 +29,50 @@ async def _plog(db, pipeline_job_id: int, step: Optional[str], level: str, messa
     await db.commit()
 
 
+async def _unmapped_sunsky_categories(db, pl) -> list[str]:
+    """
+    Return the distinct Sunsky categories in this pipeline's product batch
+    that have NO saved row in SunskyCategoryMapping for this store yet.
+
+    Developer Guidelines v2.0, Section 5.3: the Category Review pause should
+    only trigger when at least one such category exists — once an operator
+    has mapped a category, every future batch with that category resolves
+    silently (Section 5's "Favourites model — set up once, applied
+    automatically"). Before this fix, every one of the three places the
+    pipeline enters the 'review' status did so unconditionally, so operators
+    were asked to confirm category mapping on every single run even when
+    every category involved was already mapped from a previous run.
+    """
+    from sqlalchemy import select
+    from models.models import Product, SunskyCategoryMapping
+    from services.enrich_service import extract_sunsky_category
+
+    products = (
+        await db.execute(select(Product).where(Product.fetch_job_id == pl.fetch_job_id))
+    ).scalars().all()
+
+    categories: set[str] = set()
+    for p in products:
+        cat = extract_sunsky_category(p.raw_data or {})
+        if cat:
+            categories.add(cat)
+
+    if not categories:
+        return []
+
+    mapped_rows = (
+        await db.execute(
+            select(SunskyCategoryMapping.sunsky_cat).where(
+                SunskyCategoryMapping.store_id == pl.store_id,
+                SunskyCategoryMapping.sunsky_cat.in_(categories),
+            )
+        )
+    ).scalars().all()
+    mapped = set(mapped_rows)
+
+    return sorted(categories - mapped)
+
+
 async def _run_step(db, pl_id: int, step_name: str, job, step_fn):
     """
     Run a single step function with proper status tracking.
@@ -202,21 +246,40 @@ async def _execute_pipeline(pipeline_job_id: int):
                     pl.updated_at = datetime.now(timezone.utc)
                     await db.commit()
 
-                # ── Pause at Review ───────────────────────────────────────
-                pl.status = "review"
-                pl.current_step = "review"
-                pl.updated_at = datetime.now(timezone.utc)
-                await db.commit()
+                # ── Pause at Review (only if categories still need mapping) ─
+                unmapped = await _unmapped_sunsky_categories(db, pl)
                 stats = pl.stats_json or {}
-                await _plog(
-                    db, pl.id, "review", "info",
-                    f"Pipeline paused for review — "
-                    f"{stats.get('total', 0)} total | "
-                    f"{stats.get('ok', 0)} OK | "
-                    f"{stats.get('fallback', 0)} fallback | "
-                    f"{stats.get('failed', 0)} failed. "
-                    f"Click Resume to continue with Upload.",
-                )
+                if unmapped:
+                    pl.status = "review"
+                    pl.current_step = "review"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _plog(
+                        db, pl.id, "review", "info",
+                        f"Pipeline paused for review — "
+                        f"{stats.get('total', 0)} total | "
+                        f"{stats.get('ok', 0)} OK | "
+                        f"{stats.get('fallback', 0)} fallback | "
+                        f"{stats.get('failed', 0)} failed. "
+                        f"{len(unmapped)} Sunsky categor{'y' if len(unmapped) == 1 else 'ies'} "
+                        f"need mapping ({', '.join(unmapped[:5])}"
+                        f"{'…' if len(unmapped) > 5 else ''}). "
+                        f"Click Resume to continue with Upload.",
+                    )
+                else:
+                    pl.status = "content_review"
+                    pl.current_step = "review"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _plog(
+                        db, pl.id, "review", "info",
+                        f"All Sunsky categories in this batch are already mapped — "
+                        f"skipping category review. Pausing for content review — "
+                        f"{stats.get('total', 0)} total | "
+                        f"{stats.get('ok', 0)} OK | "
+                        f"{stats.get('fallback', 0)} fallback | "
+                        f"{stats.get('failed', 0)} failed.",
+                    )
 
             except Exception as e:
                 pl.status = "failed"
@@ -540,21 +603,40 @@ async def _enrich_resume_pipeline(pipeline_job_id: int):
                     pl.updated_at = datetime.now(timezone.utc)
                     await db.commit()
 
-                # ── Pause at Review ───────────────────────────────────────
-                pl.status = "review"
-                pl.current_step = "review"
-                pl.updated_at = datetime.now(timezone.utc)
-                await db.commit()
+                # ── Pause at Review (only if categories still need mapping) ─
+                unmapped = await _unmapped_sunsky_categories(db, pl)
                 stats = pl.stats_json or {}
-                await _plog(
-                    db, pl.id, "review", "info",
-                    f"Pipeline paused for review — "
-                    f"{stats.get('total', 0)} total | "
-                    f"{stats.get('ok', 0)} OK | "
-                    f"{stats.get('fallback', 0)} fallback | "
-                    f"{stats.get('failed', 0)} failed. "
-                    f"Confirm category mapping and click Resume.",
-                )
+                if unmapped:
+                    pl.status = "review"
+                    pl.current_step = "review"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _plog(
+                        db, pl.id, "review", "info",
+                        f"Pipeline paused for review — "
+                        f"{stats.get('total', 0)} total | "
+                        f"{stats.get('ok', 0)} OK | "
+                        f"{stats.get('fallback', 0)} fallback | "
+                        f"{stats.get('failed', 0)} failed. "
+                        f"{len(unmapped)} Sunsky categor{'y' if len(unmapped) == 1 else 'ies'} "
+                        f"need mapping ({', '.join(unmapped[:5])}"
+                        f"{'…' if len(unmapped) > 5 else ''}). "
+                        f"Confirm category mapping and click Resume.",
+                    )
+                else:
+                    pl.status = "content_review"
+                    pl.current_step = "review"
+                    pl.updated_at = datetime.now(timezone.utc)
+                    await db.commit()
+                    await _plog(
+                        db, pl.id, "review", "info",
+                        f"All Sunsky categories in this batch are already mapped — "
+                        f"skipping category review. Pausing for content review — "
+                        f"{stats.get('total', 0)} total | "
+                        f"{stats.get('ok', 0)} OK | "
+                        f"{stats.get('fallback', 0)} fallback | "
+                        f"{stats.get('failed', 0)} failed.",
+                    )
 
             except Exception as e:
                 pl.status = "failed"
@@ -691,18 +773,35 @@ async def _continue_pipeline(pipeline_job_id: int, from_step: str):
 
                 # ── Review pause (if we haven't reached upload yet) ────────
                 if from_idx < 4:
-                    pl.status = "review"
-                    pl.current_step = "review"
-                    pl.updated_at = datetime.now(timezone.utc)
-                    await db.commit()
+                    unmapped = await _unmapped_sunsky_categories(db, pl)
                     stats = pl.stats_json or {}
-                    await _plog(db, pl.id, "review", "info",
-                        f"Pipeline paused for review — "
-                        f"{stats.get('total', 0)} total | "
-                        f"{stats.get('ok', 0)} OK | "
-                        f"{stats.get('fallback', 0)} fallback | "
-                        f"{stats.get('failed', 0)} failed. "
-                        f"Confirm category mapping and click Resume.")
+                    if unmapped:
+                        pl.status = "review"
+                        pl.current_step = "review"
+                        pl.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        await _plog(db, pl.id, "review", "info",
+                            f"Pipeline paused for review — "
+                            f"{stats.get('total', 0)} total | "
+                            f"{stats.get('ok', 0)} OK | "
+                            f"{stats.get('fallback', 0)} fallback | "
+                            f"{stats.get('failed', 0)} failed. "
+                            f"{len(unmapped)} Sunsky categor{'y' if len(unmapped) == 1 else 'ies'} "
+                            f"need mapping ({', '.join(unmapped[:5])}"
+                            f"{'…' if len(unmapped) > 5 else ''}). "
+                            f"Confirm category mapping and click Resume.")
+                    else:
+                        pl.status = "content_review"
+                        pl.current_step = "review"
+                        pl.updated_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        await _plog(db, pl.id, "review", "info",
+                            f"All Sunsky categories in this batch are already mapped — "
+                            f"skipping category review. Pausing for content review — "
+                            f"{stats.get('total', 0)} total | "
+                            f"{stats.get('ok', 0)} OK | "
+                            f"{stats.get('fallback', 0)} fallback | "
+                            f"{stats.get('failed', 0)} failed.")
                     return  # Resumed by _resume_pipeline after user confirms
 
                 # ── Upload ────────────────────────────────────────────────
