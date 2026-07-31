@@ -102,6 +102,150 @@ async def _load_rules(db: Optional["AsyncSession"]) -> list[dict]:
         return []
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Attribute Mapping Rules (Settings → Attribute Mapping) — Section 6 of the
+# Developer Guidelines. Previously these rules were only ever read back by
+# their own CRUD endpoint and had no effect on extraction; this wires them
+# into the real Enrich step per the Section 6.2 priority rules:
+#   Priority 1 — non-AI rule match (fixed_value / from_sunsky) — always wins,
+#                regardless of AI confidence.
+#   Priority 2 — AI extraction (this product's rule_type == "ai_extract" rows
+#                are merged into the same AI call as AIExtractionRule entries).
+#   Priority 3 (manual default, set on product detail page) and Priority 4
+#   (left blank) are unaffected — handled elsewhere / not applicable here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _load_mapping_rules(db: Optional["AsyncSession"], store_id: Optional[int]) -> list[dict]:
+    """Load AttributeMappingRule rows: global (store_id IS NULL) + this store's,
+    sorted by sort_order so 'first matching rule wins' has a stable order."""
+    if db is None:
+        return []
+    try:
+        from sqlalchemy import select, or_
+        from models.models import AttributeMappingRule
+        q = select(AttributeMappingRule).order_by(
+            AttributeMappingRule.sort_order, AttributeMappingRule.id
+        )
+        if store_id is not None:
+            q = q.where(or_(
+                AttributeMappingRule.store_id == store_id,
+                AttributeMappingRule.store_id.is_(None),
+            ))
+        rows = (await db.execute(q)).scalars().all()
+        return [
+            {
+                "woo_attr_name":   r.woo_attr_name,
+                "rule_type":       r.rule_type,
+                "source_field":    r.source_field,
+                "fixed_value":     r.fixed_value,
+                "instruction":     r.instruction,
+                "condition_type":  r.condition_type,
+                "condition_value": r.condition_value,
+            }
+            for r in rows
+        ]
+    except Exception:
+        return []
+
+
+def _rule_matches_product(rule: dict, sunsky_category: str) -> bool:
+    if rule["condition_type"] == "always":
+        return True
+    if rule["condition_type"] == "if_category":
+        cond = (rule.get("condition_value") or "").strip().lower()
+        return bool(cond) and cond == (sunsky_category or "").strip().lower()
+    # Any other condition_type isn't in the current schema (only "always" /
+    # "if_category" are supported by the Attribute Mapping UI) — treat as
+    # no-match rather than silently applying a rule outside its configured scope.
+    return False
+
+
+def _find_sunsky_value(product: dict, source_field: Optional[str]) -> str:
+    """Look up a raw Sunsky field by name for a 'from_sunsky' rule — checks
+    the parsed spec table first (case-insensitive), then a literal top-level
+    raw_data field of the same name."""
+    if not source_field:
+        return ""
+    raw = product.get("raw_data") or product
+    params = _parse_params_table(raw.get("paramsTable", ""))
+    if source_field in params:
+        return params[source_field]
+    needle = source_field.strip().lower()
+    for k, v in params.items():
+        if k.strip().lower() == needle:
+            return v
+    val = raw.get(source_field)
+    return str(val) if val is not None else ""
+
+
+def apply_mapping_rules(
+    product: dict, rules: list[dict], sunsky_category: str
+) -> tuple[list[AttrResult], list[dict]]:
+    """
+    Evaluate AttributeMappingRule rows against one product.
+
+    Returns (resolved, ai_extract_rules):
+      resolved         — Priority-1 non-AI results (fixed_value / from_sunsky).
+                          These win regardless of AI confidence (Section 6.2).
+      ai_extract_rules — matched rule_type == "ai_extract" rows, reshaped into
+                          the same dict shape _load_rules() returns, so they
+                          can be merged into the same AI extraction call.
+
+    First matching rule (by sort_order, already applied by _load_mapping_rules)
+    wins per attribute — later rules for an attribute already resolved are skipped.
+    """
+    resolved: list[AttrResult] = []
+    ai_extract_rules: list[dict] = []
+    seen_attrs: set[str] = set()
+
+    for rule in rules:
+        attr_key = rule["woo_attr_name"].strip().lower()
+        if attr_key in seen_attrs:
+            continue
+        if not _rule_matches_product(rule, sunsky_category):
+            continue
+
+        if rule["rule_type"] == "fixed_value":
+            if not rule["fixed_value"]:
+                continue
+            resolved.append({
+                "attribute": rule["woo_attr_name"],
+                "raw_value": rule["fixed_value"],
+                "confidence": 1.0,
+                "source": "mapping_rule",
+                "flagged": False,
+            })
+            seen_attrs.add(attr_key)
+
+        elif rule["rule_type"] == "from_sunsky":
+            val = _find_sunsky_value(product, rule["source_field"])
+            if not val:
+                continue
+            resolved.append({
+                "attribute": rule["woo_attr_name"],
+                "raw_value": val,
+                "confidence": 1.0,
+                "source": "mapping_rule",
+                "flagged": False,
+            })
+            seen_attrs.add(attr_key)
+
+        elif rule["rule_type"] == "ai_extract":
+            ai_extract_rules.append({
+                "woo_attr_name":        rule["woo_attr_name"],
+                "source_fields":        "both",
+                "instruction":          rule["instruction"] or "",
+                "confidence_threshold": 0.7,
+                "if_not_found":         "flag",
+                "default_value":        None,
+            })
+            seen_attrs.add(attr_key)
+        # "leave_empty" or any other future rule_type: intentionally no-op —
+        # the attribute simply isn't resolved by this rule.
+
+    return resolved, ai_extract_rules
+
+
 def _build_extract_prompt(product: dict, rules: list[dict]) -> str:
     raw = product.get("raw_data") or product
     name = product.get("name", "")
@@ -197,22 +341,47 @@ async def extract_attributes(
     product: dict,
     gen_cfg: dict,
     db: Optional["AsyncSession"] = None,
+    store_id: Optional[int] = None,
+    sunsky_category: Optional[str] = None,
 ) -> list[AttrResult]:
     """
     Extract attributes from a single product.
-    Uses DB-driven AIExtractionRule rows when available.
+
+    Priority order (Developer Guidelines v2.0, Section 6.2):
+      1. Non-AI Attribute Mapping rules (fixed_value / from_sunsky) — always
+         win, regardless of AI confidence.
+      2. AI extraction — using AIExtractionRule (Settings → Extraction Rules)
+         merged with any rule_type == "ai_extract" Attribute Mapping rules
+         that matched this product (the latter take precedence for the same
+         attribute name, since they were configured for this specific
+         category rather than as a store-wide default).
+    Priority 3 (manual default) and 4 (left blank) aren't decided here.
+
     Returns list of AttrResult dicts sorted by confidence desc.
     """
     rules = await _load_rules(db)
-    prompt = _build_extract_prompt(product, rules)
+    mapping_rules = await _load_mapping_rules(db, store_id)
+
+    resolved, ai_extract_from_mapping = apply_mapping_rules(product, mapping_rules, sunsky_category or "")
+    resolved_lower = {r["attribute"].strip().lower() for r in resolved}
+
+    # Attribute Mapping's ai_extract rows override an Extraction Rules entry
+    # for the same attribute name (more specific — it matched this product's
+    # category); anything not overridden falls back to Extraction Rules.
+    rule_map = {r["woo_attr_name"].strip().lower(): r for r in rules}
+    for r in ai_extract_from_mapping:
+        rule_map[r["woo_attr_name"].strip().lower()] = r
+    # Never ask the AI for an attribute a non-AI rule already resolved —
+    # guarantees Priority 1 can't be overridden regardless of AI confidence.
+    active_rules = [r for k, r in rule_map.items() if k not in resolved_lower]
+
+    prompt = _build_extract_prompt(product, active_rules)
     raw = await _call_ai(prompt, gen_cfg)
     parsed = _parse_json_array(raw)
 
+    ai_results: list[AttrResult] = []
     if parsed:
-        # Build a fast lookup from woo_attr_name → rule
-        rule_map = {r["woo_attr_name"].lower(): r for r in rules}
-
-        results: list[AttrResult] = []
+        active_rule_map = {r["woo_attr_name"].lower(): r for r in active_rules}
         for item in parsed:
             if not isinstance(item, dict):
                 continue
@@ -220,13 +389,15 @@ async def extract_attributes(
             val  = str(item.get("raw_value", "")).strip()
             if not attr or not val:
                 continue
+            if attr.strip().lower() in resolved_lower:
+                continue  # Priority 1 already won this attribute
 
             conf   = float(item.get("confidence", 0.7))
-            rule   = rule_map.get(attr.lower())
+            rule   = active_rule_map.get(attr.lower())
             thresh = rule["confidence_threshold"] if rule else 0.7
             flagged = conf < thresh
 
-            results.append({
+            ai_results.append({
                 "attribute":  attr,
                 "raw_value":  val,
                 "confidence": conf,
@@ -234,16 +405,16 @@ async def extract_attributes(
                 "flagged":    flagged,
             })
 
-        # Apply if_not_found rules for attributes that the AI skipped
-        if rules:
-            found_lower = {r["attribute"].lower() for r in results}
-            for rule in rules:
+        # Apply if_not_found rules for attributes the AI skipped
+        if active_rules:
+            found_lower = {r["attribute"].lower() for r in ai_results} | resolved_lower
+            for rule in active_rules:
                 if rule["woo_attr_name"].lower() not in found_lower:
                     action = rule["if_not_found"]
                     if action == "leave_blank":
                         pass
                     elif action == "use_default" and rule["default_value"]:
-                        results.append({
+                        ai_results.append({
                             "attribute":  rule["woo_attr_name"],
                             "raw_value":  rule["default_value"],
                             "confidence": 1.0,
@@ -251,7 +422,7 @@ async def extract_attributes(
                             "flagged":    False,
                         })
                     elif action == "flag":
-                        results.append({
+                        ai_results.append({
                             "attribute":  rule["woo_attr_name"],
                             "raw_value":  "",
                             "confidence": 0.0,
@@ -259,20 +430,80 @@ async def extract_attributes(
                             "flagged":    True,
                         })
 
-        if results:
-            return sorted(results, key=lambda x: -x["confidence"])
+        if not ai_results:
+            # AI returned parsable JSON but nothing usable — fall back to
+            # rule-based paramsTable parsing, same as the no-AI-response path.
+            ai_results = [
+                r for r in _rule_based_extract(product)
+                if r["attribute"].strip().lower() not in resolved_lower
+            ]
+            if active_rules:
+                active_rule_map = {r["woo_attr_name"].lower(): r for r in active_rules}
+                for item in ai_results:
+                    rule = active_rule_map.get(item["attribute"].lower())
+                    if rule:
+                        item["flagged"] = item["confidence"] < rule["confidence_threshold"]
+    else:
+        ai_results = [
+            r for r in _rule_based_extract(product)
+            if r["attribute"].strip().lower() not in resolved_lower
+        ]
+        if active_rules:
+            active_rule_map = {r["woo_attr_name"].lower(): r for r in active_rules}
+            for item in ai_results:
+                rule = active_rule_map.get(item["attribute"].lower())
+                if rule:
+                    item["flagged"] = item["confidence"] < rule["confidence_threshold"]
 
-    fallback = _rule_based_extract(product)
+    combined = resolved + ai_results
+    return sorted(combined, key=lambda x: -x["confidence"])
 
-    # Apply flags to fallback results using rules
-    if rules:
-        rule_map = {r["woo_attr_name"].lower(): r for r in rules}
-        for item in fallback:
-            rule = rule_map.get(item["attribute"].lower())
-            if rule:
-                item["flagged"] = item["confidence"] < rule["confidence_threshold"]
 
-    return fallback
+def extract_sunsky_category(raw: dict) -> str:
+    """Best-effort extraction of the Sunsky category string from a product's
+    raw_data — mirrors routers/map_step.py's _extract_sunsky_cat so category
+    matching stays consistent between the Category Mapping/Map Step flow and
+    Attribute Mapping/Profile lookups done here."""
+    for key in ("catName", "categoryName", "category_name", "cat_name"):
+        v = str(raw.get(key) or "").strip()
+        if v:
+            return v
+    cat_id = str(raw.get("categoryId") or raw.get("catId") or raw.get("category_id") or "").strip()
+    return cat_id
+
+
+async def load_profile_attrs_for_category(
+    db: Optional["AsyncSession"], store_id: Optional[int], sunsky_category: str
+) -> list[str]:
+    """Return the woo_attr_name list for the AttributeProfile assigned (via
+    Category Mapping / the Map Step) to this Sunsky category — Section 6.3.
+    Returns [] if there's no saved mapping for this category, or the mapping
+    has no profile assigned. Used to surface 'Panel B' unset-attribute rows
+    per Attribute_mapping.docx: attributes the product's profile expects but
+    that no rule or AI extraction produced a value for."""
+    if db is None or not store_id or not sunsky_category:
+        return []
+    try:
+        from sqlalchemy import select
+        from models.models import SunskyCategoryMapping, ProfileAttribute
+        mapping = (
+            await db.execute(
+                select(SunskyCategoryMapping).where(
+                    SunskyCategoryMapping.store_id == store_id,
+                    SunskyCategoryMapping.sunsky_cat == sunsky_category,
+                )
+            )
+        ).scalar_one_or_none()
+        if not mapping or not mapping.profile_id:
+            return []
+        rows = (
+            await db.execute(
+                select(ProfileAttribute).where(ProfileAttribute.profile_id == mapping.profile_id)
+            )
+        ).scalars().all()
+        return [r.woo_attr_name for r in rows]
+    except Exception:
+        return []
 
 
 async def suggest_variant_groups(products: list[dict], gen_cfg: dict) -> list[GroupSuggestion]:

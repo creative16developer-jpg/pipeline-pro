@@ -389,7 +389,10 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
     from models.models import Product, ProductEnrichAttr, VariantGroup
     from sqlalchemy import select
     from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from services.enrich_service import extract_attributes, suggest_variant_groups
+    from services.enrich_service import (
+        extract_attributes, suggest_variant_groups,
+        extract_sunsky_category, load_profile_attrs_for_category,
+    )
     import json
     from pathlib import Path
 
@@ -415,7 +418,29 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
         prod_dict = {"id": product.id, "name": product.name or "", **raw}
         product_dicts.append(prod_dict)
 
-        attrs = await extract_attributes(prod_dict, gen_cfg, db=db)
+        sunsky_cat = extract_sunsky_category(raw)
+        attrs = await extract_attributes(
+            prod_dict, gen_cfg, db=db,
+            store_id=pl.store_id, sunsky_category=sunsky_cat,
+        )
+
+        # Attribute Profiles (Section 6.3 / "Panel B"): any attribute the
+        # product's assigned profile expects, but that no rule or AI
+        # extraction produced, is surfaced as an unresolved row requiring
+        # manual entry in the Review step — rather than silently missing.
+        expected_attrs = await load_profile_attrs_for_category(db, pl.store_id, sunsky_cat)
+        if expected_attrs:
+            present_lower = {a["attribute"].strip().lower() for a in attrs}
+            for exp_attr in expected_attrs:
+                if exp_attr.strip().lower() not in present_lower:
+                    attrs.append({
+                        "attribute": exp_attr,
+                        "raw_value": "",
+                        "confidence": 0.0,
+                        "source": "profile_unset",
+                        "flagged": True,
+                    })
+
         for a in attrs:
             stmt = (
                 pg_insert(ProductEnrichAttr)
