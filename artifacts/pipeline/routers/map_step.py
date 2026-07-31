@@ -58,6 +58,7 @@ class CategoryMappingUpdate(BaseModel):
     sunsky_cat: str
     woo_cats: list[WooCatEntry] = []
     primary_woo_cat_id: Optional[int] = None
+    profile_id: Optional[int] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -326,6 +327,8 @@ async def map_confirm(
 
 @router.get("/stores/{store_id}/category-mappings")
 async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_db)):
+    from models.models import AttributeProfile
+
     rows = (
         await db.execute(
             select(SunskyCategoryMapping)
@@ -333,6 +336,15 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
             .order_by(SunskyCategoryMapping.sunsky_cat)
         )
     ).scalars().all()
+
+    profile_ids = {r.profile_id for r in rows if r.profile_id}
+    profile_names: dict[int, str] = {}
+    if profile_ids:
+        profile_rows = (
+            await db.execute(select(AttributeProfile).where(AttributeProfile.id.in_(profile_ids)))
+        ).scalars().all()
+        profile_names = {p.id: p.name for p in profile_rows}
+
     return {
         "store_id": store_id,
         "mappings": [
@@ -341,6 +353,8 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
                 "sunsky_cat":         r.sunsky_cat,
                 "woo_cats":           _mapping_woo_cats(r),
                 "primary_woo_cat_id": r.primary_woo_cat_id or r.woo_cat_id,
+                "profile_id":         r.profile_id,
+                "profile_name":       profile_names.get(r.profile_id) if r.profile_id else None,
                 "times_used":         r.times_used or 0,
                 "last_used_at":       r.last_used_at.isoformat() if r.last_used_at else None,
                 "updated_at":         r.updated_at.isoformat() if r.updated_at else None,
@@ -372,6 +386,7 @@ async def update_category_mappings(
                 woo_cat_name=primary_cat.name if primary_cat else None,
                 woo_cats_json=cats_json,
                 primary_woo_cat_id=primary_id,
+                profile_id=entry.profile_id,
                 times_used=0,
                 updated_at=datetime.now(timezone.utc),
             )
@@ -382,6 +397,7 @@ async def update_category_mappings(
                     "woo_cat_name":       primary_cat.name if primary_cat else None,
                     "woo_cats_json":      cats_json,
                     "primary_woo_cat_id": primary_id,
+                    "profile_id":         entry.profile_id,
                     "updated_at":         datetime.now(timezone.utc),
                 },
             )

@@ -169,6 +169,8 @@ interface CatMapping {
   sunsky_cat: string;
   woo_cats: WooCatEntry[];
   primary_woo_cat_id: number | null;
+  profile_id: number | null;
+  profile_name: string | null;
   times_used: number;
   last_used_at: string | null;
 }
@@ -179,15 +181,16 @@ function CategoryMappingDictionary() {
   const [storeId, setStoreId] = useState<number | null>(null);
   const [mappings, setMappings] = useState<CatMapping[]>([]);
   const [wooOpts, setWooOpts] = useState<WooOpt[]>([]);
+  const [profiles, setProfiles] = useState<{ id: number; name: string }[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editSel, setEditSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null }>({ woo_cats: [], primary_id: null });
+  const [editSel, setEditSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null }>({ woo_cats: [], primary_id: null, profile_id: null });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [addingNew, setAddingNew] = useState(false);
   const [newSunskyCat, setNewSunskyCat] = useState("");
-  const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null }>({ woo_cats: [], primary_id: null });
+  const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null }>({ woo_cats: [], primary_id: null, profile_id: null });
 
   // Import Mapping state
   const importRef = useRef<HTMLInputElement>(null);
@@ -204,6 +207,10 @@ function CategoryMappingDictionary() {
         setStores(list);
         if (list.length > 0) setStoreId(list[0].id);
       })
+      .catch(() => {});
+    fetch("/api/attr-profiles")
+      .then(r => r.json())
+      .then(d => setProfiles((d.profiles ?? []).map((p: any) => ({ id: p.id, name: p.name }))))
       .catch(() => {});
   }, []);
 
@@ -266,7 +273,7 @@ function CategoryMappingDictionary() {
 
   const startEdit = (m: CatMapping) => {
     setEditingId(m.id);
-    setEditSel({ woo_cats: m.woo_cats, primary_id: m.primary_woo_cat_id ?? m.woo_cats[0]?.id ?? null });
+    setEditSel({ woo_cats: m.woo_cats, primary_id: m.primary_woo_cat_id ?? m.woo_cats[0]?.id ?? null, profile_id: m.profile_id ?? null });
   };
 
   const toggleWoo = (opt: WooOpt) => {
@@ -274,7 +281,7 @@ function CategoryMappingDictionary() {
       const has = prev.woo_cats.some(c => c.id === opt.id);
       const woo_cats = has ? prev.woo_cats.filter(c => c.id !== opt.id) : [...prev.woo_cats, { id: opt.id, name: opt.name }];
       const primary_id = has && prev.primary_id === opt.id ? (woo_cats[0]?.id ?? null) : (prev.primary_id ?? (!has ? opt.id : null));
-      return { woo_cats, primary_id };
+      return { ...prev, woo_cats, primary_id };
     });
   };
 
@@ -283,7 +290,7 @@ function CategoryMappingDictionary() {
       const has = prev.woo_cats.some(c => c.id === opt.id);
       const woo_cats = has ? prev.woo_cats.filter(c => c.id !== opt.id) : [...prev.woo_cats, { id: opt.id, name: opt.name }];
       const primary_id = has && prev.primary_id === opt.id ? (woo_cats[0]?.id ?? null) : (prev.primary_id ?? (!has ? opt.id : null));
-      return { woo_cats, primary_id };
+      return { ...prev, woo_cats, primary_id };
     });
   };
 
@@ -299,13 +306,14 @@ function CategoryMappingDictionary() {
           sunsky_cat: newSunskyCat.trim(),
           woo_cats: newSel.woo_cats,
           primary_woo_cat_id: primary_id,
+          profile_id: newSel.profile_id,
         }]),
       });
       if (!r.ok) throw new Error(await r.text());
       toast({ title: "Mapping added" });
       setAddingNew(false);
       setNewSunskyCat("");
-      setNewSel({ woo_cats: [], primary_id: null });
+      setNewSel({ woo_cats: [], primary_id: null, profile_id: null });
       reload();
     } catch (e: any) {
       toast({ title: "Save failed", description: e.message, variant: "destructive" });
@@ -325,6 +333,7 @@ function CategoryMappingDictionary() {
           sunsky_cat: m.sunsky_cat,
           woo_cats: editSel.woo_cats,
           primary_woo_cat_id: editSel.primary_id,
+          profile_id: editSel.profile_id,
         }]),
       });
       if (!r.ok) throw new Error(await r.text());
@@ -407,7 +416,7 @@ function CategoryMappingDictionary() {
           Import
         </button>
         <button
-          onClick={() => { setAddingNew(true); setNewSunskyCat(""); setNewSel({ woo_cats: [], primary_id: null }); }}
+          onClick={() => { setAddingNew(true); setNewSunskyCat(""); setNewSel({ woo_cats: [], primary_id: null, profile_id: null }); }}
           disabled={addingNew}
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 shrink-0"
         >
@@ -486,6 +495,23 @@ function CategoryMappingDictionary() {
             />
           </div>
 
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Attribute Profile</label>
+            <select
+              value={newSel.profile_id ?? ""}
+              onChange={e => setNewSel(prev => ({ ...prev, profile_id: e.target.value ? Number(e.target.value) : null }))}
+              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+            >
+              <option value="">— None —</option>
+              {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            {profiles.length === 0 && (
+              <p className="text-xs text-amber-400/80">
+                No profiles yet — create one on the Attribute Profiles page first.
+              </p>
+            )}
+          </div>
+
           <div className="flex gap-2">
             <button
               onClick={handleSaveNew}
@@ -527,6 +553,7 @@ function CategoryMappingDictionary() {
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Sunsky Category</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">WooCommerce Categories</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground w-36">Attribute Profile</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground w-20">Used</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground w-28">Last Used</th>
                 <th className="px-4 py-3 text-right text-xs font-medium text-muted-foreground w-24">Actions</th>
@@ -536,7 +563,7 @@ function CategoryMappingDictionary() {
               {filtered.map(m => (
                 <tr key={m.id} className="hover:bg-secondary/10 transition-colors">
                   {editingId === m.id ? (
-                    <td colSpan={5} className="p-4">
+                    <td colSpan={6} className="p-4">
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <span className="font-mono text-sm text-foreground">{m.sunsky_cat}</span>
@@ -575,6 +602,18 @@ function CategoryMappingDictionary() {
                           onSetPrimary={id => setEditSel(prev => ({ ...prev, primary_id: id }))}
                         />
 
+                        <div className="space-y-1 max-w-xs">
+                          <label className="text-xs font-medium text-muted-foreground">Attribute Profile</label>
+                          <select
+                            value={editSel.profile_id ?? ""}
+                            onChange={e => setEditSel(prev => ({ ...prev, profile_id: e.target.value ? Number(e.target.value) : null }))}
+                            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+                          >
+                            <option value="">— None —</option>
+                            {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                          </select>
+                        </div>
+
                         <div className="flex gap-2">
                           <button
                             onClick={() => handleSaveEdit(m)}
@@ -610,6 +649,15 @@ function CategoryMappingDictionary() {
                           </div>
                         ) : (
                           <span className="text-xs text-muted-foreground/50 italic">No mapping</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {m.profile_name ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] border bg-violet-500/15 text-violet-400 border-violet-500/25">
+                            {m.profile_name}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground/50 italic">— None —</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{m.times_used || 0}×</td>
