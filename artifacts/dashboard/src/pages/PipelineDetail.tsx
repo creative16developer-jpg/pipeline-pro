@@ -249,12 +249,12 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
   }, [pl.id]);
 
   const allProducts: any[] = data?.products ?? [];
-  const needsReview = allProducts.filter((p: any) => p.attrs?.some((a: any) => !a.value || a.confidence === "low")).length;
+  const needsReview = allProducts.filter((p: any) => p.attrs?.some((a: any) => a.status === "unset" || a.status === "low_confidence")).length;
   const ready       = allProducts.length - needsReview;
 
   const displayed = useMemo(() => {
-    if (tab === "review") return allProducts.filter((p: any) => p.attrs?.some((a: any) => !a.value || a.confidence === "low"));
-    if (tab === "ok")     return allProducts.filter((p: any) => p.attrs?.every((a: any) => a.value && a.confidence !== "low"));
+    if (tab === "review") return allProducts.filter((p: any) => p.attrs?.some((a: any) => a.status === "unset" || a.status === "low_confidence"));
+    if (tab === "ok")     return allProducts.filter((p: any) => p.attrs?.every((a: any) => a.status === "resolved"));
     return allProducts;
   }, [allProducts, tab]);
 
@@ -342,15 +342,17 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
                         {(p.attrs ?? []).map((a: any, idx: number) => (
                           <span key={idx} className={cn(
                             "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium border-[1.5px]",
-                            a.confidence === "high" ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400" :
-                            a.confidence === "low"  ? "bg-amber-500/15 border-amber-500/30 text-amber-400" :
-                            !a.value               ? "bg-red-500/15 border-red-500/30 text-red-400" :
+                            a.status === "resolved"       ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400" :
+                            a.status === "low_confidence" ? "bg-amber-500/15 border-amber-500/30 text-amber-400" :
+                            a.status === "unset"          ? "bg-red-500/15 border-red-500/30 text-red-400" :
                             "bg-muted/50 border-border text-foreground/70"
                           )}>
-                            {a.attribute} : {a.value ?? "not found"}
-                            {a.confidence && <span className={cn("text-[11px] ml-0.5", a.confidence === "low" ? "text-amber-400" : "")}>
-                              {typeof a.score === "number" ? ` ${Math.round(a.score * 100)}%` : ""}
-                            </span>}
+                            {a.attribute} : {a.raw_value || "not found"}
+                            {typeof a.confidence === "number" && a.status === "low_confidence" && (
+                              <span className="text-[11px] ml-0.5 text-amber-400">
+                                {` ${Math.round(a.confidence * 100)}%`}
+                              </span>
+                            )}
                           </span>
                         ))}
                         {(!p.attrs || p.attrs.length === 0) && (
