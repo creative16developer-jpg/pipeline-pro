@@ -189,6 +189,18 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
             if p.get("stock_status") and existing.stock_status != p["stock_status"]:
                 existing.stock_status = p["stock_status"]; changed = True
 
+            # Re-stamp fetch_job_id regardless of whether any field changed —
+            # this product IS part of the current fetch's batch, and every
+            # downstream step (Process, Enrich, Upload) scopes its product
+            # queries to `Product.fetch_job_id == pl.fetch_job_id`. Without
+            # this, a product fetched again later (same SKU, no data changes)
+            # stayed linked only to whichever pipeline first created it, so
+            # every later pipeline saw 0 products even with Force Re-run on.
+            # Same fix as tasks/job_tasks.py::_run_fetch — this endpoint is a
+            # separate, independent fetch implementation with its own copy
+            # of this upsert logic.
+            existing.fetch_job_id = job.id
+
             if changed:
                 existing.raw_data = raw_data
                 updated += 1
