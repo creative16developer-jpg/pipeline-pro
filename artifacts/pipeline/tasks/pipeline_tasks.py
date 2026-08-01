@@ -46,7 +46,7 @@ async def _unmapped_sunsky_categories(db, pl) -> list[str]:
     from sqlalchemy import select
     from models.models import Product, SunskyCategoryMapping
     from services.enrich_service import extract_sunsky_category
-    from pipeline.sunsky_client import get_category_name_map
+    from pipeline.sunsky_client import get_category_name_map_safe as get_category_name_map
 
     products = (
         await db.execute(select(Product).where(Product.fetch_job_id == pl.fetch_job_id))
@@ -502,7 +502,7 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
     # Fetch once per run, not per-product — get_category_tree() walks the
     # whole Sunsky category tree (many API calls), so this is cached
     # in-process for an hour by sunsky_client itself as a second layer too.
-    from pipeline.sunsky_client import get_category_name_map
+    from pipeline.sunsky_client import get_category_name_map_safe as get_category_name_map
     category_name_map = await get_category_name_map()
 
     total_attrs = 0

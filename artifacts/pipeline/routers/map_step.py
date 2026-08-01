@@ -128,7 +128,7 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         )
     ).scalars().all()
 
-    from pipeline.sunsky_client import get_category_name_map
+    from pipeline.sunsky_client import get_category_name_map_safe as get_category_name_map
     category_name_map = await get_category_name_map()
 
     # Extract unique Sunsky categories

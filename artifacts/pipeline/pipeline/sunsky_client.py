@@ -296,6 +296,28 @@ async def get_category_name_map(force_refresh: bool = False) -> dict[str, str]:
     return _category_name_cache
 
 
+async def get_category_name_map_safe(timeout: float = 20.0) -> dict[str, str]:
+    """
+    Same as get_category_name_map(), but hard-capped at `timeout` seconds.
+
+    get_category_tree() walks the whole Sunsky category tree with a
+    deliberate pacing delay between calls (see get_category_tree) to avoid
+    the per-minute rate limit — but on a large tree, or if a rate-limit
+    retry triggers mid-walk, that can legitimately take minutes, and it
+    logs nothing while in progress. A category-name resolution failure
+    should degrade to raw-ID matching (the old behavior), not block an
+    entire pipeline run indefinitely. Callers should treat an empty dict
+    here the same as "no name available for this ID."
+    """
+    try:
+        return await asyncio.wait_for(get_category_name_map(), timeout=timeout)
+    except asyncio.TimeoutError:
+        print(f"[sunsky_client] get_category_name_map() exceeded {timeout}s — "
+              f"proceeding with whatever cache exists (possibly empty). "
+              f"Category-name-based matching may be incomplete this run.")
+        return _category_name_cache
+
+
 async def search_products(
     category_id: Optional[str] = None,
     keyword: Optional[str] = None,
