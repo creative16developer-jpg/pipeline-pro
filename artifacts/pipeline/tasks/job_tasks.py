@@ -220,10 +220,21 @@ async def _run_fetch(db, job):
                         existing.status = ProductStatus.pending
                         existing.woo_product_id = None
                     existing.raw_data = raw_data
+                    existing.fetch_job_id = job.id
                     await _log(db, job.id, LogLevel.info,
                                f"  Updated {p['sku']}: {', '.join(changed_fields)} changed")
                     updated += 1
                 else:
+                    # No field changes, but this product IS part of the
+                    # current pipeline's batch — re-stamp fetch_job_id so
+                    # downstream Process/Enrich/Upload steps (which all scope
+                    # their product queries to THIS pipeline's fetch_job_id)
+                    # actually find it. Without this, re-fetching an
+                    # unchanged product left it permanently linked only to
+                    # whichever earlier pipeline first created it, so every
+                    # later pipeline saw 0 products to enrich/process even
+                    # with Force Re-run on.
+                    existing.fetch_job_id = job.id
                     await _log(db, job.id, LogLevel.debug,
                                f"  Skipped {p['sku']}: no changes detected")
                     skipped += 1
