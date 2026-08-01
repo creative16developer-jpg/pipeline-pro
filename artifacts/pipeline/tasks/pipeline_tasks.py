@@ -518,6 +518,18 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
             store_id=pl.store_id, sunsky_category=sunsky_cat,
         )
 
+        # TEMPORARY diagnostic logging — visible in both pm2 logs and the
+        # Pipeline Log panel — to pin down a live-vs-isolated-test mismatch
+        # where the same logic produced correct results in a standalone
+        # diagnostic script but empty/fallback results in an actual
+        # pipeline run. Safe to remove once root-caused.
+        print(f"[enrich-debug] product={product.sku!r} store_id={pl.store_id!r} "
+              f"sunsky_cat={sunsky_cat!r} category_name_map_size={len(category_name_map)} "
+              f"attrs_returned={attrs}")
+        await _plog(db, pl.id, "enrich", "info",
+                    f"[debug] {product.sku}: store_id={pl.store_id} cat={sunsky_cat!r} "
+                    f"map_size={len(category_name_map)} attrs={attrs}")
+
         # Attribute Profiles (Section 6.3 / "Panel B"): any attribute the
         # product's assigned profile expects, but that no rule or AI
         # extraction produced, is surfaced as an unresolved row requiring
