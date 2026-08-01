@@ -30,6 +30,10 @@ class _SunskyAuthError(Exception):
     """Raised when Sunsky returns 401/403 — IP not whitelisted for this key."""
 
 
+class _SunskyRateLimitError(Exception):
+    """Raised when Sunsky returns UP_TO_API_CALL_LIMIT_IN_MINUTE — transient, retryable."""
+
+
 def _build_signature(params: dict) -> str:
     sorted_keys = sorted(params.keys())
     value_string = "".join(str(params[k]) for k in sorted_keys)
@@ -106,10 +110,16 @@ async def _post(endpoint: str, params: dict) -> dict:
                 resp.raise_for_status()
                 data = resp.json()
 
-                # Check for business-logic error (no retry needed)
+                # Check for business-logic error
                 result_field = str(data.get("result", "")).lower()
                 if result_field == "error":
                     msgs = data.get("messages", data.get("message", data.get("msg", "")))
+                    msg_text = str(msgs)
+                    if "UP_TO_API_CALL_LIMIT" in msg_text.upper():
+                        # Rate limit — genuinely transient, worth retrying
+                        # with backoff rather than failing immediately like
+                        # other business-logic errors.
+                        raise _SunskyRateLimitError(f"Sunsky API rate limit for {endpoint}: {msg_text}")
                     raise ValueError(f"Sunsky API error for {endpoint}: {msgs}")
 
                 code = data.get("code", 0)
@@ -118,8 +128,15 @@ async def _post(endpoint: str, params: dict) -> dict:
                     raise ValueError(f"Sunsky API error (code={code}): {msg}")
                 return data
         except ValueError:
-            # Business-logic errors — don't retry
+            # Business-logic errors (excluding rate limits, handled below) — don't retry
             raise
+        except _SunskyRateLimitError as exc:
+            last_error = exc
+            if attempt < MAX_RETRIES:
+                # Rate limits reset per-minute — wait long enough to clear
+                # the window rather than the short network-error backoff.
+                await asyncio.sleep(20 * attempt)
+            continue
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             last_error = exc
             if attempt < MAX_RETRIES:
@@ -241,6 +258,9 @@ async def get_category_tree() -> list[dict]:
                 continue
             seen.add(cat["id"])
             all_cats.append(cat)
+            # Sunsky enforces a per-minute call limit; walking a deep tree
+            # can easily make dozens of rapid sequential calls otherwise.
+            await asyncio.sleep(0.3)
             await _recurse(cat["id"])
 
     await _recurse("0")
@@ -255,11 +275,12 @@ async def get_category_tree() -> list[dict]:
 # it's cached in-process rather than called per-product or per-pipeline-run.
 _category_name_cache: dict[str, str] = {}
 _category_cache_fetched_at: float = 0.0
-_CATEGORY_CACHE_TTL_SECONDS = 3600  # 1 hour — category trees rarely change
+_CATEGORY_CACHE_TTL_SECONDS = 6 * 3600  # 6 hours — category trees rarely change,
+# and walking the tree is itself rate-limit-sensitive, so don't do it more than needed
 
 
 async def get_category_name_map(force_refresh: bool = False) -> dict[str, str]:
-    """Return a {category_id: category_name} map, cached for an hour."""
+    """Return a {category_id: category_name} map, cached for 6 hours."""
     import time
     global _category_name_cache, _category_cache_fetched_at
     now = time.monotonic()
