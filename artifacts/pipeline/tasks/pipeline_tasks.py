@@ -46,14 +46,17 @@ async def _unmapped_sunsky_categories(db, pl) -> list[str]:
     from sqlalchemy import select
     from models.models import Product, SunskyCategoryMapping
     from services.enrich_service import extract_sunsky_category
+    from pipeline.sunsky_client import get_category_name_map
 
     products = (
         await db.execute(select(Product).where(Product.fetch_job_id == pl.fetch_job_id))
     ).scalars().all()
 
+    category_name_map = await get_category_name_map()
+
     categories: set[str] = set()
     for p in products:
-        cat = extract_sunsky_category(p.raw_data or {})
+        cat = extract_sunsky_category(p.raw_data or {}, category_name_map)
         if cat:
             categories.add(cat)
 
@@ -496,6 +499,12 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
         )
     ).scalars().all()
 
+    # Fetch once per run, not per-product — get_category_tree() walks the
+    # whole Sunsky category tree (many API calls), so this is cached
+    # in-process for an hour by sunsky_client itself as a second layer too.
+    from pipeline.sunsky_client import get_category_name_map
+    category_name_map = await get_category_name_map()
+
     total_attrs = 0
     product_dicts = []
     for product in products:
@@ -503,7 +512,7 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
         prod_dict = {"id": product.id, "name": product.name or "", **raw}
         product_dicts.append(prod_dict)
 
-        sunsky_cat = extract_sunsky_category(raw)
+        sunsky_cat = extract_sunsky_category(raw, category_name_map)
         attrs = await extract_attributes(
             prod_dict, gen_cfg, db=db,
             store_id=pl.store_id, sunsky_category=sunsky_cat,

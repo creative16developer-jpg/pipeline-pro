@@ -459,16 +459,29 @@ async def extract_attributes(
     return sorted(combined, key=lambda x: -x["confidence"])
 
 
-def extract_sunsky_category(raw: dict) -> str:
-    """Best-effort extraction of the Sunsky category string from a product's
+def extract_sunsky_category(raw: dict, name_map: Optional[dict[str, str]] = None) -> str:
+    """Best-effort extraction of the Sunsky category NAME from a product's
     raw_data — mirrors routers/map_step.py's _extract_sunsky_cat so category
     matching stays consistent between the Category Mapping/Map Step flow and
-    Attribute Mapping/Profile lookups done here."""
+    Attribute Mapping/Profile lookups done here.
+
+    Real Sunsky product responses only include a numeric categoryId, not a
+    name field — confirmed against live data (2026-08-01). So when no name
+    field is present, this resolves the ID through `name_map` (built from
+    sunsky_client.get_category_name_map()) if one is provided. Falls back to
+    returning the raw ID as a last resort (e.g. if the category tree fetch
+    failed) — this keeps behavior no worse than before for edge cases, while
+    fixing the common case where a name lookup succeeds.
+    """
     for key in ("catName", "categoryName", "category_name", "cat_name"):
         v = str(raw.get(key) or "").strip()
         if v:
             return v
     cat_id = str(raw.get("categoryId") or raw.get("catId") or raw.get("category_id") or "").strip()
+    if cat_id and name_map:
+        name = name_map.get(cat_id)
+        if name:
+            return name
     return cat_id
 
 

@@ -247,6 +247,34 @@ async def get_category_tree() -> list[dict]:
     return all_cats
 
 
+# Category ID -> name cache. Real Sunsky product responses only include a
+# numeric categoryId, not a category name, so anywhere in the app that needs
+# to match/display a category by name (Category Mapping, Attribute Mapping
+# "if category" conditions, the Category Review pause) needs this lookup.
+# get_category_tree() walks the whole tree recursively (many API calls) so
+# it's cached in-process rather than called per-product or per-pipeline-run.
+_category_name_cache: dict[str, str] = {}
+_category_cache_fetched_at: float = 0.0
+_CATEGORY_CACHE_TTL_SECONDS = 3600  # 1 hour — category trees rarely change
+
+
+async def get_category_name_map(force_refresh: bool = False) -> dict[str, str]:
+    """Return a {category_id: category_name} map, cached for an hour."""
+    import time
+    global _category_name_cache, _category_cache_fetched_at
+    now = time.monotonic()
+    if not force_refresh and _category_name_cache and (now - _category_cache_fetched_at) < _CATEGORY_CACHE_TTL_SECONDS:
+        return _category_name_cache
+    try:
+        tree = await get_category_tree()
+        _category_name_cache = {str(c["id"]): c["name"] for c in tree if c.get("id") and c.get("name")}
+        _category_cache_fetched_at = now
+    except Exception as exc:
+        print(f"[sunsky_client] get_category_name_map() failed: {exc} — "
+              f"using stale/empty cache as fallback.")
+    return _category_name_cache
+
+
 async def search_products(
     category_id: Optional[str] = None,
     keyword: Optional[str] = None,

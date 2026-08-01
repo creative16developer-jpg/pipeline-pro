@@ -65,13 +65,27 @@ class CategoryMappingUpdate(BaseModel):
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _extract_sunsky_cat(raw: dict) -> str:
-    """Best-effort extraction of Sunsky category string from product raw_data."""
+def _extract_sunsky_cat(raw: dict, name_map: Optional[dict[str, str]] = None) -> str:
+    """Best-effort extraction of Sunsky category NAME from product raw_data.
+
+    Real Sunsky product responses only include a numeric categoryId, not a
+    name field — confirmed against live data (2026-08-01). When no name
+    field is present, resolves the ID through `name_map` (built from
+    sunsky_client.get_category_name_map()) if provided. This must produce
+    the exact same value that gets saved as SunskyCategoryMapping.sunsky_cat
+    below, or future pipeline runs won't recognize this category as already
+    mapped — see services/enrich_service.py's extract_sunsky_category() for
+    the sibling copy of this same fix.
+    """
     for key in ("catName", "categoryName", "category_name", "cat_name"):
         v = str(raw.get(key) or "").strip()
         if v:
             return v
     cat_id = str(raw.get("categoryId") or raw.get("catId") or raw.get("category_id") or "").strip()
+    if cat_id and name_map:
+        name = name_map.get(cat_id)
+        if name:
+            return name
     return cat_id
 
 
@@ -114,11 +128,14 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         )
     ).scalars().all()
 
+    from pipeline.sunsky_client import get_category_name_map
+    category_name_map = await get_category_name_map()
+
     # Extract unique Sunsky categories
     cat_counts: dict[str, int] = {}
     for p in products:
         raw = p.raw_data or {}
-        cat = _extract_sunsky_cat(raw)
+        cat = _extract_sunsky_cat(raw, category_name_map)
         if cat:
             cat_counts[cat] = cat_counts.get(cat, 0) + 1
 
