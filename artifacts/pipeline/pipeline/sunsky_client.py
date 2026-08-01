@@ -37,14 +37,22 @@ def _build_signature(params: dict) -> str:
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
-# T01 — Mock fallback: when no real Sunsky credentials are configured
-# (IP-whitelist restriction means most dev/staging environments can't reach
-# the real API), return realistic mock data instead of failing.
-_MOCK_KEYS = {"", "TESTKEY"}
-
-
+# T01 — Mock fallback: when there are no credentials at all, return
+# realistic mock data instead of failing.
+#
+# IMPORTANT: TESTKEY/TESTSECRET are NOT a dead placeholder — they are a
+# real, working Sunsky-issued demo credential. Verified directly against
+# Sunsky's live API (2026-08-01): a correctly-signed request with
+# key=TESTKEY returned real category data ("result": "success", full
+# category list). Sunsky's own team also confirmed they don't IP-block
+# normal requests. So TESTKEY must always attempt the real signed API call
+# first, exactly like any other key — it must NEVER be treated as an
+# automatic mock trigger. Only a genuinely empty key (no credentials
+# configured at all) skips the network call outright. The secondary
+# fallback (mock data on an actual 401/403 from Sunsky) still applies to
+# TESTKEY same as any other key, in case it's ever rotated/revoked.
 def _is_mock_mode() -> bool:
-    return settings.sunsky_api_key in _MOCK_KEYS
+    return not settings.sunsky_api_key
 
 
 _MOCK_CATEGORY_NAMES = ["Mobile Phones", "Phone Accessories", "Tablets", "Wearables", "Audio"]
@@ -215,7 +223,10 @@ async def get_categories(parent_id: str = "0") -> list[dict]:
         data = await _post("category!getChildren.do", {"parentId": parent_id})
         categories = _extract_list(data)
         return [_normalise_category(c) for c in categories if c.get("id") or c.get("categoryId")]
-    except _SunskyAuthError:
+    except _SunskyAuthError as exc:
+        print(f"[sunsky_client] {exc} — falling back to mock category data. "
+              f"This means real credentials were configured but Sunsky rejected the "
+              f"request (401/403) — check the key/secret and IP whitelist status.")
         return _mock_categories() if parent_id in ("0", "", None) else []
 
 
@@ -254,8 +265,11 @@ async def search_products(
 
     try:
         data = await _post("product!search.do", params)
-    except _SunskyAuthError:
-        # Real key configured but this IP isn't whitelisted — fall back to mock.
+    except _SunskyAuthError as exc:
+        # Real key configured but Sunsky rejected the request (401/403) —
+        # don't assume why (could be IP restriction, revoked key, bad
+        # signature, etc.) — just log it clearly and fall back to mock.
+        print(f"[sunsky_client] {exc} — falling back to mock product data.")
         mock = _mock_products(count=min(page_size, 20), category_id=category_id, keyword=keyword)
         return {"products": mock, "total": len(mock), "pages": 1}
 
@@ -354,7 +368,8 @@ async def get_product_detail(item_no: str) -> Optional[dict]:
         if not raw or not isinstance(raw, dict):
             return None
         return _normalise_product(raw)
-    except _SunskyAuthError:
+    except _SunskyAuthError as exc:
+        print(f"[sunsky_client] {exc} — falling back to mock product data for {item_no!r}.")
         mocks = _mock_products(count=1)
         mocks[0]["id"] = mocks[0]["sku"] = item_no
         return mocks[0]
