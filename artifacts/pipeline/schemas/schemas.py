@@ -179,8 +179,13 @@ class DashboardStats(BaseModel):
 
     active_pipelines: int
     waiting_for_input: int
-    uploaded_30d: int
-    failed_30d: int
+    # Explicit alias override: pydantic's to_camel('uploaded_30d') produces
+    # 'uploaded30D' (capital D after the digit) -- not the 'uploaded30d' the
+    # frontend actually reads. Confirmed live: this made both 30-day stats
+    # silently always show 0 on the dashboard, while activePipelines/
+    # waitingForInput (no digit-letter boundary) worked correctly by luck.
+    uploaded_30d: int = Field(alias="uploaded30d")
+    failed_30d: int = Field(alias="failed30d")
     total_stores: int
     recent_pipelines: list[PipelineJobOut]
 
