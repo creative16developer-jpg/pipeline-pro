@@ -125,6 +125,75 @@ async def _execute_job(job_id: int):
         await celery_engine.dispose()
 
 
+def _apply_inventory_mapping(raw: dict, config: Optional[dict]) -> dict:
+    """
+    Build WooCommerce weight/dimensions fields from Sunsky's raw product
+    data, honoring the store's Inventory Mapping config (unit conversion,
+    null-handling, defaults). Returns a dict with optional 'weight' and
+    'dimensions' keys ready to merge into the upload payload.
+
+    Sunsky provides weight in kg and dimensions in cm. Prefers package
+    (shipping) dimensions (packWeight/packLength/packWidth/packHeight) over
+    unit/item dimensions (unitWeight/unitLength/unitWidth/unitHeight) as the
+    primary source, since package dimensions are what actually ships --
+    falls back to unit dimensions if package data is missing.
+    """
+    cfg = config or {}
+    weight_unit = cfg.get("weight_unit", "kg")
+    dim_unit = cfg.get("dimension_unit", "cm")
+
+    def _to_float(v) -> Optional[float]:
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _conv_weight(raw_val) -> Optional[float]:
+        kg = _to_float(raw_val)
+        if kg is None:
+            return None
+        return kg * 2.20462 if weight_unit == "lbs" else kg
+
+    def _conv_dim(raw_val) -> Optional[float]:
+        cm = _to_float(raw_val)
+        if cm is None:
+            return None
+        return cm / 2.54 if dim_unit == "in" else cm
+
+    def _resolve(raw_val, conv_fn, null_mode_key: str, default_key: str) -> Optional[str]:
+        converted = conv_fn(raw_val)
+        if converted is not None:
+            return f"{converted:.2f}"
+        null_mode = cfg.get(null_mode_key, "leave_blank")
+        if null_mode == "use_default":
+            return cfg.get(default_key) or ""
+        if null_mode == "skip":
+            return None  # omit the field entirely
+        return ""  # leave_blank -- explicit empty value
+
+    raw_weight = raw.get("packWeight") or raw.get("unitWeight")
+    raw_length = raw.get("packLength") or raw.get("unitLength")
+    raw_width  = raw.get("packWidth")  or raw.get("unitWidth")
+    raw_height = raw.get("packHeight") or raw.get("unitHeight")
+
+    result: dict = {}
+
+    weight = _resolve(raw_weight, _conv_weight, "weight_null", "weight_default")
+    if weight is not None:
+        result["weight"] = weight
+
+    length = _resolve(raw_length, _conv_dim, "length_null", "length_default")
+    width  = _resolve(raw_width,  _conv_dim, "width_null",  "width_default")
+    height = _resolve(raw_height, _conv_dim, "height_null", "height_default")
+    dims = {k: v for k, v in (("length", length), ("width", width), ("height", height)) if v is not None}
+    if dims:
+        result["dimensions"] = dims
+
+    return result
+
+
 async def _log(db, job_id: int, level, message: str):
     from models.models import JobLog
     db.add(JobLog(job_id=job_id, level=level, message=message))
@@ -663,6 +732,31 @@ async def _run_upload(db, job):
     if not store:
         raise ValueError("Store not found")
 
+    # ── Inventory Mapping config (weight/dimension unit conversion + null
+    # handling) — loaded once per store, same for every product this run.
+    # None (no config saved yet) is handled gracefully by
+    # _apply_inventory_mapping, which falls back to sensible defaults.
+    from models.models import InventoryMappingConfig
+    _inv_row = (
+        await db.execute(
+            select(InventoryMappingConfig).where(InventoryMappingConfig.store_id == job.store_id)
+        )
+    ).scalar_one_or_none()
+    inventory_config = None
+    if _inv_row:
+        inventory_config = {
+            "weight_unit":     _inv_row.weight_unit,
+            "dimension_unit":  _inv_row.dimension_unit,
+            "weight_null":     _inv_row.weight_null,
+            "length_null":     _inv_row.length_null,
+            "width_null":      _inv_row.width_null,
+            "height_null":     _inv_row.height_null,
+            "weight_default":  _inv_row.weight_default,
+            "length_default":  _inv_row.length_default,
+            "width_default":   _inv_row.width_default,
+            "height_default":  _inv_row.height_default,
+        }
+
     # ── Concurrent safety: advisory lock per store prevents two upload jobs
     # from the same store running simultaneously and double-uploading products.
     lock_result = await db.execute(
@@ -829,6 +923,11 @@ async def _run_upload(db, job):
             }
             if woo_cat_ids:
                 payload["categories"] = [{"id": cid} for cid in woo_cat_ids]
+
+            # Inventory Mapping: weight/dimensions from Sunsky raw data,
+            # converted to the store's configured units, with null-handling
+            # per the store's saved rules (leave blank / use default / skip).
+            payload.update(_apply_inventory_mapping(raw, inventory_config))
 
             if not skip_images:
                 image_urls = await _resolve_product_images(db, job, product, raw, wc, store)

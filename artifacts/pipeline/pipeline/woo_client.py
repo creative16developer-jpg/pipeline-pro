@@ -259,6 +259,14 @@ async def create_product(store: Store, product_data: dict) -> dict:
     if categories:
         payload["categories"] = categories
 
+    weight = product_data.get("weight")
+    if weight is not None and str(weight).strip() != "":
+        payload["weight"] = str(weight).strip()
+
+    dimensions = product_data.get("dimensions")
+    if isinstance(dimensions, dict) and dimensions:
+        payload["dimensions"] = {k: str(v) for k, v in dimensions.items() if v is not None and v != ""}
+
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
         resp = await client.post(
             f"{_base_url(store)}/products",
@@ -363,6 +371,14 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
         payload["images"] = images
     if categories:
         payload["categories"] = categories
+
+    weight = product_data.get("weight")
+    if weight is not None and str(weight).strip() != "":
+        payload["weight"] = str(weight).strip()
+
+    dimensions = product_data.get("dimensions")
+    if isinstance(dimensions, dict) and dimensions:
+        payload["dimensions"] = {k: str(v) for k, v in dimensions.items() if v is not None and v != ""}
 
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
         resp = await client.put(
