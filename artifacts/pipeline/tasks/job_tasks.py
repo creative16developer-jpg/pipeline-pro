@@ -840,40 +840,24 @@ async def _run_upload(db, job):
             existing_woo = await wc.get_product_by_sku(store, product.sku)
 
             if existing_woo:
-                woo_id   = existing_woo["id"]
-                woo_name = existing_woo.get("name", "")
-                woo_price = str(existing_woo.get("regular_price") or existing_woo.get("price") or "")
-                woo_stock = existing_woo.get("stock_quantity", 0)
+                woo_id = existing_woo["id"]
 
-                local_price  = str(product.price or "0")
-                local_stock  = 10 if product.stock_status == "in_stock" else 0
-                local_name   = product.name or ""
-
-                # Compare — only update if something changed
-                needs_update = (
-                    local_name  != woo_name or
-                    local_price != woo_price or
-                    local_stock != woo_stock
-                )
-
-                if needs_update:
-                    await wc.update_product(store, woo_id, payload)
-                    product.woo_product_id = woo_id
-                    product.status = ProductStatus.uploaded
-                    product.error_message = None
-                    action = "updated"
-                    updated_count += 1
-                    await _log(db, job.id, LogLevel.info,
-                               f"  {product.sku} → UPDATED woo_id={woo_id} "
-                               f"(price: {woo_price}→{local_price}, stock: {woo_stock}→{local_stock})")
-                else:
-                    product.woo_product_id = woo_id
-                    product.status = ProductStatus.uploaded
-                    product.error_message = None
-                    action = "skipped"
-                    skipped_count += 1
-                    await _log(db, job.id, LogLevel.info,
-                               f"  {product.sku} → SKIPPED (already up-to-date in WooCommerce, woo_id={woo_id})")
+                # Always push the full payload on re-upload — not just when
+                # name/price/stock happen to differ. `payload` already
+                # contains everything (description, short_description,
+                # slug, meta_title, meta_description, tags, images,
+                # categories, stock_quantity) built above, so a narrower
+                # comparison here only risked silently skipping real
+                # content changes (a new AI-generated description, updated
+                # images, etc.) that don't happen to touch price/stock/name.
+                await wc.update_product(store, woo_id, payload)
+                product.woo_product_id = woo_id
+                product.status = ProductStatus.uploaded
+                product.error_message = None
+                action = "updated"
+                updated_count += 1
+                await _log(db, job.id, LogLevel.info,
+                           f"  {product.sku} → UPDATED woo_id={woo_id} (full payload re-sent)")
             else:
                 # Create new product in WooCommerce
                 await _log(db, job.id, LogLevel.info,
