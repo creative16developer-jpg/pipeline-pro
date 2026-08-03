@@ -757,6 +757,17 @@ async def _run_upload(db, job):
             "height_default":  _inv_row.height_default,
         }
 
+    # Category ID -> name resolution, loaded once for this whole upload run.
+    # Category mappings are saved keyed by NAME (via the Category Review
+    # panel / Settings -> Category Mapping), but Sunsky's raw product data
+    # only ever has a numeric categoryId -- without resolving through this
+    # map first, the lookup below can never match what was saved, and every
+    # product silently uploads with no category at all ("Uncategorized").
+    # Same fix as routers/map_step.py and services/enrich_service.py earlier
+    # today -- this is a third, independent copy of the same lookup logic.
+    from services.enrich_service import get_effective_category_name_map
+    upload_category_name_map = await get_effective_category_name_map(db)
+
     # ── Concurrent safety: advisory lock per store prevents two upload jobs
     # from the same store running simultaneously and double-uploading products.
     lock_result = await db.execute(
@@ -879,10 +890,16 @@ async def _run_upload(db, job):
                     raw_for_cat = product.raw_data or {}
                     sunsky_cat = (
                         str(raw_for_cat.get("catName") or
-                            raw_for_cat.get("categoryName") or
-                            raw_for_cat.get("categoryId") or
-                            raw_for_cat.get("catId") or "").strip()
+                            raw_for_cat.get("categoryName") or "").strip()
                     )
+                    if not sunsky_cat:
+                        # No name field on the raw data (the normal case for
+                        # real Sunsky products) -- resolve the numeric ID
+                        # through the same name map the Category Review
+                        # panel and Settings -> Category Mapping use, so
+                        # this lookup can actually match a saved mapping.
+                        cat_id = str(raw_for_cat.get("categoryId") or raw_for_cat.get("catId") or "").strip()
+                        sunsky_cat = upload_category_name_map.get(cat_id, cat_id)
                     if sunsky_cat and job.store_id:
                         from sqlalchemy import select as _sel
                         mapping = (await db.execute(
@@ -1246,6 +1263,16 @@ async def _run_upload(db, job):
                         _dc_name = (p2_cat_cache.get(sunsky_cat_id) or {}).get("name", "")
                         if _dc_name and _dc_name not in _scm_candidates:
                             _scm_candidates.append(_dc_name)
+                        # Primary resolver: starred-category names + Sunsky
+                        # tree walk (upload_category_name_map, loaded once
+                        # for this whole run) -- the disk cache above is a
+                        # separate, older mechanism only populated by a
+                        # distinct Sync job most workflows never run, so it's
+                        # typically empty. This is the one that's actually
+                        # reliably populated (see get_effective_category_name_map).
+                        _resolved_name = upload_category_name_map.get(sunsky_cat_id)
+                        if _resolved_name and _resolved_name not in _scm_candidates:
+                            _scm_candidates.append(_resolved_name)
 
                     _mapping2 = None
                     _matched_key = None
