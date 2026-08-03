@@ -18,6 +18,7 @@ overrides during the generate step.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 from datetime import datetime, timezone
@@ -34,6 +35,61 @@ router = APIRouter(prefix="/csv", tags=["csv"])
 
 REQUIRED_COLUMNS = {"Sunsky SKU", "Site SKU", "Product Title"}
 MAX_ROWS = 10_000
+
+
+async def _enrich_csv_products_from_sunsky(job_id: int, skus: list[str]) -> None:
+    """
+    Background task: for each CSV-imported row, fetch the FULL product from
+    Sunsky by its real item number (the "Sunsky SKU" column) — the same
+    data a Sunsky category fetch would produce (images, category, spec
+    table for attribute extraction) — just driven by an explicit SKU list
+    from the CSV instead of browsing a category tree.
+
+    Runs after upload_csv() has already returned a fast response with the
+    bare products created; this fills them in over time, paced to respect
+    Sunsky's per-minute rate limit (same pacing as sunsky_client's category
+    tree walk). Products the operator's CSV Title/Price already supplied
+    are NOT overwritten — only raw_data (and price/stock as a fallback when
+    the CSV left them blank) get filled in from Sunsky.
+    """
+    from database import AsyncSessionLocal
+    from pipeline.sunsky_client import get_product_detail
+
+    ok = failed = 0
+    async with AsyncSessionLocal() as db:
+        for i, sku in enumerate(skus):
+            try:
+                detail = await get_product_detail(sku)
+                if detail:
+                    product = (
+                        await db.execute(select(M.Product).where(M.Product.sunsky_id == sku))
+                    ).scalar_one_or_none()
+                    if product:
+                        product.raw_data = detail.get("raw_data") or {}
+                        if not product.price and detail.get("price"):
+                            product.price = detail["price"]
+                        if detail.get("stock_status"):
+                            product.stock_status = detail["stock_status"]
+                        await db.commit()
+                        ok += 1
+                    else:
+                        failed += 1
+                else:
+                    failed += 1
+                    print(f"[csv_import] job #{job_id}: Sunsky SKU {sku!r} not found — "
+                          f"product kept with CSV-only data (no images/category/spec).")
+            except Exception as exc:
+                failed += 1
+                print(f"[csv_import] job #{job_id}: enrichment failed for {sku!r}: {exc}")
+
+            if i and i % 20 == 0:
+                print(f"[csv_import] job #{job_id}: enriched {i}/{len(skus)} so far…")
+
+            # Sunsky enforces a per-minute call limit — same pacing used
+            # elsewhere for per-item Sunsky API calls.
+            await asyncio.sleep(0.3)
+
+    print(f"[csv_import] job #{job_id}: Sunsky enrichment complete — {ok} ok, {failed} failed.")
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +225,15 @@ async def upload_csv(
         ))
 
     await db.commit()
+
+    # Fetch full Sunsky product data (images, category, spec table) in the
+    # background for each row, keyed by the "Sunsky SKU" column — makes CSV
+    # import behave like a real Sunsky fetch instead of leaving raw_data
+    # empty. Doesn't block this response; products are usable immediately
+    # with just their CSV-supplied name/SKU/price, and get filled in as
+    # this completes (paced to respect Sunsky's rate limit, so a large CSV
+    # takes a while in the background rather than blocking the upload).
+    asyncio.create_task(_enrich_csv_products_from_sunsky(job.id, [r["sunsky_sku"] for r in rows]))
 
     return {
         "imported": len(rows),
