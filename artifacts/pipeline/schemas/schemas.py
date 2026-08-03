@@ -92,6 +92,7 @@ class ProductOut(BaseModel):
     stock_status: Optional[str] = None
     status: str
     category_id: Optional[str] = None
+    category_name: Optional[str] = None
     image_count: int
     woo_product_id: Optional[int] = None
     error_message: Optional[str] = None

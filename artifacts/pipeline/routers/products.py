@@ -65,8 +65,23 @@ async def list_products(
     q = q.order_by(Product.created_at.desc()).offset((page - 1) * limit).limit(limit)
     products = (await db.execute(q)).scalars().all()
 
+    # Resolve category_id -> human-readable name once for this whole page,
+    # not per product. Products only ever store the raw numeric Sunsky
+    # category id (confirmed: real Sunsky data has no name field at all) --
+    # without this, the Category column showed a bare number at best, or
+    # nothing for older rows created before category_id was reliably set.
+    from services.enrich_service import get_effective_category_name_map
+    category_name_map = await get_effective_category_name_map(db)
+
+    out_products = []
+    for p in products:
+        po = ProductOut.model_validate(p)
+        if p.category_id:
+            po.category_name = category_name_map.get(str(p.category_id))
+        out_products.append(po)
+
     return ProductListOut(
-        products=[ProductOut.model_validate(p) for p in products],
+        products=out_products,
         total=total,
         page=page,
         limit=limit,
@@ -87,6 +102,10 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
     out = ProductOut.model_validate(product)
     if product.fetch_job and product.fetch_job.store_id:
         out.store_id = product.fetch_job.store_id
+    if product.category_id:
+        from services.enrich_service import get_effective_category_name_map
+        category_name_map = await get_effective_category_name_map(db)
+        out.category_name = category_name_map.get(str(product.category_id))
     return out
 
 

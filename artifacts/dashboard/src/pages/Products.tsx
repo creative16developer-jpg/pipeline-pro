@@ -282,7 +282,16 @@ export default function Products() {
                         )}
                       </div>
                     </td>
-                    <td className="p-4 text-sm">{(product as any).categoryId || '—'}</td>
+                    <td className="p-4 text-sm">
+                      {(product as any).categoryName ? (
+                        <div>
+                          <div className="text-foreground">{(product as any).categoryName}</div>
+                          <div className="text-[11px] text-muted-foreground font-mono">{(product as any).categoryId}</div>
+                        </div>
+                      ) : (
+                        (product as any).categoryId || '—'
+                      )}
+                    </td>
                     <td className="p-4 text-sm font-medium">{product.price ? `$${product.price}` : '—'}</td>
                     <td className="p-4"><StatusBadge status={product.status} /></td>
                     <td className="p-4">

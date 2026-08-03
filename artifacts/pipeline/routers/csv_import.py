@@ -64,8 +64,24 @@ async def _enrich_csv_products_from_sunsky(job_id: int, skus: list[str]) -> None
                     product = (
                         await db.execute(select(M.Product).where(M.Product.sunsky_id == sku))
                     ).scalar_one_or_none()
+                    if not product:
+                        # Fall back to sku, same reasoning as the fix in
+                        # upload_csv()'s upsert — sunsky_id may have already
+                        # been corrected to Sunsky's real internal id by a
+                        # regular fetch that ran after this CSV row was
+                        # created.
+                        product = (
+                            await db.execute(select(M.Product).where(M.Product.sku == sku))
+                        ).scalar_one_or_none()
                     if product:
                         product.raw_data = detail.get("raw_data") or {}
+                        # category_id was previously never set for
+                        # CSV-imported products at all -- only raw_data was
+                        # filled in, so anything reading Product.category_id
+                        # directly (rather than digging through raw_data)
+                        # found nothing.
+                        if detail.get("category_id"):
+                            product.category_id = detail["category_id"]
                         if not product.price and detail.get("price"):
                             product.price = detail["price"]
                         if detail.get("stock_status"):
