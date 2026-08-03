@@ -108,6 +108,25 @@ async def lifespan(app: FastAPI):
             )
         )
         await db.commit()
+
+    # Pre-warm the Sunsky category name map in the background, off the
+    # critical path of both startup and any pipeline run. Walking the whole
+    # category tree can take longer than any reasonable in-pipeline timeout
+    # (rate-limit pacing + retries) — a live pipeline should never be the
+    # first thing that triggers this fetch. Disk-persisted cache (see
+    # pipeline/sunsky_client.py) means this is a no-op if already warm and
+    # fresh; only actually refetches when genuinely stale/missing.
+    async def _prewarm_category_cache():
+        try:
+            from pipeline.sunsky_client import get_category_name_map
+            m = await get_category_name_map()
+            print(f"[main] Category name cache pre-warmed: {len(m)} categories.")
+        except Exception as exc:
+            print(f"[main] Category name cache pre-warm failed (non-fatal): {exc}")
+
+    import asyncio as _asyncio
+    _asyncio.create_task(_prewarm_category_cache())
+
     yield
 
 

@@ -14,7 +14,9 @@ Open API Base URL: https://open.sunsky-online.com/openapi
 
 import asyncio
 import hashlib
+import json
 import httpx
+from pathlib import Path
 from typing import Optional
 from config import get_settings
 
@@ -273,23 +275,63 @@ async def get_category_tree() -> list[dict]:
 # "if category" conditions, the Category Review pause) needs this lookup.
 # get_category_tree() walks the whole tree recursively (many API calls) so
 # it's cached in-process rather than called per-product or per-pipeline-run.
+#
+# Also persisted to disk (config_store/category_name_map.json). Walking the
+# whole tree can take longer than any reasonable in-pipeline timeout,
+# especially with the rate-limit pacing above — so a pipeline should never
+# be the first thing that triggers this fetch. Persisting to disk means a
+# server restart starts warm (last known map) instead of cold/empty, and
+# main.py's startup hook refreshes it in the background, off the critical
+# path of any actual pipeline run.
 _category_name_cache: dict[str, str] = {}
 _category_cache_fetched_at: float = 0.0
 _CATEGORY_CACHE_TTL_SECONDS = 6 * 3600  # 6 hours — category trees rarely change,
 # and walking the tree is itself rate-limit-sensitive, so don't do it more than needed
+
+_CATEGORY_CACHE_PATH = Path(__file__).parent.parent / "config_store" / "category_name_map.json"
+
+
+def _load_category_cache_from_disk() -> None:
+    global _category_name_cache, _category_cache_fetched_at
+    try:
+        if _CATEGORY_CACHE_PATH.exists():
+            data = json.loads(_CATEGORY_CACHE_PATH.read_text())
+            _category_name_cache = data.get("map", {})
+            _category_cache_fetched_at = data.get("fetched_at", 0.0)
+    except Exception as exc:
+        print(f"[sunsky_client] Failed to load category_name_map.json from disk: {exc}")
+
+
+def _save_category_cache_to_disk() -> None:
+    try:
+        _CATEGORY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CATEGORY_CACHE_PATH.write_text(json.dumps({
+            "map": _category_name_cache,
+            "fetched_at": _category_cache_fetched_at,
+        }))
+    except Exception as exc:
+        print(f"[sunsky_client] Failed to save category_name_map.json to disk: {exc}")
+
+
+_load_category_cache_from_disk()  # warm the in-memory cache at import time
 
 
 async def get_category_name_map(force_refresh: bool = False) -> dict[str, str]:
     """Return a {category_id: category_name} map, cached for 6 hours."""
     import time
     global _category_name_cache, _category_cache_fetched_at
-    now = time.monotonic()
+    # time.time() (wall clock), not time.monotonic() — this timestamp is
+    # persisted to disk and compared across process restarts, and
+    # monotonic()'s reference point is arbitrary per-process, so a value
+    # saved by an old process is meaningless to a new one.
+    now = time.time()
     if not force_refresh and _category_name_cache and (now - _category_cache_fetched_at) < _CATEGORY_CACHE_TTL_SECONDS:
         return _category_name_cache
     try:
         tree = await get_category_tree()
         _category_name_cache = {str(c["id"]): c["name"] for c in tree if c.get("id") and c.get("name")}
         _category_cache_fetched_at = now
+        _save_category_cache_to_disk()
     except Exception as exc:
         print(f"[sunsky_client] get_category_name_map() failed: {exc} — "
               f"using stale/empty cache as fallback.")
