@@ -18,9 +18,6 @@ import {
   Image,
   Wrench,
   Bell,
-  Play,
-  Pause,
-  CheckCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -50,11 +47,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/pipelines",          label: "All Runs",              icon: Activity },
       { href: "/products",           label: "Products",              icon: PackageSearch },
-      { href: "/pipelines/demo?state=running",        label: "Demo — Running",      icon: Play },
-      { href: "/pipelines/demo?state=review",         label: "Demo — Cat. Review",  icon: Pause },
-      { href: "/pipelines/demo?state=enrich_review",  label: "Demo — Review A",     icon: Pause },
-      { href: "/pipelines/demo?state=content_review", label: "Demo — Review B",     icon: Pause },
-      { href: "/pipelines/demo?state=completed",      label: "Demo — Completed",    icon: CheckCircle },
     ],
   },
   {
