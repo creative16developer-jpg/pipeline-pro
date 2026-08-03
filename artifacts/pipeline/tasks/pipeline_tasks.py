@@ -290,14 +290,22 @@ async def _execute_pipeline(pipeline_job_id: int):
                 else:
                     auto_pause = cfg.get("automatic_review_pause", True)
                     if auto_pause:
-                        pl.status = "content_review"
+                        # Still pause at the Category Review panel even
+                        # though nothing is unmapped — the frontend already
+                        # renders a distinct "✓ Already mapped — applied
+                        # automatically" summary with a one-click Confirm &
+                        # Continue button in this case, so the operator sees
+                        # confirmation instead of the stage silently
+                        # vanishing. Only a fully automatic run (Automatic
+                        # Review Pause off) skips this entirely.
+                        pl.status = "review"
                         pl.current_step = "review"
                         pl.updated_at = datetime.now(timezone.utc)
                         await db.commit()
                         await _plog(
                             db, pl.id, "review", "info",
                             f"All Sunsky categories in this batch are already mapped — "
-                            f"skipping category review. Pausing for content review — "
+                            f"showing confirmation, no changes needed — "
                             f"{stats.get('total', 0)} total | "
                             f"{stats.get('ok', 0)} OK | "
                             f"{stats.get('fallback', 0)} fallback | "
@@ -688,14 +696,14 @@ async def _enrich_resume_pipeline(pipeline_job_id: int):
                 else:
                     auto_pause = cfg.get("automatic_review_pause", True)
                     if auto_pause:
-                        pl.status = "content_review"
+                        pl.status = "review"
                         pl.current_step = "review"
                         pl.updated_at = datetime.now(timezone.utc)
                         await db.commit()
                         await _plog(
                             db, pl.id, "review", "info",
                             f"All Sunsky categories in this batch are already mapped — "
-                            f"skipping category review. Pausing for content review — "
+                            f"showing confirmation, no changes needed — "
                             f"{stats.get('total', 0)} total | "
                             f"{stats.get('ok', 0)} OK | "
                             f"{stats.get('fallback', 0)} fallback | "
@@ -873,13 +881,13 @@ async def _continue_pipeline(pipeline_job_id: int, from_step: str):
                     else:
                         auto_pause = cfg.get("automatic_review_pause", True)
                         if auto_pause:
-                            pl.status = "content_review"
+                            pl.status = "review"
                             pl.current_step = "review"
                             pl.updated_at = datetime.now(timezone.utc)
                             await db.commit()
                             await _plog(db, pl.id, "review", "info",
                                 f"All Sunsky categories in this batch are already mapped — "
-                                f"skipping category review. Pausing for content review — "
+                                f"showing confirmation, no changes needed — "
                                 f"{stats.get('total', 0)} total | "
                                 f"{stats.get('ok', 0)} OK | "
                                 f"{stats.get('fallback', 0)} fallback | "
