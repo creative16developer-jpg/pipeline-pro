@@ -177,6 +177,22 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
             await db.execute(select(Product).where(Product.sunsky_id == sunsky_id))
         ).scalar_one_or_none()
 
+        if not existing:
+            # Not found by Sunsky's internal id -- but a CSV import may have
+            # already created a row for this exact item, keyed by SKU
+            # instead (CSV import sets sunsky_id = the SKU string directly,
+            # which differs from Sunsky's own internal "id" field used
+            # here). Check by SKU too before creating a genuine duplicate
+            # row for the same real product -- same root cause as the fix
+            # in routers/csv_import.py, applied from the other direction.
+            existing = (
+                await db.execute(select(Product).where(Product.sku == p["sku"]))
+            ).scalar_one_or_none()
+            if existing:
+                # Now that we know the real Sunsky id, correct it — future
+                # fetches will then match directly via sunsky_id above.
+                existing.sunsky_id = sunsky_id
+
         images   = p.get("images", [])
         raw_data = p.get("raw_data", {})
 

@@ -176,11 +176,45 @@ async def upload_csv(
     db.add(job)
     await db.flush()  # get job.id
 
-    # ── 2. Upsert Products (sunsky_id = sunsky_sku as unique key)
-    #       ON CONFLICT: update name/site_sku/fetch_job_id so the latest CSV
-    #       always wins; reset status→pending so the pipeline re-processes.
+    # ── 2. Upsert Products, matched by SKU (item number) — not sunsky_id.
+    #
+    # Found live: a product fetched normally via "Fetch from Sunsky" and the
+    # SAME real product later imported via CSV ended up as TWO separate rows
+    # for the same real item, sharing the same woo_product_id (WooCommerce
+    # itself correctly recognized the SKU and updated in place — no
+    # duplicate there), but the local products table had a genuine
+    # duplicate. Root cause: _normalise_product (used by the regular fetch
+    # path) sets sunsky_id from Sunsky's raw "id" field, which is Sunsky's
+    # own internal record id -- a DIFFERENT value from "itemNo" (the actual
+    # SKU/item number). CSV import instead set sunsky_id = the CSV's
+    # "Sunsky SKU" column value directly. Same real product, two different
+    # sunsky_id values depending on which path created it -- the unique
+    # constraint (on sunsky_id) never caught the overlap.
+    #
+    # Fix: look up by `sku` (item number) first, since that's the one value
+    # that's actually consistent across both import paths. If found, update
+    # the existing row in place regardless of its sunsky_id. Only create a
+    # new row (with sunsky_id = the CSV SKU, as a reasonable placeholder
+    # until the background Sunsky enrichment fills in real data) when truly
+    # nothing exists for that SKU yet.
     for r in rows:
         name = r["csv_title"] or r["sunsky_sku"]
+
+        existing = (
+            await db.execute(select(M.Product).where(M.Product.sku == r["sunsky_sku"]))
+        ).scalar_one_or_none()
+
+        if existing:
+            existing.name = name
+            existing.site_sku = r["site_sku"] or existing.site_sku
+            existing.fetch_job_id = job.id
+            existing.status = M.ProductStatus.pending
+            existing.woo_product_id = None
+            existing.error_message = None
+            if r["price"] is not None:
+                existing.price = r["price"]
+            continue
+
         values: dict = dict(
             sunsky_id=r["sunsky_sku"],
             sku=r["sunsky_sku"],

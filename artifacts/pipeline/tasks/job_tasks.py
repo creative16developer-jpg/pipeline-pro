@@ -258,6 +258,18 @@ async def _run_fetch(db, job):
                 await db.execute(select(Product).where(Product.sunsky_id == sunsky_id))
             ).scalar_one_or_none()
 
+            if not existing:
+                # Same fix as routers/sunsky.py's fetch_products — a CSV
+                # import may have already created a row for this exact real
+                # item keyed by SKU (CSV import sets sunsky_id = the SKU
+                # string, differing from Sunsky's own internal "id" field
+                # used here), so check by SKU before creating a duplicate.
+                existing = (
+                    await db.execute(select(Product).where(Product.sku == p["sku"]))
+                ).scalar_one_or_none()
+                if existing:
+                    existing.sunsky_id = sunsky_id
+
             images   = p.get("images", [])
             raw_data = p.get("raw_data", {})
 
