@@ -214,9 +214,25 @@ async def resume_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
     if pl.status not in ("review", "content_review"):
         raise HTTPException(400, f"Pipeline is not in a resumable state (current: {pl.status})")
 
+    # Same fix as content_confirm above: mark this pipeline's extracted
+    # attributes as confirmed so upload actually picks them up. This
+    # generic /resume endpoint is a second, independent way to reach
+    # upload without going through content_confirm's explicit review step
+    # (e.g. resuming directly from a category-only 'review' pause with no
+    # separate content review at all) -- same gap, same fix needed.
+    from models.models import ProductEnrichAttr
+    from sqlalchemy import update as _sa_update
+    await db.execute(
+        _sa_update(ProductEnrichAttr)
+        .where(ProductEnrichAttr.pipeline_job_id == pl.id)
+        .values(confirmed=True)
+    )
+
     if pl.status == "content_review":
         pl.status = "review"
         pl.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+    else:
         await db.commit()
 
     from tasks.pipeline_tasks import _resume_pipeline
@@ -282,6 +298,28 @@ async def content_confirm(pl_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, f"Pipeline #{pl_id} not found")
     if pl.status != "content_review":
         raise HTTPException(400, f"Pipeline is not in content review state (current: {pl.status})")
+
+    # Mark every attribute extracted during this pipeline's Enrich step as
+    # confirmed. tasks/job_tasks.py's upload step ONLY pushes
+    # ProductEnrichAttr rows to WooCommerce where confirmed=True (see the
+    # 'AI-extracted enrich attributes' block there) -- but this endpoint,
+    # the one actually reached from the combined Review pause in the
+    # current pipeline flow (Enrich auto-completes, no separate
+    # enrich_review pause), never marked anything confirmed. Only a
+    # different, older endpoint (enrich-confirm, gated on a distinct
+    # 'enrich_review' pipeline status this flow never reaches) did that.
+    # Result: extraction was correct, but almost nothing ever reached
+    # WooCommerce, because nothing was ever marked as reviewed/approved.
+    # The Review UI has no per-attribute confirm checkboxes at this stage --
+    # a single 'Confirm extraction — continue' action approves everything
+    # shown, so a bulk update here matches what the UI actually represents.
+    from models.models import ProductEnrichAttr
+    from sqlalchemy import update as _sa_update
+    await db.execute(
+        _sa_update(ProductEnrichAttr)
+        .where(ProductEnrichAttr.pipeline_job_id == pl.id)
+        .values(confirmed=True)
+    )
 
     # Set back to "review" so _resume_pipeline passes its guard check
     # (_resume_pipeline handles the running/upload transition itself)

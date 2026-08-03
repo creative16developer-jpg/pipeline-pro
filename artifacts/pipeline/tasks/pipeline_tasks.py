@@ -75,6 +75,25 @@ async def _unmapped_sunsky_categories(db, pl) -> list[str]:
     return sorted(categories - mapped)
 
 
+async def _confirm_all_enrich_attrs(db, pl_id: int) -> None:
+    """
+    Mark every ProductEnrichAttr row for this pipeline as confirmed.
+    tasks/job_tasks.py's upload step only pushes attributes to WooCommerce
+    where confirmed=True -- when Automatic Review Pause is off, there's no
+    human review step at all, so this represents the operator's choice to
+    fully automate as implicit approval of whatever was extracted. Same fix
+    as routers/pipeline.py's content_confirm and resume_pipeline endpoints,
+    which need it for the equivalent reason when a human DOES click confirm.
+    """
+    from sqlalchemy import update
+    from models.models import ProductEnrichAttr
+    await db.execute(
+        update(ProductEnrichAttr)
+        .where(ProductEnrichAttr.pipeline_job_id == pl_id)
+        .values(confirmed=True)
+    )
+
+
 async def _run_step(db, pl_id: int, step_name: str, job, step_fn):
     """
     Run a single step function with proper status tracking.
@@ -293,6 +312,7 @@ async def _execute_pipeline(pipeline_job_id: int):
                         pl.status = "review"
                         pl.current_step = "review"
                         pl.updated_at = datetime.now(timezone.utc)
+                        await _confirm_all_enrich_attrs(db, pl.id)
                         await db.commit()
                         await _plog(
                             db, pl.id, "review", "info",
@@ -685,6 +705,7 @@ async def _enrich_resume_pipeline(pipeline_job_id: int):
                         pl.status = "review"
                         pl.current_step = "review"
                         pl.updated_at = datetime.now(timezone.utc)
+                        await _confirm_all_enrich_attrs(db, pl.id)
                         await db.commit()
                         await _plog(
                             db, pl.id, "review", "info",
@@ -867,6 +888,7 @@ async def _continue_pipeline(pipeline_job_id: int, from_step: str):
                             pl.status = "review"
                             pl.current_step = "review"
                             pl.updated_at = datetime.now(timezone.utc)
+                            await _confirm_all_enrich_attrs(db, pl.id)
                             await db.commit()
                             await _plog(db, pl.id, "review", "info",
                                 f"All Sunsky categories already mapped and Automatic "
