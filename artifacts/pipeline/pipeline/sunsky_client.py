@@ -260,12 +260,16 @@ async def get_category_tree() -> list[dict]:
                 continue
             seen.add(cat["id"])
             all_cats.append(cat)
+            if len(all_cats) % 20 == 0:
+                print(f"[sunsky_client] get_category_tree(): {len(all_cats)} categories fetched so far…")
             # Sunsky enforces a per-minute call limit; walking a deep tree
             # can easily make dozens of rapid sequential calls otherwise.
             await asyncio.sleep(0.3)
             await _recurse(cat["id"])
 
+    print("[sunsky_client] get_category_tree(): starting full tree walk…")
     await _recurse("0")
+    print(f"[sunsky_client] get_category_tree(): done — {len(all_cats)} categories total.")
     return all_cats
 
 

@@ -485,6 +485,43 @@ def extract_sunsky_category(raw: dict, name_map: Optional[dict[str, str]] = None
     return cat_id
 
 
+async def get_effective_category_name_map(db: Optional["AsyncSession"]) -> dict[str, str]:
+    """
+    Category ID -> name map, preferring the fast, zero-API-call source:
+    StarredSunskyCategory already stores both cat_id and name the moment a
+    category is starred in Settings — which is realistically the exact set
+    of categories that matter (products get fetched from starred
+    categories, and Attribute Mapping 'if category' conditions are picked
+    from the starred list too).
+
+    Falls back to sunsky_client's slower, rate-limit-paced full tree walk
+    (which may be empty/stale if it hasn't finished yet — see
+    get_category_name_map_safe's docstring) for any category ID that isn't
+    in the starred set, e.g. an edge case where a product's category was
+    never explicitly starred by the operator.
+    """
+    starred_map: dict[str, str] = {}
+    if db is not None:
+        try:
+            from sqlalchemy import select
+            from models.models import StarredSunskyCategory
+            rows = (await db.execute(select(StarredSunskyCategory))).scalars().all()
+            starred_map = {r.cat_id: r.name for r in rows}
+        except Exception as exc:
+            print(f"[enrich_service] get_effective_category_name_map: "
+                  f"starred-category lookup failed: {exc}")
+
+    try:
+        from pipeline.sunsky_client import get_category_name_map_safe
+        tree_map = await get_category_name_map_safe()
+    except Exception:
+        tree_map = {}
+
+    # Starred names win on overlap — they're operator-confirmed and instant,
+    # vs. the tree walk which may be stale/partial.
+    return {**tree_map, **starred_map}
+
+
 async def load_profile_attrs_for_category(
     db: Optional["AsyncSession"], store_id: Optional[int], sunsky_category: str
 ) -> list[str]:
