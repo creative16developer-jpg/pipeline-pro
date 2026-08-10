@@ -285,6 +285,9 @@ async def _run_fetch(db, job):
                 if existing.stock_status != p.get("stock_status") and p.get("stock_status"):
                     existing.stock_status = p["stock_status"]
                     changed_fields.append("stock_status")
+                if p.get("stock_quantity") is not None and existing.stock_quantity != p["stock_quantity"]:
+                    existing.stock_quantity = p["stock_quantity"]
+                    changed_fields.append("stock_quantity")
                 if p.get("description") and existing.description != p["description"]:
                     existing.description = p["description"]
                     changed_fields.append("description")
@@ -327,6 +330,7 @@ async def _run_fetch(db, job):
                     description=p.get("description", ""),
                     price=p.get("price", "0"),
                     stock_status=p.get("stock_status", "in_stock"),
+                    stock_quantity=p.get("stock_quantity"),
                     category_id=p.get("category_id", ""),
                     image_count=len(images),
                     raw_data=raw_data,
@@ -948,7 +952,14 @@ async def _run_upload(db, job):
                 "meta_description":  product.meta_description or "",
                 "tags":              product.tags or "",
                 "image_alt":         product.image_alt or "",
-                "stock_quantity":    10 if product.stock_status == "in_stock" else 0,
+                # Real quantity when we have it (Sunsky's stockNum, or an
+                # operator-supplied CSV "QTY" column). Previously this was
+                # always hardcoded to 10/0 based only on the in/out-of-stock
+                # boolean -- never a real number for any product.
+                "stock_quantity":    (
+                    product.stock_quantity if product.stock_quantity is not None
+                    else (10 if product.stock_status == "in_stock" else 0)
+                ),
             }
             if woo_cat_ids:
                 payload["categories"] = [{"id": cid} for cid in woo_cat_ids]

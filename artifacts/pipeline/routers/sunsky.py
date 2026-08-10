@@ -204,6 +204,8 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
                 existing.price = p["price"]; changed = True
             if p.get("stock_status") and existing.stock_status != p["stock_status"]:
                 existing.stock_status = p["stock_status"]; changed = True
+            if p.get("stock_quantity") is not None and existing.stock_quantity != p["stock_quantity"]:
+                existing.stock_quantity = p["stock_quantity"]; changed = True
 
             # Re-stamp fetch_job_id regardless of whether any field changed —
             # this product IS part of the current fetch's batch, and every
@@ -230,6 +232,7 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
                 description=p.get("description", ""),
                 price=p.get("price", "0"),
                 stock_status=p.get("stock_status", "in_stock"),
+                stock_quantity=p.get("stock_quantity"),
                 category_id=p.get("category_id", ""),
                 image_count=len(images),
                 raw_data=raw_data,

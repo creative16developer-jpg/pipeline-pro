@@ -98,6 +98,11 @@ class Product(Base):
     content_source = Column(JSON, nullable=True)
     price = Column(String, nullable=True)
     stock_status = Column(String, nullable=True)
+    # Real numeric quantity. Nullable — when absent we fall back to a
+    # stock_status-derived placeholder (see job_tasks.py upload payload).
+    # Populated from Sunsky's real stockNum (via _normalise_product) or
+    # from an optional CSV "QTY" column, whichever ran most recently.
+    stock_quantity = Column(Integer, nullable=True)
     status = Column(SAEnum(ProductStatus, name="product_status"), nullable=False, default=ProductStatus.pending)
     category_id = Column(String, nullable=True)
     image_count = Column(Integer, nullable=False, default=0)

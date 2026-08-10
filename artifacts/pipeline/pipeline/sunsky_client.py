@@ -514,13 +514,23 @@ async def download_product_images(item_no: str, size: str = "middle", watermark:
 def _normalise_product(raw: dict) -> dict:
     images = _normalise_images(raw)
     merged_raw = {**raw, "images": images}
+    # Real numeric quantity, when Sunsky gives us one. Previously only the
+    # in_stock/out_of_stock boolean derived from this was kept -- the actual
+    # number was discarded, which is why the WooCommerce upload payload had
+    # to hardcode a placeholder (10 / 0). Keep the real int when present.
+    stock_num = raw.get("stockNum", raw.get("stock"))
+    try:
+        stock_quantity = int(stock_num) if stock_num is not None else None
+    except (TypeError, ValueError):
+        stock_quantity = None
     return {
         "id": str(raw.get("id", raw.get("itemNo", raw.get("sku", "")))),
         "sku": str(raw.get("itemNo", raw.get("sku", raw.get("id", "")))),
         "name": raw.get("name", raw.get("title", "")),
         "description": raw.get("description", raw.get("desc", "")),
         "price": str(raw.get("price", raw.get("sellPrice", "0.00"))),
-        "stock_status": "in_stock" if raw.get("stockNum", raw.get("stock", 1)) else "out_of_stock",
+        "stock_status": "in_stock" if (stock_quantity if stock_quantity is not None else 1) else "out_of_stock",
+        "stock_quantity": stock_quantity,
         "category_id": str(raw.get("categoryId", raw.get("catId", ""))),
         "images": images,
         "raw_data": merged_raw,
