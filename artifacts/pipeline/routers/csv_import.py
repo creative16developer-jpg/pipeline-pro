@@ -12,6 +12,14 @@ CSV Columns (required, case-sensitive):
   Product Title — saved to Product.name; also stored in csv_mappings for
                   backward-compat lookup during the pipeline generate step
 
+CSV Columns (optional):
+  Price — see above
+  QTY   — real numeric stock quantity, saved to Product.stock_quantity and
+          sent as-is to WooCommerce. If left blank, the background Sunsky
+          enrichment fills it in from Sunsky's real stock number when
+          available; failing that the upload step falls back to a
+          stock_status-derived placeholder.
+
 Backward compat: csv_mappings table is still populated so existing pipelines
 that reference a Sunsky fetch job continue to benefit from CSV title/SKU
 overrides during the generate step.
@@ -86,6 +94,10 @@ async def _enrich_csv_products_from_sunsky(job_id: int, skus: list[str]) -> None
                             product.price = detail["price"]
                         if detail.get("stock_status"):
                             product.stock_status = detail["stock_status"]
+                        # Don't overwrite a QTY the operator already gave us
+                        # in the CSV -- same "CSV value wins" rule as price.
+                        if product.stock_quantity is None and detail.get("stock_quantity") is not None:
+                            product.stock_quantity = detail["stock_quantity"]
                         await db.commit()
                         ok += 1
                     else:
@@ -156,6 +168,7 @@ async def upload_csv(
         site_sku   = (row.get("Site SKU") or "").strip()
         csv_title  = (row.get("Product Title") or "").strip()
         price_raw  = (row.get("Price") or "").strip()
+        qty_raw    = (row.get("QTY") or "").strip()
 
         if not sunsky_sku:
             errors.append(f"Row {i + 2}: missing Sunsky SKU — skipped")
@@ -169,7 +182,18 @@ async def upload_csv(
             except ValueError:
                 errors.append(f"Row {i + 2}: invalid price '{price_raw}' — price ignored")
 
-        rows.append({"sunsky_sku": sunsky_sku, "site_sku": site_sku, "csv_title": csv_title, "price": price})
+        # Validate QTY if provided (optional column)
+        qty: int | None = None
+        if qty_raw:
+            try:
+                qty = int(float(qty_raw))
+            except ValueError:
+                errors.append(f"Row {i + 2}: invalid QTY '{qty_raw}' — QTY ignored")
+
+        rows.append({
+            "sunsky_sku": sunsky_sku, "site_sku": site_sku, "csv_title": csv_title,
+            "price": price, "qty": qty,
+        })
 
     if not rows:
         raise HTTPException(400, f"No valid rows found. Errors: {errors[:5]}")
@@ -229,6 +253,8 @@ async def upload_csv(
             existing.error_message = None
             if r["price"] is not None:
                 existing.price = r["price"]
+            if r["qty"] is not None:
+                existing.stock_quantity = r["qty"]
             continue
 
         values: dict = dict(
@@ -242,6 +268,8 @@ async def upload_csv(
         )
         if r["price"] is not None:
             values["price"] = r["price"]
+        if r["qty"] is not None:
+            values["stock_quantity"] = r["qty"]
 
         conflict_set: dict = {
             "name": name,
@@ -253,6 +281,8 @@ async def upload_csv(
         }
         if r["price"] is not None:
             conflict_set["price"] = r["price"]
+        if r["qty"] is not None:
+            conflict_set["stock_quantity"] = r["qty"]
 
         stmt = (
             pg_insert(M.Product)
