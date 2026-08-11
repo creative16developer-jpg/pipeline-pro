@@ -379,6 +379,19 @@ async def extract_attributes(
     raw = await _call_ai(prompt, gen_cfg)
     parsed = _parse_json_array(raw)
 
+    # The prompt tells the model "Extract ONLY these attributes" (or, with
+    # no rules configured at all, "Focus on: <_DEFAULT_ATTRS>") -- but that
+    # was only ever an instruction to the model, never enforced afterward.
+    # Client feedback: "Attributes not specified in the settings are being
+    # extracted" -- a model that returns an extra attribute nobody asked
+    # for (ignoring "ONLY") had nothing stopping it from landing in
+    # ai_results. Build the actual allow-list here and filter against it.
+    allowed_attrs_lower = (
+        {r["woo_attr_name"].strip().lower() for r in active_rules}
+        if active_rules
+        else {a.lower() for a in _DEFAULT_ATTRS}
+    )
+
     ai_results: list[AttrResult] = []
     if parsed:
         active_rule_map = {r["woo_attr_name"].lower(): r for r in active_rules}
@@ -391,6 +404,8 @@ async def extract_attributes(
                 continue
             if attr.strip().lower() in resolved_lower:
                 continue  # Priority 1 already won this attribute
+            if attr.strip().lower() not in allowed_attrs_lower:
+                continue  # not configured — model ignored "extract ONLY"
 
             conf   = float(item.get("confidence", 0.7))
             rule   = active_rule_map.get(attr.lower())
