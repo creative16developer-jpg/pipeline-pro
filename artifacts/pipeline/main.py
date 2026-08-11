@@ -64,11 +64,22 @@ async def _run_migrations(conn):
     sql_files = sorted(migrations_dir.glob("*.sql"))
     for migration_sql in sql_files:
         raw = migration_sql.read_text()
-        for stmt in raw.split(";"):
-            stmt = "\n".join(
-                line for line in stmt.splitlines()
-                if line.strip() and not line.strip().startswith("--")
-            ).strip()
+        # Strip full-line comments FIRST, across the whole file, before
+        # splitting on ";". Previously this split on ";" first and only
+        # then dropped "--" lines per chunk -- so any semicolon anywhere
+        # inside a comment (including ordinary sentence punctuation, not
+        # just SQL-looking text) fractured a statement mid-comment and the
+        # trailing fragment of that comment line (no longer starting with
+        # "--" in its own chunk) got sent to Postgres as real SQL. Hit in
+        # practice: a migration file comment reading "...column); the
+        # 10/0 heuristic remains..." caused a startup crash because of the
+        # semicolon before "the".
+        code_only = "\n".join(
+            line for line in raw.splitlines()
+            if line.strip() and not line.strip().startswith("--")
+        )
+        for stmt in code_only.split(";"):
+            stmt = stmt.strip()
             if not stmt:
                 continue
             # ALTER TYPE ADD VALUE runs in _run_enum_migrations (AUTOCOMMIT)
