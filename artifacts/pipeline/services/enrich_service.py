@@ -193,10 +193,23 @@ def _rule_matches_product(rule: dict, sunsky_category: str) -> bool:
     return False
 
 
+_SUNSKY_FIELD_ALIASES = {
+    # UI dropdown value (lowercased) -> Sunsky's real raw_data field name,
+    # for cases confirmed to differ. "Brand" was diagnosed live against a
+    # real Sunsky response: the dropdown offers "Brand", but Sunsky's
+    # actual top-level field is "brandName" -- so the rule silently never
+    # matched and fell through to AI every time (which filled the gap well
+    # enough that the mismatch went unnoticed until checked directly).
+    # Add further confirmed mismatches here as they're found.
+    "brand": "brandName",
+}
+
+
 def _find_sunsky_value(product: dict, source_field: Optional[str]) -> str:
     """Look up a raw Sunsky field by name for a 'from_sunsky' rule — checks
     the parsed spec table first (case-insensitive), then a literal top-level
-    raw_data field of the same name."""
+    raw_data field of the same name, then a known alias for that field name
+    (see _SUNSKY_FIELD_ALIASES)."""
     if not source_field:
         return ""
     raw = product.get("raw_data") or product
@@ -208,6 +221,10 @@ def _find_sunsky_value(product: dict, source_field: Optional[str]) -> str:
         if k.strip().lower() == needle:
             return v
     val = raw.get(source_field)
+    if val is None:
+        alias = _SUNSKY_FIELD_ALIASES.get(needle)
+        if alias:
+            val = raw.get(alias)
     return str(val) if val is not None else ""
 
 

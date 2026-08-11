@@ -2426,6 +2426,14 @@ const SUNSKY_FIELDS = [
   "Capacity", "Quantity", "Shape", "Interface", "Compatibility",
 ];
 
+// Known cases where Sunsky's real raw field name differs from the label
+// above (kept in sync with enrich_service.py's _SUNSKY_FIELD_ALIASES so
+// this is never a silent mismatch again) — shown next to the dropdown so
+// it's visible, not just handled invisibly under the hood.
+const SUNSKY_FIELD_ALIAS_HINTS: Record<string, string> = {
+  Brand: "brandName",
+};
+
 const EMPTY_FORM = {
   woo_attr_name: "",
   rule_type: "fixed_value",
@@ -2593,6 +2601,11 @@ function AttrMappingModal({
                 </select>
                 <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
               </div>
+              {SUNSKY_FIELD_ALIAS_HINTS[form.source_field] && (
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Matches Sunsky's real field <code className="text-foreground">{SUNSKY_FIELD_ALIAS_HINTS[form.source_field]}</code> automatically.
+                </p>
+              )}
               {form.source_field === "__custom__" && (
                 <input
                   className="w-full mt-2 px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
