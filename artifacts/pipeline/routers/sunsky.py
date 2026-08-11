@@ -77,6 +77,47 @@ async def get_categories(parent_id: str = Query(default="0")):
     ]
 
 
+@router.get("/browse")
+async def browse_products(
+    category_id: Optional[str] = Query(default=None),
+    keyword: Optional[str] = Query(default=None),
+    page: int = Query(default=1),
+    page_size: int = Query(default=20, le=50),
+):
+    """
+    Read-only product search/preview — mirrors Sunsky's own "Select a
+    Product" picker (search by SPU/SKU/keyword or browse a category,
+    tick the ones you want). Does NOT touch the database or create a Job;
+    it's purely for populating the SKU list before a real fetch. The
+    actual import still goes through POST /sunsky/fetch with those SKUs,
+    same as manually typing them in.
+
+    `keyword` doubles as the SPU/SKU search box — Sunsky's search API
+    matches on item code as well as title, so a pasted SPU/SKU generally
+    finds the exact product without needing a separate lookup path.
+    """
+    try:
+        result = await sunsky_client.search_products(
+            category_id=category_id, keyword=keyword, page=page, page_size=page_size,
+        )
+    except Exception as e:
+        raise HTTPException(502, f"Sunsky API error searching products: {e}")
+
+    return {
+        "products": [
+            {
+                "sku": p["sku"],
+                "name": p["name"],
+                "price": p.get("price"),
+                "image": (p.get("images") or [None])[0],
+            }
+            for p in result["products"]
+        ],
+        "total": result["total"],
+        "pages": result["pages"],
+    }
+
+
 @router.post("/fetch", response_model=SunskyFetchResult)
 async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(get_db)):
     """

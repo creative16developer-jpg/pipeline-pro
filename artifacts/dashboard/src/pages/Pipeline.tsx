@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-type ProductSource = "sunsky" | "existing" | "csv";
+type ProductSource = "sunsky" | "skus" | "existing" | "csv";
 
 interface SourceJob {
   id: number;
@@ -109,6 +109,188 @@ function SourceRadio({
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// "Select a Product" browse modal — mirrors Sunsky's own picker: search by
+// SPU/SKU/keyword or a category, tick the ones you want, Submit adds them to
+// the SKU list. Read-only preview (GET /sunsky/browse) — nothing is saved to
+// the DB until the actual fetch runs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface BrowseProduct {
+  sku: string;
+  name: string;
+  price?: string | null;
+  image?: string | null;
+}
+
+function ProductBrowseModal({
+  open, onClose, onSubmit,
+}: { open: boolean; onClose: () => void; onSubmit: (skus: string[]) => void }) {
+  const [searchType, setSearchType] = useState<"spu" | "sku" | "keyword">("spu");
+  const [searchText, setSearchText] = useState("");
+  const [categories, setCategories] = useState<SunskyCategory[]>([]);
+  const [categoryId, setCategoryId] = useState("");
+  const [results, setResults] = useState<BrowseProduct[]>([]);
+  const [total, setTotal] = useState(0);
+  const [pages, setPages] = useState(1);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/sunsky/categories?parent_id=0")
+      .then((r) => r.json())
+      .then((d: SunskyCategory[]) => setCategories(Array.isArray(d) ? d : []))
+      .catch(() => {});
+  }, [open]);
+
+  const runSearch = (targetPage = 1) => {
+    setLoading(true);
+    setPage(targetPage);
+    const params = new URLSearchParams({ page: String(targetPage), page_size: "20" });
+    if (categoryId) params.set("category_id", categoryId);
+    // SPU/SKU/Keyword all search the same underlying field — Sunsky's search
+    // matches item codes and titles together — the type selector is kept so
+    // the UI still reads the way Sunsky's own picker does.
+    if (searchText.trim()) params.set("keyword", searchText.trim());
+    fetch(`/api/sunsky/browse?${params.toString()}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setResults(d.products || []);
+        setTotal(d.total || 0);
+        setPages(d.pages || 1);
+      })
+      .catch(() => { setResults([]); setTotal(0); setPages(1); })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    if (open) runSearch(1);
+    else { setResults([]); setSelected(new Set()); setSearchText(""); setCategoryId(""); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  if (!open) return null;
+
+  const toggle = (sku: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(sku)) next.delete(sku); else next.add(sku);
+      return next;
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-card border border-border rounded-2xl shadow-xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border/50">
+          <h3 className="font-semibold">Select a Product</h3>
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground text-lg leading-none">×</button>
+        </div>
+
+        <div className="px-5 py-3 border-b border-border/40 flex flex-wrap gap-2">
+          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={cn(inputCls, "max-w-[180px]")}>
+            <option value="">Category</option>
+            {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select value={searchType} onChange={(e) => setSearchType(e.target.value as any)} className={cn(inputCls, "max-w-[130px]")}>
+            <option value="spu">SPU</option>
+            <option value="sku">SKU</option>
+            <option value="keyword">Keyword</option>
+          </select>
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && runSearch(1)}
+            placeholder={searchType === "keyword" ? "Search by title…" : `Search by ${searchType.toUpperCase()}…`}
+            className={cn(inputCls, "flex-1 min-w-[160px]")}
+          />
+          <button
+            onClick={() => runSearch(1)}
+            className="px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            Search
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-2">
+          {loading ? (
+            <div className="flex items-center justify-center py-16 text-muted-foreground">
+              <Loader2 className="w-5 h-5 animate-spin mr-2" /> Searching…
+            </div>
+          ) : results.length === 0 ? (
+            <div className="text-center py-16 text-sm text-muted-foreground">No products found.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <tbody>
+                {results.map((p) => (
+                  <tr
+                    key={p.sku}
+                    onClick={() => toggle(p.sku)}
+                    className="cursor-pointer hover:bg-secondary/40 border-b border-border/20"
+                  >
+                    <td className="py-2 pr-2 w-8">
+                      <input type="checkbox" checked={selected.has(p.sku)} onChange={() => toggle(p.sku)} onClick={(e) => e.stopPropagation()} />
+                    </td>
+                    <td className="py-2 pr-3 w-12">
+                      {p.image
+                        ? <img src={p.image} alt="" className="w-10 h-10 rounded object-cover" />
+                        : <div className="w-10 h-10 rounded bg-secondary" />}
+                    </td>
+                    <td className="py-2 pr-3">
+                      <div className="line-clamp-2">{p.name}</div>
+                      <div className="text-xs text-muted-foreground">SPU: {p.sku}</div>
+                    </td>
+                    <td className="py-2 text-right whitespace-nowrap font-medium">{p.price ? `$${p.price}` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between px-5 py-3 border-t border-border/40">
+          <div className="text-xs text-muted-foreground">
+            {total > 0 && `Total ${total} results`}
+            {selected.size > 0 && ` · ${selected.size} selected`}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              disabled={page <= 1 || loading}
+              onClick={() => runSearch(page - 1)}
+              className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-40"
+            >
+              ‹
+            </button>
+            <span className="text-xs text-muted-foreground">{page} / {pages}</span>
+            <button
+              disabled={page >= pages || loading}
+              onClick={() => runSearch(page + 1)}
+              className="px-2.5 py-1.5 rounded-lg border border-border text-xs disabled:opacity-40"
+            >
+              ›
+            </button>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 px-5 py-4 border-t border-border/50">
+          <button onClick={onClose} className="px-4 py-2 rounded-xl border border-border text-sm font-medium hover:bg-secondary/40">
+            Cancel
+          </button>
+          <button
+            disabled={selected.size === 0}
+            onClick={() => onSubmit(Array.from(selected))}
+            className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-40 hover:opacity-90"
+          >
+            Submit{selected.size > 0 ? ` (${selected.size})` : ""}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main page
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -128,15 +310,22 @@ export default function Pipeline() {
   const [storeId, setStoreId] = useState("");
 
   // ── Sunsky fetch mode ──────────────────────────────────────────────────────
-  const [rootCats, setRootCats]   = useState<SunskyCategory[]>([]);
-  const [subCats, setSubCats]     = useState<SunskyCategory[]>([]);
-  const [parentCatId, setParentCatId] = useState("");
-  const [subCatId, setSubCatId]   = useState("");
+  // Category selection goes as deep as Sunsky's tree actually goes (was
+  // previously hardcoded to exactly 2 levels — Parent/Sub — which cut off
+  // real sub-sub-categories, e.g. Samsung Accessories > Galaxy S26 5G >
+  // Galaxy S26 5G Cases is 3 levels deep). catLevels[i] is the list of
+  // categories available at depth i; selectedCatIds[i] is what's chosen
+  // there. A new level is loaded lazily each time a selection has children.
+  const [catLevels, setCatLevels]           = useState<SunskyCategory[][]>([]);
+  const [selectedCatIds, setSelectedCatIds] = useState<string[]>([]);
+  const [loadingCatLevel, setLoadingCatLevel] = useState<number | null>(null);
   const [fetchLimit, setFetchLimit] = useState("50");
   const [fetchPage, setFetchPage]   = useState("1");
-  const [loadingRootCats, setLoadingRootCats] = useState(false);
-  const [loadingSubCats, setLoadingSubCats]   = useState(false);
   const [fetching, setFetching]   = useState(false);
+
+  // ── Specific SKUs / SPUs mode ───────────────────────────────────────────────
+  const [skusInput, setSkusInput] = useState("");
+  const [browseOpen, setBrowseOpen] = useState(false);
 
   // ── Existing / CSV mode ────────────────────────────────────────────────────
   const [fetchJobId, setFetchJobId]   = useState("");
@@ -168,26 +357,47 @@ export default function Pipeline() {
 
   // ── Load root Sunsky categories once ──────────────────────────────────────
   useEffect(() => {
-    setLoadingRootCats(true);
+    setLoadingCatLevel(0);
     fetch("/api/sunsky/categories?parent_id=0")
       .then((r) => r.json())
-      .then((d: SunskyCategory[]) => setRootCats(Array.isArray(d) ? d : []))
+      .then((d: SunskyCategory[]) => setCatLevels([Array.isArray(d) ? d : []]))
       .catch(() => {})
-      .finally(() => setLoadingRootCats(false));
+      .finally(() => setLoadingCatLevel(null));
   }, []);
 
-  // ── Load sub-categories when parent changes ────────────────────────────────
-  useEffect(() => {
-    setSubCatId("");
-    setSubCats([]);
-    if (!parentCatId) return;
-    setLoadingSubCats(true);
-    fetch(`/api/sunsky/categories?parent_id=${encodeURIComponent(parentCatId)}`)
+  // ── Selecting a category at depth `level` ───────────────────────────────────
+  // Truncates any deeper selections/levels (they belonged to the old branch),
+  // then lazily loads the next level if the chosen category has children.
+  // Leaves stop naturally when the API returns an empty list — no hardcoded
+  // depth limit.
+  const selectCategoryAt = (level: number, catId: string) => {
+    setSelectedCatIds((prev) => {
+      const next = prev.slice(0, level);
+      if (catId) next[level] = catId;
+      return next;
+    });
+    setCatLevels((prev) => prev.slice(0, level + 1));
+
+    if (!catId) return;
+    setLoadingCatLevel(level + 1);
+    fetch(`/api/sunsky/categories?parent_id=${encodeURIComponent(catId)}`)
       .then((r) => r.json())
-      .then((d: SunskyCategory[]) => setSubCats(Array.isArray(d) ? d : []))
+      .then((d: SunskyCategory[]) => {
+        const children = Array.isArray(d) ? d : [];
+        if (children.length > 0) {
+          setCatLevels((prev) => {
+            const next = prev.slice(0, level + 1);
+            next[level + 1] = children;
+            return next;
+          });
+        }
+      })
       .catch(() => {})
-      .finally(() => setLoadingSubCats(false));
-  }, [parentCatId]);
+      .finally(() => setLoadingCatLevel(null));
+  };
+
+  // The category actually used for the fetch: the deepest one selected.
+  const effectiveCategoryId = selectedCatIds.length > 0 ? selectedCatIds[selectedCatIds.length - 1] : "";
 
   // ── Load source jobs when store changes ───────────────────────────────────
   useEffect(() => {
@@ -257,17 +467,23 @@ export default function Pipeline() {
 
     let pipelineFetchJobId: number;
 
-    if (productSource === "sunsky") {
-      // Step 1 — run Sunsky fetch inline
+    if (productSource === "sunsky" || productSource === "skus") {
+      // Step 1 — run Sunsky fetch inline (by category, or by an explicit
+      // SKU/SPU list — mirrors Sunsky's own "Select products by: SPU" mode,
+      // for pulling specific products without building a CSV first).
+      if (productSource === "skus" && !skusInput.trim()) {
+        toast({ title: "SKUs required", description: "Enter at least one Sunsky SKU / SPU.", variant: "destructive" });
+        return;
+      }
       setFetching(true);
       try {
-        const categoryId = subCatId || parentCatId || undefined;
         const fetchRes = await fetch("/api/sunsky/fetch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             store_id:    parseInt(storeId),
-            category_id: categoryId,
+            category_id: productSource === "sunsky" ? (effectiveCategoryId || undefined) : undefined,
+            skus:        productSource === "skus" ? skusInput.trim() : undefined,
             limit:       parseInt(fetchLimit) || 50,
             page:        parseInt(fetchPage)  || 1,
           }),
@@ -278,7 +494,9 @@ export default function Pipeline() {
         if (fetchData.fetched === 0) {
           toast({
             title: "No products found",
-            description: "The selected category returned 0 products. Try a different category.",
+            description: productSource === "skus"
+              ? "None of those SKUs / SPUs were found on Sunsky."
+              : "The selected category returned 0 products. Try a different category.",
             variant: "destructive",
           });
           setFetching(false);
@@ -439,48 +657,38 @@ export default function Pipeline() {
           </label>
           <div className="mt-2 flex flex-wrap gap-2">
             <SourceRadio value="sunsky"   current={productSource} onChange={setProductSource} label="Fetch from Sunsky" />
+            <SourceRadio value="skus"     current={productSource} onChange={setProductSource} label="Specific SKUs / SPUs" />
             <SourceRadio value="existing" current={productSource} onChange={setProductSource} label="Use existing fetch job" />
             <SourceRadio value="csv"      current={productSource} onChange={setProductSource} label="CSV import" />
           </div>
 
-          {/* ── Sunsky fetch fields ── */}
+          {/* ── Sunsky fetch fields — cascading category, as deep as the tree goes ── */}
           {productSource === "sunsky" && (
             <div className="mt-3 space-y-3 p-4 rounded-xl bg-secondary/30 border border-border/40">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Parent Category</label>
-                  <select
-                    value={parentCatId}
-                    onChange={(e) => setParentCatId(e.target.value)}
-                    className={inputCls}
-                    disabled={loadingRootCats}
-                  >
-                    <option value="">— All categories —</option>
-                    {loadingRootCats
-                      ? <option disabled>Loading…</option>
-                      : rootCats.map((c) => (
-                          <option key={c.id} value={c.id}>{c.name}</option>
-                        ))
-                    }
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Sub-Category</label>
-                  <select
-                    value={subCatId}
-                    onChange={(e) => setSubCatId(e.target.value)}
-                    className={inputCls}
-                    disabled={!parentCatId || loadingSubCats}
-                  >
-                    <option value="">— All sub-categories —</option>
-                    {loadingSubCats
-                      ? <option disabled>Loading…</option>
-                      : subCats.map((c) => (
-                          <option key={c.id} value={c.id}>{c.name}</option>
-                        ))
-                    }
-                  </select>
-                </div>
+              <div className="flex flex-wrap gap-3">
+                {catLevels.map((levelCats, i) => (
+                  <div key={i} className="min-w-[180px] flex-1">
+                    <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                      {i === 0 ? "Category" : `Sub-category ${i > 1 ? `(level ${i + 1})` : ""}`}
+                    </label>
+                    <select
+                      value={selectedCatIds[i] || ""}
+                      onChange={(e) => selectCategoryAt(i, e.target.value)}
+                      className={inputCls}
+                      disabled={loadingCatLevel === i}
+                    >
+                      <option value="">{i === 0 ? "— All categories —" : "— All sub-categories —"}</option>
+                      {levelCats.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+                {loadingCatLevel !== null && (
+                  <div className="flex items-end pb-2.5">
+                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                  </div>
+                )}
               </div>
               <div className="flex items-end gap-3">
                 <div>
@@ -509,6 +717,37 @@ export default function Pipeline() {
                 <CloudDownload className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 <span>
                   Products will be fetched from Sunsky first, then the pipeline will start automatically.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* ── Specific SKUs / SPUs fields ── */}
+          {productSource === "skus" && (
+            <div className="mt-3 space-y-3 p-4 rounded-xl bg-secondary/30 border border-border/40">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium text-muted-foreground">SPU / SKU list</label>
+                  <button
+                    type="button"
+                    onClick={() => setBrowseOpen(true)}
+                    className="text-xs font-medium text-primary hover:underline"
+                  >
+                    Select a Product…
+                  </button>
+                </div>
+                <textarea
+                  value={skusInput}
+                  onChange={(e) => setSkusInput(e.target.value)}
+                  placeholder="Separated by comma/whitespace"
+                  rows={3}
+                  className={cn(inputCls, "resize-y")}
+                />
+              </div>
+              <div className="flex items-start gap-2 text-xs text-sky-400 bg-sky-500/10 border border-sky-500/20 rounded-lg px-3 py-2">
+                <CloudDownload className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>
+                  Paste specific Sunsky item numbers directly, or use "Select a Product" to search and check them off — no CSV needed.
                 </span>
               </div>
             </div>
@@ -780,7 +1019,7 @@ export default function Pipeline() {
           <Info className="w-3.5 h-3.5 text-primary" /> What happens next
         </p>
         <ul className="space-y-1.5 list-disc list-inside text-xs leading-relaxed">
-          {productSource === "sunsky" && <li><strong className="text-foreground">Fetch</strong> — products pulled from Sunsky API and saved to your database</li>}
+          {(productSource === "sunsky" || productSource === "skus") && <li><strong className="text-foreground">Fetch</strong> — products pulled from Sunsky API and saved to your database</li>}
           <li><strong className="text-foreground">Process</strong> — images downloaded, compressed, converted to WebP</li>
           {includeEnrich && <li><strong className="text-foreground">Enrich</strong> — AI extracts attributes; pauses for your review</li>}
           {includeGenerate && <li><strong className="text-foreground">Generate</strong> — AI content created for each product</li>}
@@ -790,6 +1029,19 @@ export default function Pipeline() {
           <li>If another pipeline is running for this store, yours will be queued automatically</li>
         </ul>
       </div>
+
+      <ProductBrowseModal
+        open={browseOpen}
+        onClose={() => setBrowseOpen(false)}
+        onSubmit={(skus) => {
+          setSkusInput((prev) => {
+            const existing = new Set(prev.split(/[\s,]+/).filter(Boolean));
+            skus.forEach((s) => existing.add(s));
+            return Array.from(existing).join(", ");
+          });
+          setBrowseOpen(false);
+        }}
+      />
     </div>
   );
 }
