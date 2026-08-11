@@ -32,6 +32,7 @@ class RuleIn(BaseModel):
     if_not_found:         str = "flag"       # "leave_blank" | "flag" | "use_default"
     default_value:        Optional[str] = None
     sort_order:           int = 0
+    selector:             Optional[str] = None
 
 
 class RuleOut(BaseModel):
@@ -43,6 +44,7 @@ class RuleOut(BaseModel):
     if_not_found:         str
     default_value:        Optional[str]
     sort_order:           int
+    selector:             Optional[str]
     created_at:           str
     updated_at:           str
 
@@ -57,6 +59,7 @@ class RuleOut(BaseModel):
             if_not_found=r.if_not_found,
             default_value=r.default_value,
             sort_order=r.sort_order,
+            selector=r.selector,
             created_at=r.created_at.isoformat() if r.created_at else "",
             updated_at=r.updated_at.isoformat() if r.updated_at else "",
         )
@@ -92,6 +95,7 @@ async def create_rule(body: RuleIn, db: AsyncSession = Depends(get_db)):
         if_not_found=body.if_not_found,
         default_value=body.default_value,
         sort_order=body.sort_order,
+        selector=body.selector,
     )
     db.add(rule)
     await db.commit()
@@ -122,6 +126,7 @@ async def update_rule(rule_id: int, body: RuleIn, db: AsyncSession = Depends(get
     rule.if_not_found         = body.if_not_found
     rule.default_value        = body.default_value
     rule.sort_order           = body.sort_order
+    rule.selector             = body.selector
     rule.updated_at           = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(rule)

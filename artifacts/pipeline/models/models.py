@@ -456,6 +456,14 @@ class AIExtractionRule(Base):
     if_not_found         = Column(String(30), nullable=False, default="flag")
     default_value        = Column(Text, nullable=True)
     sort_order           = Column(Integer, nullable=False, default=0)
+    # Optional deterministic search-area rule, e.g. "h2.product-main-title" —
+    # a simple tag[.class|#id] selector. When set, extract_attributes() tries
+    # this against the product's raw description HTML FIRST, before ever
+    # calling the AI: a match is deterministic (no AI cost, no guessing) and
+    # the AI is skipped entirely for that attribute. Falls through to the
+    # normal AI/instruction-based extraction when there's no match, so this
+    # is a cost-and-accuracy optimization, not a hard requirement.
+    selector              = Column(Text, nullable=True)
     created_at           = Column(DateTime(timezone=True), server_default=func.now())
     updated_at           = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

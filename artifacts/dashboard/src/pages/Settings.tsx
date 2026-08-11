@@ -708,6 +708,7 @@ interface ExtractionRule {
   if_not_found: string;
   default_value: string | null;
   sort_order: number;
+  selector: string | null;
 }
 
 const SOURCE_OPTS = [
@@ -742,6 +743,7 @@ function AIExtractionRulesTab() {
     if_not_found: "flag",
     default_value: null,
     sort_order: 0,
+    selector: null,
   });
   const [form, setForm] = useState(emptyForm());
 
@@ -803,6 +805,7 @@ function AIExtractionRulesTab() {
       if_not_found: r.if_not_found,
       default_value: r.default_value,
       sort_order: r.sort_order,
+      selector: r.selector,
     });
     setEditingId(r.id);
   };
@@ -916,6 +919,25 @@ function AIExtractionRulesTab() {
             onChange={e => setForm(f => ({ ...f, instruction: e.target.value }))}
             className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary resize-none placeholder:text-muted-foreground"
           />
+        </div>
+
+        <div className="col-span-2 space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">
+            Search-Area Selector <span className="normal-case font-normal">(optional — skips the AI when it matches)</span>
+          </label>
+          <input
+            type="text"
+            placeholder={'e.g. h2.product-main-title'}
+            value={form.selector ?? ""}
+            onChange={e => setForm(f => ({ ...f, selector: e.target.value || null }))}
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary placeholder:text-muted-foreground placeholder:font-sans"
+          />
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            A simple tag[.class or #id] to pull text directly out of the product's raw description HTML — e.g.{" "}
+            <code className="text-foreground">h2.product-main-title</code> grabs the text between{" "}
+            <code className="text-foreground">&lt;h2 class="product-main-title"&gt;…&lt;/h2&gt;</code>. When it matches,
+            that value is used directly and the AI isn't called for this attribute at all. Leave blank to always use AI Instruction above.
+          </p>
         </div>
 
         <div className="space-y-2">

@@ -55,6 +55,38 @@ def _parse_params_table(html: str) -> dict[str, str]:
     return pairs
 
 
+_SELECTOR_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9]*)(?:\.([\w-]+)|#([\w-]+))?$")
+
+
+def _extract_by_selector(html: str, selector: str) -> Optional[str]:
+    """
+    Deterministic search-area extraction — a simple tag[.class|#id] selector
+    (e.g. "h2.product-main-title"), matched against raw HTML with a plain
+    regex rather than a real DOM parser (keeps this dependency-free; the
+    supported syntax is intentionally narrow — one tag, optionally one class
+    or id — enough for the common "pull the text out of this specific
+    element" case the client asked for).
+    """
+    if not html or not selector:
+        return None
+    m = _SELECTOR_RE.match(selector.strip())
+    if not m:
+        return None
+    tag, cls, id_ = m.group(1), m.group(2), m.group(3)
+    lookahead = ""
+    if cls:
+        lookahead = rf'(?=[^>]*\bclass\s*=\s*"[^"]*\b{re.escape(cls)}\b[^"]*")'
+    elif id_:
+        lookahead = rf'(?=[^>]*\bid\s*=\s*"{re.escape(id_)}")'
+    pattern = rf"<{re.escape(tag)}\b{lookahead}[^>]*>(.*?)</{re.escape(tag)}>"
+    match = re.search(pattern, html, re.I | re.S)
+    if not match:
+        return None
+    text = re.sub(r"<[^>]+>", " ", match.group(1))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or None
+
+
 def _rule_based_extract(product: dict) -> list[AttrResult]:
     """
     Parse paramsTable directly. Confidence 0.75 (medium — rule-based, no AI).
@@ -95,6 +127,7 @@ async def _load_rules(db: Optional["AsyncSession"]) -> list[dict]:
                 "confidence_threshold": r.confidence_threshold,
                 "if_not_found":         r.if_not_found,
                 "default_value":        r.default_value,
+                "selector":             r.selector,
             }
             for r in rows
         ]
@@ -238,6 +271,7 @@ def apply_mapping_rules(
                 "confidence_threshold": 0.7,
                 "if_not_found":         "flag",
                 "default_value":        None,
+                "selector":             None,
             })
             seen_attrs.add(attr_key)
         # "leave_empty" or any other future rule_type: intentionally no-op —
@@ -375,9 +409,45 @@ async def extract_attributes(
     # guarantees Priority 1 can't be overridden regardless of AI confidence.
     active_rules = [r for k, r in rule_map.items() if k not in resolved_lower]
 
-    prompt = _build_extract_prompt(product, active_rules)
-    raw = await _call_ai(prompt, gen_cfg)
-    parsed = _parse_json_array(raw)
+    # Deterministic selector rules run BEFORE any AI call. A match is
+    # trusted outright (no AI cost, no guessing) and that attribute is
+    # removed from what gets asked of the AI. No match just falls through
+    # to the normal AI/instruction path below — the selector is a
+    # short-circuit optimization, not a hard requirement.
+    selector_results: list[AttrResult] = []
+    html_source = str((product.get("raw_data") or product).get("description")
+                       or (product.get("raw_data") or product).get("desc") or "")
+    remaining_rules = []
+    for r in active_rules:
+        sel = r.get("selector")
+        val = _extract_by_selector(html_source, sel) if sel else None
+        if val:
+            selector_results.append({
+                "attribute":  r["woo_attr_name"],
+                "raw_value":  val,
+                "confidence": 0.9,
+                "source":     "rule_selector",
+                "flagged":    False,
+            })
+        else:
+            remaining_rules.append(r)
+    active_rules = remaining_rules
+
+    # Skip the AI call entirely when every configured rule was already
+    # resolved (by Priority 1 mapping rules or a selector match above) —
+    # otherwise _build_extract_prompt() would treat the now-empty
+    # active_rules list as "nothing configured" and fall back to its
+    # free-form _DEFAULT_ATTRS hint, which is wrong here: something WAS
+    # configured, it just didn't need the AI. Only genuinely unconfigured
+    # stores (rule_map empty from the start) get the free-form fallback.
+    have_configured_rules = bool(rule_map)
+    if active_rules or not have_configured_rules:
+        prompt = _build_extract_prompt(product, active_rules)
+        raw = await _call_ai(prompt, gen_cfg)
+        parsed = _parse_json_array(raw)
+    else:
+        raw = None
+        parsed = None
 
     # The prompt tells the model "Extract ONLY these attributes" (or, with
     # no rules configured at all, "Focus on: <_DEFAULT_ATTRS>") -- but that
@@ -448,9 +518,12 @@ async def extract_attributes(
         if not ai_results:
             # AI returned parsable JSON but nothing usable — fall back to
             # rule-based paramsTable parsing, same as the no-AI-response path.
+            # Same allow-list applies here too — paramsTable parsing is just
+            # as capable of surfacing an attribute nobody configured.
             ai_results = [
                 r for r in _rule_based_extract(product)
                 if r["attribute"].strip().lower() not in resolved_lower
+                and (not have_configured_rules or r["attribute"].strip().lower() in allowed_attrs_lower)
             ]
             if active_rules:
                 active_rule_map = {r["woo_attr_name"].lower(): r for r in active_rules}
@@ -462,6 +535,7 @@ async def extract_attributes(
         ai_results = [
             r for r in _rule_based_extract(product)
             if r["attribute"].strip().lower() not in resolved_lower
+            and (not have_configured_rules or r["attribute"].strip().lower() in allowed_attrs_lower)
         ]
         if active_rules:
             active_rule_map = {r["woo_attr_name"].lower(): r for r in active_rules}
@@ -470,7 +544,7 @@ async def extract_attributes(
                 if rule:
                     item["flagged"] = item["confidence"] < rule["confidence_threshold"]
 
-    combined = resolved + ai_results
+    combined = resolved + selector_results + ai_results
     return sorted(combined, key=lambda x: -x["confidence"])
 
 
