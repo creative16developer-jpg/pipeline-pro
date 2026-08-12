@@ -1626,6 +1626,78 @@ function InventoryMappingTab() {
 interface SunskyCat { id: string; name: string }
 interface StarredSunskyCat { id: string; name: string; parentName?: string }
 
+// Recursive node — replaces the old hardcoded-to-2-levels root/child split.
+// Same underlying fix as the New Pipeline fetch dropdown's category cascade:
+// expand/fetch lazily at ANY depth, stopping naturally on a real leaf
+// (empty children response) rather than a hardcoded limit. This is what
+// made a real 3rd-level category like "Galaxy S26 5G Cases" impossible to
+// even find here, let alone star.
+function SunskyCategoryNode({
+  cat, parentName, depth, expanded, childMap, loadingChild, isStarred, toggling,
+  onToggleExpand, onToggleStar,
+}: {
+  cat: SunskyCat; parentName?: string; depth: number;
+  expanded: Set<string>; childMap: Record<string, SunskyCat[]>; loadingChild: Set<string>;
+  isStarred: (id: string) => boolean; toggling: string | null;
+  onToggleExpand: (cat: SunskyCat) => void; onToggleStar: (cat: SunskyCat, parentName?: string) => void;
+}) {
+  const isExpanded = expanded.has(cat.id);
+  const children = childMap[cat.id];
+  return (
+    <div>
+      <div
+        className="flex items-center gap-1 py-1.5 px-1 rounded-lg hover:bg-secondary/40 group"
+        style={{ marginLeft: depth * 24 }}
+      >
+        <button
+          onClick={() => onToggleExpand(cat)}
+          className="flex items-center gap-1.5 flex-1 text-sm text-left min-w-0"
+        >
+          {loadingChild.has(cat.id) ? (
+            <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-muted-foreground" />
+          ) : isExpanded ? (
+            <ChevronDown className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
+          )}
+          <Tag className={cn("w-3.5 h-3.5 shrink-0", depth === 0 ? "text-amber-400/70" : "text-amber-400/40")} />
+          <span className={cn("truncate", depth === 0 ? "font-medium" : "text-foreground/90")}>{cat.name}</span>
+        </button>
+        <button
+          onClick={() => onToggleStar(cat, parentName)}
+          disabled={toggling === cat.id}
+          className="shrink-0 px-1 py-0.5 rounded text-lg leading-none transition-colors"
+          title={isStarred(cat.id) ? "Remove from favourites" : "Add to favourites"}
+        >
+          {isStarred(cat.id)
+            ? <span className="text-amber-400">★</span>
+            : <span className="text-muted-foreground/30 group-hover:text-muted-foreground/60">☆</span>}
+        </button>
+      </div>
+      {isExpanded && (children ?? []).map((child) => (
+        <SunskyCategoryNode
+          key={child.id}
+          cat={child}
+          parentName={cat.name}
+          depth={depth + 1}
+          expanded={expanded}
+          childMap={childMap}
+          loadingChild={loadingChild}
+          isStarred={isStarred}
+          toggling={toggling}
+          onToggleExpand={onToggleExpand}
+          onToggleStar={onToggleStar}
+        />
+      ))}
+      {isExpanded && children && children.length === 0 && (
+        <p className="text-xs text-muted-foreground/60 py-1" style={{ marginLeft: (depth + 1) * 24 + 20 }}>
+          (no sub-categories — this is a leaf)
+        </p>
+      )}
+    </div>
+  );
+}
+
 function SunskyCategoriesTab() {
   const { toast } = useToast();
   const [rootCats, setRootCats]         = useState<SunskyCat[]>([]);
@@ -1655,6 +1727,9 @@ function SunskyCategoriesTab() {
 
   const isStarred = (id: string) => starred.some((s) => s.id === id);
 
+  // Works at any depth now — was previously only ever called on root-level
+  // categories, with the (single, non-recursive) child level hardcoded
+  // separately below.
   const toggleExpand = async (cat: SunskyCat) => {
     const next = new Set(expanded);
     if (next.has(cat.id)) {
@@ -1717,7 +1792,7 @@ function SunskyCategoriesTab() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
             <input
               type="text"
-              placeholder="Search categories..."
+              placeholder="Search top-level categories... (expand manually for sub-categories)"
               value={searchQ}
               onChange={(e) => setSearchQ(e.target.value)}
               className="w-full bg-background border border-border rounded-xl pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
@@ -1730,53 +1805,18 @@ function SunskyCategoriesTab() {
           ) : (
             <div className="space-y-0.5">
               {filteredRoot.map((cat) => (
-                <div key={cat.id}>
-                  <div className="flex items-center gap-1 py-1.5 px-1 rounded-lg hover:bg-secondary/40 group">
-                    <button
-                      onClick={() => toggleExpand(cat)}
-                      className="flex items-center gap-1.5 flex-1 text-sm text-left min-w-0"
-                    >
-                      {loadingChild.has(cat.id) ? (
-                        <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-muted-foreground" />
-                      ) : expanded.has(cat.id) ? (
-                        <ChevronDown className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />
-                      )}
-                      <Tag className="w-3.5 h-3.5 shrink-0 text-amber-400/70" />
-                      <span className="font-medium truncate">{cat.name}</span>
-                    </button>
-                    <button
-                      onClick={() => toggleStar(cat)}
-                      disabled={toggling === cat.id}
-                      className="shrink-0 px-1 py-0.5 rounded text-lg leading-none transition-colors"
-                      title={isStarred(cat.id) ? "Remove from favourites" : "Add to favourites"}
-                    >
-                      {isStarred(cat.id)
-                        ? <span className="text-amber-400">★</span>
-                        : <span className="text-muted-foreground/30 group-hover:text-muted-foreground/60">☆</span>}
-                    </button>
-                  </div>
-                  {expanded.has(cat.id) &&
-                    (childMap[cat.id] ?? []).map((child) => (
-                      <div key={child.id} className="flex items-center gap-1 py-1.5 px-1 ml-6 rounded-lg hover:bg-secondary/40 group">
-                        <div className="flex items-center gap-1.5 flex-1 text-sm min-w-0">
-                          <Tag className="w-3 h-3 shrink-0 text-amber-400/40" />
-                          <span className="truncate text-foreground/90">{child.name}</span>
-                        </div>
-                        <button
-                          onClick={() => toggleStar(child, cat.name)}
-                          disabled={toggling === child.id}
-                          className="shrink-0 px-1 py-0.5 rounded text-lg leading-none transition-colors"
-                          title={isStarred(child.id) ? "Remove from favourites" : "Add to favourites"}
-                        >
-                          {isStarred(child.id)
-                            ? <span className="text-amber-400">★</span>
-                            : <span className="text-muted-foreground/30 group-hover:text-muted-foreground/60">☆</span>}
-                        </button>
-                      </div>
-                    ))}
-                </div>
+                <SunskyCategoryNode
+                  key={cat.id}
+                  cat={cat}
+                  depth={0}
+                  expanded={expanded}
+                  childMap={childMap}
+                  loadingChild={loadingChild}
+                  isStarred={isStarred}
+                  toggling={toggling}
+                  onToggleExpand={toggleExpand}
+                  onToggleStar={toggleStar}
+                />
               ))}
               {filteredRoot.length === 0 && (
                 <p className="text-sm text-muted-foreground py-6 text-center">
