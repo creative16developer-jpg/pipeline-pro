@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import asyncio
 import math
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -246,7 +247,8 @@ async def resume_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/{pl_id}/content-data")
 async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     """Return products from this pipeline's fetch job for content review."""
-    from models.models import Product
+    from models.models import Product, Image
+    from config import get_settings
     pl = await db.get(PipelineJob, pl_id)
     if not pl:
         raise HTTPException(404, f"Pipeline #{pl_id} not found")
@@ -260,6 +262,36 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         )
     ).scalars().all()
 
+    # Real thumbnail URLs for the review screen — previously this endpoint
+    # only returned image_count, and the frontend rendered that many empty
+    # placeholder boxes with no actual <img> or URL at all (labeled "img1",
+    # "img2"...). Fetch every Image row for this batch in one query and
+    # build servable URLs the same way job_tasks.py already does for the
+    # WordPress-upload fallback (settings.server_base_url + /media/images/).
+    product_ids = [p.id for p in products]
+    images_by_product: dict[int, list[str]] = {}
+    if product_ids:
+        settings = get_settings()
+        base = (settings.server_base_url or "").rstrip("/")
+        img_rows = (
+            await db.execute(
+                select(Image)
+                .where(Image.product_id.in_(product_ids))
+                .order_by(Image.product_id, Image.position)
+            )
+        ).scalars().all()
+        for img in img_rows:
+            url = None
+            if img.processed_path and base:
+                url = f"{base}/media/images/{Path(img.processed_path).name}"
+            elif img.original_url:
+                # Fall back to Sunsky's original remote URL when there's no
+                # processed/local copy yet (or no server_base_url configured)
+                # -- still a real, renderable image rather than nothing.
+                url = img.original_url
+            if url:
+                images_by_product.setdefault(img.product_id, []).append(url)
+
     product_list = []
     for p in products:
         has_description = bool(p.description)
@@ -272,6 +304,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             "price": p.price or "",
             "status": p.status.value if hasattr(p.status, "value") else str(p.status),
             "image_count": p.image_count,
+            "image_urls": images_by_product.get(p.id, []),
             "category_id": p.category_id or "",
             "error_message": p.error_message or "",
             "content_source": p.content_source or {},

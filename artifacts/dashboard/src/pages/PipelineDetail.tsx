@@ -708,11 +708,32 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                         <div>
                           <label className="block text-[12px] font-medium text-foreground/70 mb-1">Images</label>
                           <div className="flex gap-2 flex-wrap">
-                            {Array.from({ length: p.image_count }).map((_, idx) => (
-                              <div key={idx} className="w-11 h-11 bg-muted/50 border border-border rounded-lg flex items-center justify-center text-[10px] text-muted-foreground/60">
-                                img{idx + 1}
-                              </div>
-                            ))}
+                            {p.image_urls && p.image_urls.length > 0 ? (
+                              p.image_urls.map((url: string, idx: number) => (
+                                <a
+                                  key={idx}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title="Open full size"
+                                  className="w-11 h-11 rounded-lg overflow-hidden border border-border block hover:border-violet-400 transition-colors"
+                                >
+                                  <img src={url} alt={`${p.name} image ${idx + 1}`} className="w-full h-full object-cover" />
+                                </a>
+                              ))
+                            ) : (
+                              // image_count > 0 but no URLs resolved (e.g. no
+                              // server_base_url configured and no original_url
+                              // saved) -- shown honestly as unavailable rather
+                              // than as fake "img1/img2" placeholders that
+                              // implied images existed and were clickable when
+                              // nothing was actually there.
+                              Array.from({ length: p.image_count }).map((_, idx) => (
+                                <div key={idx} title="Image URL unavailable" className="w-11 h-11 bg-muted/50 border border-border rounded-lg flex items-center justify-center text-[9px] text-muted-foreground/50">
+                                  N/A
+                                </div>
+                              ))
+                            )}
                           </div>
                         </div>
                       )}
