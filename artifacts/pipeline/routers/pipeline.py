@@ -284,10 +284,15 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             url = None
             if img.processed_path and base:
                 url = f"{base}/media/images/{Path(img.processed_path).name}"
-            elif img.original_url:
+            elif img.original_url and img.original_url.startswith(("http://", "https://")):
                 # Fall back to Sunsky's original remote URL when there's no
                 # processed/local copy yet (or no server_base_url configured)
-                # -- still a real, renderable image rather than nothing.
+                # -- but only when it's actually a real, browser-fetchable
+                # URL. Some products' original_url is a "sunsky-zip://..."
+                # marker instead (images that arrived bundled in a ZIP
+                # rather than individually fetchable) -- that's an internal
+                # reference, not a real address, and rendering it as an
+                # <img src> just produces a permanently broken image icon.
                 url = img.original_url
             if url:
                 images_by_product.setdefault(img.product_id, []).append(url)
