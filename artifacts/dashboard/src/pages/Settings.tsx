@@ -866,24 +866,29 @@ function AIExtractionRulesTab() {
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2 space-y-1">
           <label className="text-xs font-medium text-muted-foreground">WooCommerce Attribute Name *</label>
-          {wooAttrs.length > 0 ? (
-            <select
-              value={form.woo_attr_name}
-              onChange={e => setForm(f => ({ ...f, woo_attr_name: e.target.value }))}
-              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
-            >
-              <option value="">— select a WooCommerce attribute —</option>
-              {availableWooAttrs.map(a => (
-                <option key={a.id} value={a.name}>{a.name}</option>
-              ))}
-              {form.woo_attr_name && !availableWooAttrs.find((a: any) => a.name === form.woo_attr_name) && (
-                <option value={form.woo_attr_name}>{form.woo_attr_name}</option>
-              )}
-            </select>
-          ) : (
-            <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-400">
+          <input
+            list="extraction-rule-woo-attrs"
+            type="text"
+            placeholder="e.g. Color, Brand, Material — doesn't need to exist in WooCommerce yet"
+            value={form.woo_attr_name}
+            onChange={e => setForm(f => ({ ...f, woo_attr_name: e.target.value }))}
+            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+          />
+          {/* Suggests already-synced attributes via the native datalist picker
+              (type-ahead, still freely editable) when there are any — but
+              typing a brand-new name is always allowed. Attributes are
+              get-or-created in WooCommerce at upload time anyway, so a rule
+              never actually needed the attribute to exist beforehand; the
+              old select-only version just made that a hard requirement by
+              accident, which blocked rule creation completely on a store
+              with nothing synced yet (e.g. right after a full reset). */}
+          <datalist id="extraction-rule-woo-attrs">
+            {availableWooAttrs.map(a => <option key={a.id} value={a.name} />)}
+          </datalist>
+          {wooAttrs.length === 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-border/50 bg-secondary/30 px-3 py-2 text-xs text-muted-foreground">
               <Info className="w-3.5 h-3.5 shrink-0" />
-              No WooCommerce attributes synced yet — click <strong>Sync Attributes</strong> above.
+              No WooCommerce attributes synced yet — that's fine, just type the name. It'll be created in WooCommerce automatically on upload. Click <strong>Sync Attributes</strong> above for autocomplete suggestions from existing ones.
             </div>
           )}
         </div>
