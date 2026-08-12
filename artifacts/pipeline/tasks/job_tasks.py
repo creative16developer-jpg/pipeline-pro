@@ -1091,6 +1091,37 @@ async def _run_upload(db, job):
         p2_cat_cache = _load_cat_cache()   # sunsky_id → {name, sunsky_parent_id, …}
         p2_woo_id_cache: dict[str, int] = {}   # sunsky_id → woo_cat_id (this run)
 
+        # ── Names this store has deliberately configured for AI extraction ──
+        # or attribute mapping. Sunsky's raw modelLabel/optionList (below)
+        # is a generic variant-selector dump straight from their API -- for
+        # many products modelLabel genuinely says "Color" with real color
+        # values, but for others (confirmed live: a phone-case family whose
+        # actual variant axis is "which device it fits") Sunsky itself
+        # mislabels the axis "Color" while optionList holds device-
+        # compatibility strings like "For Samsung Galaxy S23 Ultra 5G", not
+        # colors at all. Trusting modelLabel blindly means that raw dump
+        # collides with -- and silently overwrites -- a deliberately
+        # configured "Color" extraction rule's correctly-extracted single
+        # value with a pile of unrelated device labels. A protected name
+        # from Extraction Rules or Attribute Mapping always wins; the raw
+        # variant dump is skipped entirely for any attribute name a rule
+        # already owns, and only still runs for genuinely un-configured
+        # variant axes.
+        p2_protected_attr_names: set[str] = set()
+        try:
+            from models.models import AIExtractionRule as _AIER, AttributeMappingRule as _AMR
+            _rule_rows = (await db.execute(select(_AIER.woo_attr_name))).all()
+            p2_protected_attr_names |= {r[0].strip().lower() for r in _rule_rows if r[0]}
+            _map_rows = (await db.execute(
+                select(_AMR.woo_attr_name).where(
+                    (_AMR.store_id == job.store_id) | (_AMR.store_id.is_(None))
+                )
+            )).all()
+            p2_protected_attr_names |= {r[0].strip().lower() for r in _map_rows if r[0]}
+        except Exception as _pn_e:
+            await _log(db, job.id, LogLevel.warn,
+                       f"  Could not load protected attribute names: {_pn_e}")
+
         # ── Pre-load WooCommerce global attributes ────────────────────────
         try:
             woo_global_attrs = await woo_client.get_all_woo_attributes(store)
@@ -1396,18 +1427,24 @@ async def _run_upload(db, job):
             option_values = [v for v in option_values if v]
 
             if model_label and option_values:
-                attr = await _p2_get_or_create_attr(model_label)
-                if attr and attr["id"] not in seen_attr_ids:
-                    seen_attr_ids.add(attr["id"])
-                    for val in option_values:
-                        await _p2_get_or_create_term(attr["id"], val)
-                    woo_attrs.append({
-                        "id": attr["id"],
-                        "name": attr["name"],
-                        "options": option_values,
-                        "visible": True,
-                        "variation": True,
-                    })
+                if model_label.strip().lower() in p2_protected_attr_names:
+                    await _log(db, job.id, LogLevel.info,
+                               f"  {prod.sku}: skipping Sunsky's raw '{model_label}' variant "
+                               f"dump ({len(option_values)} values) — a rule already owns this "
+                               f"attribute name, protecting its correctly-extracted value")
+                else:
+                    attr = await _p2_get_or_create_attr(model_label)
+                    if attr and attr["id"] not in seen_attr_ids:
+                        seen_attr_ids.add(attr["id"])
+                        for val in option_values:
+                            await _p2_get_or_create_term(attr["id"], val)
+                        woo_attrs.append({
+                            "id": attr["id"],
+                            "name": attr["name"],
+                            "options": option_values,
+                            "visible": True,
+                            "variation": True,
+                        })
 
             # Spec attributes: paramsTable key→value pairs
             params_html = str(raw.get("paramsTable") or "")
@@ -1416,6 +1453,16 @@ async def _run_upload(db, job):
                     if not spec_key or not spec_val:
                         continue
                     if len(spec_key) > 60 or len(spec_val) > 200:
+                        continue
+                    if spec_key.strip().lower() in p2_protected_attr_names:
+                        # Same collision risk as the modelLabel/optionList
+                        # case above -- a raw spec-table key can coincide
+                        # with a deliberately configured attribute name
+                        # (e.g. paramsTable literally has a "Brand" row),
+                        # and since this loop runs before the enrich-
+                        # attribute application below, it would claim
+                        # seen_attr_ids first and silently block the real
+                        # extracted value from ever being applied.
                         continue
                     attr = await _p2_get_or_create_attr(spec_key)
                     if attr and attr["id"] not in seen_attr_ids:
