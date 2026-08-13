@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from database import get_db
@@ -60,21 +60,59 @@ async def unstar_category(cat_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/categories", response_model=list[SunskyCategoryOut])
-async def get_categories(parent_id: str = Query(default="0")):
+async def get_categories(
+    parent_id: str = Query(default="0"),
+    response: Response = None,
+    db: AsyncSession = Depends(get_db),
+):
     """
     Fetch ONE level of Sunsky categories.
     Pass parent_id=0 (default) to get root categories.
     Pass parent_id=<id> to get direct children of that category.
     This is a single API call — fast and lazy.
+
+    Falls back to starred categories (zero API calls, always available)
+    when Sunsky's own API is rate-limited, instead of failing the whole
+    page. Confirmed live: category!getChildren.do has a daily call quota
+    that a heavy testing day can genuinely exhaust — that's an external
+    condition, not something retrying or fixing our code can work around,
+    so the only real option is degrading gracefully rather than hard-
+    failing every category-dependent screen until Sunsky's quota resets.
+    Sets X-Sunsky-Fallback: true on the response when this fallback is
+    actually used, so the frontend can show a clear note rather than
+    silently presenting a partial (starred-only) list as if it were the
+    complete live tree.
     """
     try:
         cats = await sunsky_client.get_categories(parent_id=parent_id)
+        return [
+            SunskyCategoryOut(id=c["id"], name=c["name"], parent_id=c.get("parent_id"))
+            for c in cats
+        ]
     except Exception as e:
-        raise HTTPException(502, f"Sunsky API error fetching categories: {e}")
-    return [
-        SunskyCategoryOut(id=c["id"], name=c["name"], parent_id=c.get("parent_id"))
-        for c in cats
-    ]
+        err_str = str(e)
+        is_rate_limit = "UP_TO_API_CALL_LIMIT" in err_str or "rate limit" in err_str.lower()
+        if not is_rate_limit:
+            raise HTTPException(502, f"Sunsky API error fetching categories: {e}")
+
+        starred_rows = (await db.execute(select(StarredSunskyCategory))).scalars().all()
+        name_to_id = {r.name: r.cat_id for r in starred_rows}
+
+        if parent_id == "0":
+            # Root level: starred categories whose parent isn't itself starred
+            # (best available signal for "this is a top-level entry" without
+            # a live tree to check against).
+            fallback = [r for r in starred_rows if not r.parent_name or r.parent_name not in name_to_id]
+        else:
+            parent_name = next((r.name for r in starred_rows if r.cat_id == parent_id), None)
+            fallback = [r for r in starred_rows if parent_name and r.parent_name == parent_name]
+
+        if response is not None:
+            response.headers["X-Sunsky-Fallback"] = "true"
+        return [
+            SunskyCategoryOut(id=r.cat_id, name=r.name, parent_id=None)
+            for r in fallback
+        ]
 
 
 @router.get("/browse")

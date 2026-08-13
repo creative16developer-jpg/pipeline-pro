@@ -1708,10 +1708,14 @@ function SunskyCategoriesTab() {
   const [searchQ, setSearchQ]           = useState("");
   const [loadingRoot, setLoadingRoot]   = useState(true);
   const [toggling, setToggling]         = useState<string | null>(null);
+  const [catFallback, setCatFallback]   = useState(false);
 
   useEffect(() => {
     fetch("/api/sunsky/categories?parent_id=0")
-      .then((r) => r.json())
+      .then((r) => {
+        if (r.headers.get("X-Sunsky-Fallback") === "true") setCatFallback(true);
+        return r.json();
+      })
       .then((d) => setRootCats(Array.isArray(d) ? d : []))
       .catch(() => {})
       .finally(() => setLoadingRoot(false));
@@ -1741,7 +1745,10 @@ function SunskyCategoriesTab() {
         try {
           const d = await fetch(
             `/api/sunsky/categories?parent_id=${encodeURIComponent(cat.id)}`
-          ).then((r) => r.json());
+          ).then((r) => {
+            if (r.headers.get("X-Sunsky-Fallback") === "true") setCatFallback(true);
+            return r.json();
+          });
           setChildMap((p) => ({ ...p, [cat.id]: Array.isArray(d) ? d : [] }));
         } catch {}
         setLoadingChild((p) => { const n = new Set(p); n.delete(cat.id); return n; });
@@ -1788,6 +1795,15 @@ function SunskyCategoriesTab() {
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
             Sunsky Category Tree
           </p>
+          {catFallback && (
+            <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mb-3">
+              <span className="shrink-0">⚠</span>
+              <span>
+                Sunsky's live category API has hit its daily rate limit — showing your already-starred
+                categories only. New/unstarred branches won't appear until the limit resets.
+              </span>
+            </div>
+          )}
           <div className="relative mb-3">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
             <input

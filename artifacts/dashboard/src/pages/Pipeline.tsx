@@ -319,6 +319,13 @@ export default function Pipeline() {
   const [catLevels, setCatLevels]           = useState<SunskyCategory[][]>([]);
   const [selectedCatIds, setSelectedCatIds] = useState<string[]>([]);
   const [loadingCatLevel, setLoadingCatLevel] = useState<number | null>(null);
+  // Shows when Sunsky's own category API hits its daily rate limit and the
+  // backend fell back to only starred categories (an X-Sunsky-Fallback
+  // response header signals this). Without this note, someone browsing an
+  // unexpectedly short/empty list would have no way to tell "the category
+  // genuinely has no children" apart from "Sunsky's live API is down for
+  // the day and this is a partial, starred-only view."
+  const [catFallback, setCatFallback] = useState(false);
   const [fetchLimit, setFetchLimit] = useState("50");
   const [fetchPage, setFetchPage]   = useState("1");
   const [fetching, setFetching]   = useState(false);
@@ -359,7 +366,10 @@ export default function Pipeline() {
   useEffect(() => {
     setLoadingCatLevel(0);
     fetch("/api/sunsky/categories?parent_id=0")
-      .then((r) => r.json())
+      .then((r) => {
+        if (r.headers.get("X-Sunsky-Fallback") === "true") setCatFallback(true);
+        return r.json();
+      })
       .then((d: SunskyCategory[]) => setCatLevels([Array.isArray(d) ? d : []]))
       .catch(() => {})
       .finally(() => setLoadingCatLevel(null));
@@ -381,7 +391,10 @@ export default function Pipeline() {
     if (!catId) return;
     setLoadingCatLevel(level + 1);
     fetch(`/api/sunsky/categories?parent_id=${encodeURIComponent(catId)}`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (r.headers.get("X-Sunsky-Fallback") === "true") setCatFallback(true);
+        return r.json();
+      })
       .then((d: SunskyCategory[]) => {
         const children = Array.isArray(d) ? d : [];
         if (children.length > 0) {
@@ -665,6 +678,17 @@ export default function Pipeline() {
           {/* ── Sunsky fetch fields — cascading category, as deep as the tree goes ── */}
           {productSource === "sunsky" && (
             <div className="mt-3 space-y-3 p-4 rounded-xl bg-secondary/30 border border-border/40">
+              {catFallback && (
+                <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+                  <span className="shrink-0">⚠</span>
+                  <span>
+                    Sunsky's live category API has hit its daily rate limit — showing your{" "}
+                    <strong>starred categories only</strong>, not the full live tree. If a category
+                    you need isn't listed, it may just not be starred yet — check Settings → Sunsky
+                    Categories once the limit resets (or star it there, if you already know the name).
+                  </span>
+                </div>
+              )}
               <div className="flex flex-wrap gap-3">
                 {catLevels.map((levelCats, i) => (
                   <div key={i} className="min-w-[180px] flex-1">
