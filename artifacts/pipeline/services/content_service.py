@@ -518,6 +518,31 @@ async def run_field(
         elif warn:
             logger.debug(f"[{field}] validation warnings: {warn}")
 
+        # Previously validation only ever logged/warned about an
+        # over-length value -- nothing actually shortened it, so an
+        # AI-generated field (mode "ai") could sail straight past its
+        # configured max_chars with nothing enforcing the limit at all.
+        # Confirmed live: a slug configured for 70 chars came out at 85
+        # from AI mode. "Derive" mode already truncated correctly
+        # (_derive_slug does its own [:max_chars]); this brings AI/Logic
+        # mode output in line with the same limit instead of just noting
+        # it was broken after the fact.
+        if "max_chars" in rules and len(value) > rules["max_chars"]:
+            max_chars = rules["max_chars"]
+            if field == "slug":
+                value = value[:max_chars].rstrip("-")
+            else:
+                # Prefer cutting on a word boundary so we don't chop a
+                # word in half -- but only if that doesn't throw away
+                # too much (>15% of the budget), otherwise a hard cut is
+                # closer to what was actually asked for.
+                cut = value[:max_chars]
+                last_space = cut.rfind(" ")
+                if last_space > max_chars * 0.85:
+                    cut = cut[:last_space]
+                value = cut.rstrip()
+            logger.info(f"[{field}] truncated to {len(value)} chars (limit {max_chars})")
+
     result: dict = {"field": field, "value": value, "source": source, "status": "ok"}
     if error_msg:
         result["error"] = error_msg
