@@ -2017,6 +2017,48 @@ async def _run_sync(db, job):
                         await _log(db, job.id, LogLevel.info,
                                    f"  Mapped Sunsky {cat_id} → WooCommerce #{woo_id}")
 
+                        # Keep the saved mapping table in sync with what Step A
+                        # actually just resolved/created. Confirmed live: without
+                        # this, a mapping saved once (e.g. via Category Review,
+                        # possibly with a blank name from an earlier bug) stays
+                        # permanently stale -- Priority 1 in the assignment step
+                        # below always trusts this table over fresh resolution,
+                        # so 10 products got silently assigned to a category ID
+                        # that no longer matched anything real in WooCommerce,
+                        # while a correct, newly-created nested category sat
+                        # right there unused. Upsert on every successful
+                        # resolution so this table is a live cache of the truth,
+                        # not a one-time snapshot that can drift.
+                        try:
+                            from sqlalchemy.dialects.postgresql import insert as _pg_insert
+                            from models.models import SunskyCategoryMapping as _SCM_SYNC
+                            _cat_name = (bfs_meta.get(cat_id, {}).get("name") or "").strip()
+                            if _cat_name:
+                                _stmt = _pg_insert(_SCM_SYNC).values(
+                                    store_id=job.store_id,
+                                    sunsky_cat=_cat_name,
+                                    sunsky_cat_id=cat_id,
+                                    woo_cat_id=woo_id,
+                                    woo_cat_name=_cat_name,
+                                    woo_cats_json=json.dumps([{"id": woo_id, "name": _cat_name}]),
+                                    primary_woo_cat_id=woo_id,
+                                ).on_conflict_do_update(
+                                    index_elements=["store_id", "sunsky_cat"],
+                                    set_={
+                                        "sunsky_cat_id": cat_id,
+                                        "woo_cat_id": woo_id,
+                                        "woo_cat_name": _cat_name,
+                                        "woo_cats_json": json.dumps([{"id": woo_id, "name": _cat_name}]),
+                                        "primary_woo_cat_id": woo_id,
+                                        "updated_at": datetime.now(timezone.utc),
+                                    },
+                                )
+                                await db.execute(_stmt)
+                                await db.commit()
+                        except Exception as _sync_map_e:
+                            await _log(db, job.id, LogLevel.warn,
+                                       f"  Could not sync mapping table for {cat_id}: {_sync_map_e}")
+
             await _log(db, job.id, LogLevel.info,
                        f"  Categories: {cats_created} created, {cats_synced} already existed "
                        f"— {len(sunsky_to_woo_cat)} ready to assign")
