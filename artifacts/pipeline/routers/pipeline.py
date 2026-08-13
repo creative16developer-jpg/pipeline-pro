@@ -329,10 +329,25 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     by_name: dict[str, str] = {}
     sunsky_name_by_product: dict[int, str] = {}
     try:
-        from services.enrich_service import extract_sunsky_category, get_effective_category_name_map
-        name_map = await get_effective_category_name_map(db)
+        from services.enrich_service import extract_sunsky_category
+        # Deliberately NOT using get_effective_category_name_map() here --
+        # that function always falls back to sunsky_client's live,
+        # rate-limited full category tree walk whenever a category isn't
+        # in the starred set, with up to a 20s wait. It's fine to pay that
+        # cost once per pipeline run (where it's actually called), but this
+        # endpoint gets polled repeatedly by the review screen -- confirmed
+        # live: every poll re-triggered a fresh 20s tree walk against
+        # Sunsky's API, making the whole page sluggish for no benefit here.
+        # This display card only needs the fast, zero-API-call starred-
+        # category source; an un-starred category just shows its raw
+        # Sunsky name/ID here instead of the mapped WooCommerce name --
+        # informational only, doesn't affect what Upload actually applies.
+        from sqlalchemy import select as _sel_star
+        from models.models import StarredSunskyCategory
+        starred_rows = (await db.execute(_sel_star(StarredSunskyCategory))).scalars().all()
+        starred_only_map = {r.cat_id: r.name for r in starred_rows}
         for p in products:
-            sunsky_name_by_product[p.id] = extract_sunsky_category(p.raw_data or {}, name_map)
+            sunsky_name_by_product[p.id] = extract_sunsky_category(p.raw_data or {}, starred_only_map)
     except Exception as _name_e:
         logger.warning(f"[content-data] category name resolution failed: {_name_e}")
 
