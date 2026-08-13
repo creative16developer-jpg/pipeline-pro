@@ -325,36 +325,29 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             })
 
     by_name: dict[str, str] = {}
+    sunsky_name_by_product: dict[int, str] = {}
     try:
-        cat_id_set = {p.category_id for p in products if p.category_id}
-        if cat_id_set:
+        from services.enrich_service import extract_sunsky_category, get_effective_category_name_map
+        name_map = await get_effective_category_name_map(db)
+        for p in products:
+            sunsky_name_by_product[p.id] = extract_sunsky_category(p.raw_data or {}, name_map)
+
+        cat_names_present = {n for n in sunsky_name_by_product.values() if n}
+        if cat_names_present:
             map_rows = (
                 await db.execute(
                     select(_SCM_CD).where(_SCM_CD.store_id == pl.store_id)
                 )
             ).scalars().all()
-            # sunsky_category_mappings is keyed by resolved category NAME,
-            # not id -- so this only gives us a name if a product's raw
-            # category name happens to match a saved mapping's key exactly.
-            # Simple and always-correct: surface the mapped WooCommerce
-            # category name when we can find one, else fall back to
-            # showing the raw Sunsky category name so it's still visible,
-            # not blank.
             by_name = {m.sunsky_cat.strip().lower(): m.woo_cat_name for m in map_rows if m.woo_cat_name}
-    except Exception:
+    except Exception as _cat_e:
         pass
 
     product_list = []
     for p in products:
         has_description = bool(p.description)
-        raw = p.raw_data or {}
-        raw_cat_name = ""
-        for _f in ("catName", "categoryName", "category_name", "cat_name"):
-            _v = raw.get(_f)
-            if _v and isinstance(_v, str) and _v.strip():
-                raw_cat_name = _v.strip()
-                break
-        resolved_woo_cat = by_name.get(raw_cat_name.lower()) if raw_cat_name else None
+        sunsky_cat_name = sunsky_name_by_product.get(p.id, "")
+        resolved_woo_cat = by_name.get(sunsky_cat_name.strip().lower()) if sunsky_cat_name else None
         product_list.append({
             "id": p.id,
             "sku": p.sku,
@@ -366,7 +359,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             "image_count": p.image_count,
             "image_urls": images_by_product.get(p.id, []),
             "category_id": p.category_id or "",
-            "category_name": resolved_woo_cat or raw_cat_name or "",
+            "category_name": resolved_woo_cat or sunsky_cat_name or "",
             "category_mapped": bool(resolved_woo_cat),
             "attributes": attrs_by_product.get(p.id, []),
             "error_message": p.error_message or "",
