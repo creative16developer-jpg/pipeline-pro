@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import asyncio
+import logging
 import math
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from database import get_db
 from models.models import PipelineJob, PipelineLog, Job, JobType, Store
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
 ACTIVE_STATUSES = ("running", "review", "enrich_review", "content_review")
@@ -331,7 +333,15 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         name_map = await get_effective_category_name_map(db)
         for p in products:
             sunsky_name_by_product[p.id] = extract_sunsky_category(p.raw_data or {}, name_map)
+    except Exception as _name_e:
+        logger.warning(f"[content-data] category name resolution failed: {_name_e}")
 
+    # Separate try block on purpose: a failure here previously could hide
+    # behind the name-resolution try above sharing one broad except, making
+    # a real mapping-lookup bug look identical to "genuinely unmapped" --
+    # confirmed live: category name resolved correctly but still showed
+    # "unmapped" despite a saved mapping existing for that exact name.
+    try:
         cat_names_present = {n for n in sunsky_name_by_product.values() if n}
         if cat_names_present:
             map_rows = (
@@ -340,8 +350,11 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
                 )
             ).scalars().all()
             by_name = {m.sunsky_cat.strip().lower(): m.woo_cat_name for m in map_rows if m.woo_cat_name}
-    except Exception as _cat_e:
-        pass
+            logger.info(f"[content-data] pl={pl_id} store_id={pl.store_id} "
+                        f"loaded {len(by_name)} category mappings, "
+                        f"looking for: {sorted(cat_names_present)}")
+    except Exception as _map_e:
+        logger.warning(f"[content-data] category mapping lookup failed: {_map_e}")
 
     product_list = []
     for p in products:
