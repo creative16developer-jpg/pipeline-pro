@@ -1794,6 +1794,39 @@ async def _run_sync(db, job):
             for cid, entry in cat_cache.items():
                 bfs_meta[cid] = entry
 
+            # ── a2) Also seed from starred categories ─────────────────────────
+            # Confirmed live: a category can be fully starred (all ancestors
+            # too) and still get skipped here entirely, because this BFS
+            # never checked the starred table at all -- it only knew about
+            # the on-disk cache. A deep leaf category can easily sit outside
+            # whatever the BFS's fetch cap can reach, especially on a large
+            # catalog, even though the exact same "starred = instant, no API
+            # calls" shortcut already exists and works everywhere else in
+            # the app (category name resolution during Enrich, the Sunsky
+            # Categories picker, etc.) -- this sync job just never got the
+            # same treatment. Reconstruct parent linkage from the starred
+            # set itself (a starred child's parent_name matching another
+            # starred row's name) so a fully-starred branch resolves with
+            # correct WooCommerce nesting and zero API calls; a starred
+            # category whose parent isn't also starred still resolves, just
+            # as a top-level category (better than being skipped outright).
+            try:
+                from models.models import StarredSunskyCategory as _SSC
+                starred_rows = (await db.execute(select(_SSC))).scalars().all()
+                name_to_starred_id = {r.name: r.cat_id for r in starred_rows}
+                for r in starred_rows:
+                    if r.cat_id in bfs_meta:
+                        continue  # disk cache already has it, don't override
+                    parent_sid = name_to_starred_id.get(r.parent_name, "0") if r.parent_name else "0"
+                    bfs_meta[r.cat_id] = {
+                        "id": r.cat_id, "name": r.name,
+                        "sunsky_parent_id": parent_sid, "_cached_at": cached_now,
+                    }
+                await _log(db, job.id, LogLevel.info,
+                           f"  Starred categories: {len(starred_rows)} loaded (instant, no API calls)")
+            except Exception as _star_e:
+                await _log(db, job.id, LogLevel.warn, f"  Starred-category seed failed: {_star_e}")
+
             remaining = needed_cat_ids - set(bfs_meta.keys())
             cache_hits = len(needed_cat_ids) - len(remaining)
             await _log(db, job.id, LogLevel.info,
