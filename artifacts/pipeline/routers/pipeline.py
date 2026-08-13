@@ -364,7 +364,20 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
                     select(_SCM_CD).where(_SCM_CD.store_id == pl.store_id)
                 )
             ).scalars().all()
-            by_name = {m.sunsky_cat.strip().lower(): m.woo_cat_name for m in map_rows if m.woo_cat_name}
+            # Was: `if m.woo_cat_name` -- but confirmed live that a row can
+            # have a real, working woo_cat_id (what uploads actually use)
+            # with woo_cat_name left blank (empty string, not NULL) from
+            # however it got saved originally. That's a real gap in the
+            # save path worth fixing separately, but for this display card
+            # the fix is simpler: woo_cat_id is what's authoritative and
+            # always populated, so check that instead. Store True as the
+            # marker (we don't have the real WooCommerce name to show) and
+            # let the per-product loop fall back to the Sunsky category
+            # name, which is still accurate and informative either way.
+            by_name = {
+                m.sunsky_cat.strip().lower(): (m.woo_cat_name or True)
+                for m in map_rows if m.woo_cat_id
+            }
             logger.info(f"[content-data] pl={pl_id} store_id={pl.store_id} "
                         f"loaded {len(by_name)} category mappings, "
                         f"looking for: {sorted(cat_names_present)}")
@@ -375,7 +388,9 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     for p in products:
         has_description = bool(p.description)
         sunsky_cat_name = sunsky_name_by_product.get(p.id, "")
-        resolved_woo_cat = by_name.get(sunsky_cat_name.strip().lower()) if sunsky_cat_name else None
+        _mapped_val = by_name.get(sunsky_cat_name.strip().lower()) if sunsky_cat_name else None
+        resolved_woo_cat = _mapped_val if isinstance(_mapped_val, str) else None
+        is_mapped = _mapped_val is not None
         product_list.append({
             "id": p.id,
             "sku": p.sku,
@@ -388,7 +403,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             "image_urls": images_by_product.get(p.id, []),
             "category_id": p.category_id or "",
             "category_name": resolved_woo_cat or sunsky_cat_name or "",
-            "category_mapped": bool(resolved_woo_cat),
+            "category_mapped": is_mapped,
             "attributes": attrs_by_product.get(p.id, []),
             "error_message": p.error_message or "",
             "content_source": p.content_source or {},
