@@ -103,6 +103,7 @@ class Product(Base):
     # Populated from Sunsky's real stockNum (via _normalise_product) or
     # from an optional CSV "QTY" column, whichever ran most recently.
     stock_quantity = Column(Integer, nullable=True)
+    focus_keyword = Column(String, nullable=True)
     status = Column(SAEnum(ProductStatus, name="product_status"), nullable=False, default=ProductStatus.pending)
     category_id = Column(String, nullable=True)
     image_count = Column(Integer, nullable=False, default=0)
@@ -326,6 +327,16 @@ class SunskyCategoryMapping(Base):
     id                 = Column(Integer, primary_key=True, index=True)
     store_id           = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
     sunsky_cat         = Column(Text, nullable=False)
+    # Numeric Sunsky category ID, when known. Matching by name alone is
+    # fragile: name resolution for an unstarred category falls back to a
+    # background tree-walk cache that can be stale/incomplete right after a
+    # fresh deploy or reset, so the SAME category can resolve to a
+    # different string at mapping-save time vs upload time -- silently
+    # missing a real, saved mapping. The numeric ID never changes and never
+    # depends on cache freshness, so it's used as the primary match key
+    # whenever available; sunsky_cat remains for display and as a fallback
+    # for older rows saved before this column existed.
+    sunsky_cat_id      = Column(String, nullable=True, index=True)
     woo_cat_id         = Column(Integer, nullable=True)   # backward-compat: primary cat id
     woo_cat_name       = Column(Text, nullable=True)      # backward-compat: primary cat name
     woo_cats_json      = Column(Text, nullable=True)      # JSON: [{id, name}, ...]

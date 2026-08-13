@@ -39,6 +39,7 @@ FIELD_LIST = [
     "image_names",        # derive ← slug
     "short_description",  # derive ← description
     "meta_description",   # derive ← description
+    "focus_keyword",      # derive ← title (basic Yoast/RankMath SEO field)
 ]
 
 FIELD_DEFAULT_MODE: dict[str, str] = {
@@ -51,6 +52,7 @@ FIELD_DEFAULT_MODE: dict[str, str] = {
     "image_names":       "derive",
     "short_description": "derive",
     "meta_description":  "derive",
+    "focus_keyword":      "derive",
 }
 
 FIELD_DEPS: dict[str, list[str]] = {
@@ -60,6 +62,7 @@ FIELD_DEPS: dict[str, list[str]] = {
     "image_names":       ["slug"],
     "short_description": ["description"],
     "meta_description":  ["description"],
+    "focus_keyword":     ["title"],
 }
 
 FIELD_ATTR: dict[str, str] = {
@@ -72,6 +75,7 @@ FIELD_ATTR: dict[str, str] = {
     "tags":              "tags",
     "image_alt":         "image_alt",
     "image_names":       "image_names",
+    "focus_keyword":     "focus_keyword",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -89,6 +93,10 @@ VALIDATORS: dict[str, dict] = {
     "short_description": {"non_empty": True, "max_chars": 400},
     "meta_title":        {"non_empty": True, "max_chars": 60},
     "meta_description":  {"min_chars": 80, "max_chars": 160},
+    # Yoast/RankMath convention: a short, specific phrase (not a full
+    # sentence) — 2-4 words is typical, kept generous at 60 chars so a
+    # legitimate longer product phrase still fits.
+    "focus_keyword":     {"non_empty": True, "max_chars": 60},
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,6 +342,42 @@ def _derive_image_names(product: dict, options: dict, resolved: dict) -> str:
     return f"{slug}-1.webp"[:70]
 
 
+_FOCUS_KEYWORD_STOPWORDS = {
+    "for", "with", "and", "the", "a", "an", "of", "to", "in", "on",
+}
+
+
+def _derive_focus_keyword(product: dict, options: dict, resolved: dict) -> str:
+    """
+    Sensible, deterministic default focus keyword: brand + the first
+    couple of meaningful nouns from the title, filler words like "For"
+    stripped out. E.g. "For Samsung Galaxy S26 5G LC.IMEEKE ... Phone
+    Case(Black)" -> "LC.IMEEKE Samsung Galaxy S26 Phone Case" style
+    phrase -- a real search-shaped phrase rather than the whole title.
+    Client can always override with an AI-mode instruction for something
+    more tailored; this just means a real, non-empty value ships by
+    default rather than leaving Yoast's focus keyword blank.
+    """
+    title = resolved.get("title", "") or product.get("name", "")
+    raw = _get_raw(product)
+    specs = _parse_params_table(raw.get("paramsTable", ""))
+    brand = _get_brand(specs)
+    max_chars = int(options.get("max_chars", 60))
+
+    words = [w for w in re.split(r"\s+", title.strip()) if w]
+    kept = [w for w in words if w.lower() not in _FOCUS_KEYWORD_STOPWORDS]
+    phrase_words = (([brand] if brand else []) + kept)[:5]
+    phrase = " ".join(dict.fromkeys(phrase_words))  # de-dupe, preserve order
+
+    if not phrase:
+        phrase = title[:max_chars]
+    if len(phrase) > max_chars:
+        cut = phrase[:max_chars]
+        last_space = cut.rfind(" ")
+        phrase = cut[:last_space] if last_space > max_chars * 0.6 else cut
+    return phrase.strip()
+
+
 def _derive_short_description(product: dict, options: dict, resolved: dict) -> str:
     desc = resolved.get("description", "") or product.get("description", "")
     text = _strip_html(desc)
@@ -383,6 +427,7 @@ _LOGIC_GENERATORS: dict[str, Any] = {
     "image_names":       _derive_image_names,
     "short_description": _derive_short_description,
     "meta_description":  _derive_meta_description,
+    "focus_keyword":     _derive_focus_keyword,
 }
 
 _DERIVE_GENERATORS: dict[str, Any] = {
@@ -392,6 +437,7 @@ _DERIVE_GENERATORS: dict[str, Any] = {
     "image_names":       _derive_image_names,
     "short_description": _derive_short_description,
     "meta_description":  _derive_meta_description,
+    "focus_keyword":     _derive_focus_keyword,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

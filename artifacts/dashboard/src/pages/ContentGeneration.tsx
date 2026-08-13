@@ -19,6 +19,7 @@ const FIELD_LIST = [
   "slug",
   "meta_title",
   "meta_description",
+  "focus_keyword",
   "tags",
   "image_alt",
   "image_names",
@@ -34,6 +35,7 @@ const FIELD_LABELS: Record<string, string> = {
   image_names: "Image File Names",
   short_description: "Short Description",
   meta_description: "Meta Description",
+  focus_keyword: "Focus Keyword (Yoast/RankMath)",
 };
 
 const FIELD_DEPS: Record<string, string[]> = {
@@ -43,6 +45,7 @@ const FIELD_DEPS: Record<string, string[]> = {
   image_names: ["slug"],
   short_description: ["description"],
   meta_description: ["description"],
+  focus_keyword: ["title"],
 };
 
 const FIELD_DEFAULT_MODE: Record<string, string> = {
@@ -55,6 +58,7 @@ const FIELD_DEFAULT_MODE: Record<string, string> = {
   image_names: "derive",
   short_description: "derive",
   meta_description: "derive",
+  focus_keyword: "derive",
 };
 
 const MODE_OPTIONS = ["logic", "ai", "derive"] as const;
@@ -189,6 +193,8 @@ const DEFAULT_CONFIG: GenerateConfig = {
             ? { max_chars: 70 }
             : f === "short_description"
             ? { max_chars: 400 }
+            : f === "focus_keyword"
+            ? { max_chars: 60 }
             : {},
       },
     ])
@@ -229,6 +235,7 @@ const FIELD_RULES: Record<string, string[]> = {
   short_description: ["Max 400 characters", "Plain text (no HTML)"],
   meta_title: ["Max 60 characters", 'Format: "Title | Brand"'],
   meta_description: ["80 – 160 characters", "Ends with a call-to-action phrase"],
+  focus_keyword: ["Max 60 characters", "2–5 word search phrase", "Written to _yoast_wpseo_focuskw and rank_math_focus_keyword"],
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -502,7 +509,8 @@ function FieldConfigPanel({
           )}
 
           {(field === "meta_title" || field === "meta_description" || field === "slug" ||
-            field === "image_alt" || field === "short_description" || field === "image_names") && (
+            field === "image_alt" || field === "short_description" || field === "image_names" ||
+            field === "focus_keyword") && (
             <div>
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Characters</label>
               <input
@@ -512,7 +520,8 @@ function FieldConfigPanel({
                   field === "meta_description" ? 160 :
                   field === "slug" ? 70 :
                   field === "image_alt" ? 125 :
-                  field === "short_description" ? 400 : 70
+                  field === "short_description" ? 400 :
+                  field === "focus_keyword" ? 60 : 70
                 )}
                 min={20} max={500}
                 onChange={(e) => setOpt({ max_chars: Number(e.target.value) })}

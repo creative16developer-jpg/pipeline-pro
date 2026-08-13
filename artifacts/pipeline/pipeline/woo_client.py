@@ -250,6 +250,14 @@ async def create_product(store: Store, product_data: dict) -> dict:
             {"key": "_yoast_wpseo_metadesc", "value": meta_desc},
             {"key": "rank_math_description", "value": meta_desc},
         ]
+    # Third piece of a basic Yoast/RankMath setup, alongside SEO title and
+    # meta description above -- both already handled, this was the gap.
+    focus_kw = (product_data.get("focus_keyword", "") or "").strip()
+    if focus_kw:
+        meta_entries += [
+            {"key": "_yoast_wpseo_focuskw", "value": focus_kw},
+            {"key": "rank_math_focus_keyword", "value": focus_kw},
+        ]
     if meta_entries:
         payload["meta_data"] = meta_entries
 
@@ -363,6 +371,14 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
         meta_entries += [
             {"key": "_yoast_wpseo_metadesc", "value": meta_desc},
             {"key": "rank_math_description", "value": meta_desc},
+        ]
+    # Third piece of a basic Yoast/RankMath setup, alongside SEO title and
+    # meta description above -- both already handled, this was the gap.
+    focus_kw = (product_data.get("focus_keyword", "") or "").strip()
+    if focus_kw:
+        meta_entries += [
+            {"key": "_yoast_wpseo_focuskw", "value": focus_kw},
+            {"key": "rank_math_focus_keyword", "value": focus_kw},
         ]
     if meta_entries:
         payload["meta_data"] = meta_entries

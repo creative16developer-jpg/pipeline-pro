@@ -950,6 +950,7 @@ async def _run_upload(db, job):
                 "slug":              product.slug or "",
                 "meta_title":        product.meta_title or "",
                 "meta_description":  product.meta_description or "",
+                "focus_keyword":     product.focus_keyword or "",
                 "tags":              product.tags or "",
                 "image_alt":         product.image_alt or "",
                 # Real quantity when we have it (Sunsky's stockNum, or an
