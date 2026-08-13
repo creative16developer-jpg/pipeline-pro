@@ -520,6 +520,26 @@ async def run_field(
         try:
             value = await _run_ai_with_retry(field, product, ai_provider, ai_model, options)
             source = f"ai:{ai_provider}"
+
+            # Sanity check independent of prompt-following: an AI title
+            # response that's suspiciously short is worse than no AI
+            # response at all -- it's a real, silent quality failure that
+            # doesn't raise an exception, so it slips past the normal
+            # try/except fallback entirely. Confirmed live: gemini-2.5-flash
+            # returned single-word/abbreviation fragments ("Skins", "MagCa",
+            # "S26C") for a "concise title" prompt, on a genuinely full raw
+            # product name -- not a code bug, just a model output-quality
+            # issue an improved prompt alone can't fully guarantee against.
+            # Any AI-mode field with a min_chars rule gets this same net;
+            # falls through to the same fallback_strategy handling below.
+            min_ok_chars = rules_preview.get("min_chars") if (rules_preview := VALIDATORS.get(field, {})) else None
+            if min_ok_chars is None and field == "title":
+                min_ok_chars = 15  # well below any real title, well above a bare fragment
+            if min_ok_chars and len(value.strip()) < min_ok_chars:
+                raise RuntimeError(
+                    f"AI response suspiciously short ({len(value.strip())} chars, "
+                    f"expected >= {min_ok_chars}): {value!r}"
+                )
         except Exception as ai_err:
             error_msg = str(ai_err)
             logger.warning(f"[{field}] AI failed, applying '{fallback_strategy}' fallback: {ai_err}")
