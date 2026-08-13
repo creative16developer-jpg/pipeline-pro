@@ -297,9 +297,64 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             if url:
                 images_by_product.setdefault(img.product_id, []).append(url)
 
+    # Attributes and resolved category name — same data we've been checking
+    # via raw SQL all session, now visible directly in this review card
+    # instead. Client's own original feedback: "no clarity regarding what
+    # is being uploaded... like Baselinker, where you can see every detail
+    # of every product." One batched query each, not per-product, to keep
+    # this endpoint fast for a full batch.
+    from models.models import ProductEnrichAttr, SunskyCategoryMapping as _SCM_CD
+    attrs_by_product: dict[int, list[dict]] = {}
+    if product_ids:
+        attr_rows = (
+            await db.execute(
+                select(ProductEnrichAttr)
+                .where(
+                    ProductEnrichAttr.product_id.in_(product_ids),
+                    ProductEnrichAttr.pipeline_job_id == pl_id,
+                )
+                .order_by(ProductEnrichAttr.product_id, ProductEnrichAttr.attribute)
+            )
+        ).scalars().all()
+        for a in attr_rows:
+            attrs_by_product.setdefault(a.product_id, []).append({
+                "attribute": a.attribute,
+                "raw_value": a.raw_value or "",
+                "source": a.source,
+                "flagged": a.flagged,
+            })
+
+    by_name: dict[str, str] = {}
+    try:
+        cat_id_set = {p.category_id for p in products if p.category_id}
+        if cat_id_set:
+            map_rows = (
+                await db.execute(
+                    select(_SCM_CD).where(_SCM_CD.store_id == pl.store_id)
+                )
+            ).scalars().all()
+            # sunsky_category_mappings is keyed by resolved category NAME,
+            # not id -- so this only gives us a name if a product's raw
+            # category name happens to match a saved mapping's key exactly.
+            # Simple and always-correct: surface the mapped WooCommerce
+            # category name when we can find one, else fall back to
+            # showing the raw Sunsky category name so it's still visible,
+            # not blank.
+            by_name = {m.sunsky_cat.strip().lower(): m.woo_cat_name for m in map_rows if m.woo_cat_name}
+    except Exception:
+        pass
+
     product_list = []
     for p in products:
         has_description = bool(p.description)
+        raw = p.raw_data or {}
+        raw_cat_name = ""
+        for _f in ("catName", "categoryName", "category_name", "cat_name"):
+            _v = raw.get(_f)
+            if _v and isinstance(_v, str) and _v.strip():
+                raw_cat_name = _v.strip()
+                break
+        resolved_woo_cat = by_name.get(raw_cat_name.lower()) if raw_cat_name else None
         product_list.append({
             "id": p.id,
             "sku": p.sku,
@@ -311,6 +366,9 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             "image_count": p.image_count,
             "image_urls": images_by_product.get(p.id, []),
             "category_id": p.category_id or "",
+            "category_name": resolved_woo_cat or raw_cat_name or "",
+            "category_mapped": bool(resolved_woo_cat),
+            "attributes": attrs_by_product.get(p.id, []),
             "error_message": p.error_message or "",
             "content_source": p.content_source or {},
             "needs_attention": not has_description or bool(p.error_message),

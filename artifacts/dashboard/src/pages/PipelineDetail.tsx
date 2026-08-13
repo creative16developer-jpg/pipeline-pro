@@ -737,6 +737,49 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                           </div>
                         </div>
                       )}
+
+                      {/* Category — what the client originally asked for:
+                          visibility into every detail before upload,
+                          same idea as Baselinker's per-product view. */}
+                      <div>
+                        <label className="block text-[12px] font-medium text-foreground/70 mb-1">Category</label>
+                        {p.category_name ? (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm">{p.category_name}</span>
+                            {p.category_mapped ? (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">mapped</span>
+                            ) : (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20" title="Sunsky category name shown — no saved WooCommerce mapping found yet">unmapped</span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-sm text-muted-foreground italic">No category resolved</span>
+                        )}
+                      </div>
+
+                      {/* Attributes — same data checked via SQL all session,
+                          now visible directly here instead. */}
+                      {p.attributes && p.attributes.length > 0 && (
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Attributes</label>
+                          <div className="flex flex-wrap gap-1.5">
+                            {p.attributes.map((a: any, idx: number) => (
+                              <span
+                                key={idx}
+                                title={`source: ${a.source}`}
+                                className={cn(
+                                  "text-[11px] px-2 py-1 rounded-lg border",
+                                  a.flagged || !a.raw_value
+                                    ? "bg-red-500/5 border-red-500/20 text-red-400/90"
+                                    : "bg-emerald-500/5 border-emerald-500/20 text-emerald-400/90"
+                                )}
+                              >
+                                {a.attribute}: {a.raw_value || "not found"}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <div className="mt-3 pt-3 border-t border-border flex gap-2">
                       <button onClick={() => setExcluded(prev => { const s = new Set(prev); s.add(p.id); return s; })}
