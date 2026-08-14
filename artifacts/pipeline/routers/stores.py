@@ -137,7 +137,15 @@ async def create_store_category(store_id: int, body: NewCategoryRequest, db: Asy
     db.add(cat)
     await db.commit()
     await db.refresh(cat)
-    return {"id": cat.id, "woo_id": cat.woo_id, "name": cat.name, "slug": cat.slug}
+    # NOTE: "id" here MUST be the real WooCommerce category ID (cat.woo_id),
+    # not the local DB primary key (cat.id) — this matches the convention
+    # used by GET /pipelines/{id}/map-data's woo_options, which the frontend
+    # treats as interchangeable with this endpoint's response. Returning
+    # cat.id previously caused newly-created categories to save the local
+    # DB row number into SunskyCategoryMapping.woo_cat_id, which WooCommerce
+    # silently rejects as an unrecognized category ID at Upload/Sync —
+    # products uploaded with no category applied.
+    return {"id": cat.woo_id, "db_id": cat.id, "woo_id": cat.woo_id, "name": cat.name, "slug": cat.slug}
 
 
 @router.get("/{store_id}/woo-attributes")
