@@ -2032,6 +2032,16 @@ async def _run_sync(db, job):
                         try:
                             from sqlalchemy.dialects.postgresql import insert as _pg_insert
                             from models.models import SunskyCategoryMapping as _SCM_SYNC
+                            import json as _json_local  # local alias -- avoids
+                            # UnboundLocalError: this same enclosing function has
+                            # its own later "import json" elsewhere, which makes
+                            # Python treat the bare "json" name as local to the
+                            # WHOLE function regardless of execution order.
+                            # Confirmed live: "cannot access local variable
+                            # 'json' where it is not associated with a value"
+                            # fired here every time, silently swallowed by this
+                            # try/except -- meaning this fix never actually ran
+                            # even once since it was first deployed.
                             _cat_name = (bfs_meta.get(cat_id, {}).get("name") or "").strip()
                             if _cat_name:
                                 _stmt = _pg_insert(_SCM_SYNC).values(
@@ -2040,7 +2050,7 @@ async def _run_sync(db, job):
                                     sunsky_cat_id=cat_id,
                                     woo_cat_id=woo_id,
                                     woo_cat_name=_cat_name,
-                                    woo_cats_json=json.dumps([{"id": woo_id, "name": _cat_name}]),
+                                    woo_cats_json=_json_local.dumps([{"id": woo_id, "name": _cat_name}]),
                                     primary_woo_cat_id=woo_id,
                                 ).on_conflict_do_update(
                                     index_elements=["store_id", "sunsky_cat"],
@@ -2048,7 +2058,7 @@ async def _run_sync(db, job):
                                         "sunsky_cat_id": cat_id,
                                         "woo_cat_id": woo_id,
                                         "woo_cat_name": _cat_name,
-                                        "woo_cats_json": json.dumps([{"id": woo_id, "name": _cat_name}]),
+                                        "woo_cats_json": _json_local.dumps([{"id": woo_id, "name": _cat_name}]),
                                         "primary_woo_cat_id": woo_id,
                                         "updated_at": datetime.now(timezone.utc),
                                     },
