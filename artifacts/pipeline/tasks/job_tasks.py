@@ -2175,6 +2175,29 @@ async def _run_sync(db, job):
     if do_attributes:
         await _log(db, job.id, LogLevel.info, "── Step B: Syncing product attributes ──")
 
+        # Same protected-name guard as the upload-time attribute step (see
+        # that commit for the full story) -- Sunsky's raw modelLabel/
+        # optionList variant dump can collide with a deliberately configured
+        # attribute name (confirmed live again here: 'Color' attribute
+        # showing device-compatibility strings like 'For Samsung Galaxy
+        # S24/S25 5G' instead of a real color). This Step B is a completely
+        # separate implementation from the one that fix touched -- it never
+        # got the same protection, so the exact same bug resurfaced here.
+        p2_protected_attr_names_b: set[str] = set()
+        try:
+            from models.models import AIExtractionRule as _AIER_B, AttributeMappingRule as _AMR_B
+            _rule_rows_b = (await db.execute(select(_AIER_B.woo_attr_name))).all()
+            p2_protected_attr_names_b |= {r[0].strip().lower() for r in _rule_rows_b if r[0]}
+            _map_rows_b = (await db.execute(
+                select(_AMR_B.woo_attr_name).where(
+                    (_AMR_B.store_id == job.store_id) | (_AMR_B.store_id.is_(None))
+                )
+            )).all()
+            p2_protected_attr_names_b |= {r[0].strip().lower() for r in _map_rows_b if r[0]}
+        except Exception as _pn_e_b:
+            await _log(db, job.id, LogLevel.warn,
+                       f"  Could not load protected attribute names: {_pn_e_b}")
+
         # Pre-load all WooCommerce attributes: name_lower → {id, slug}
         existing_attrs = await woo_client.get_all_woo_attributes(store)
         attr_lookup: dict[str, dict] = {a["name"].lower(): a for a in existing_attrs}
@@ -2274,18 +2297,24 @@ async def _run_sync(db, job):
             option_values = [v for v in option_values if v]
 
             if model_label and option_values:
-                attr = await get_or_create_attr(model_label)
-                if attr:
-                    for val in option_values:
-                        await get_or_create_term(attr["id"], val)
-                    woo_attrs.append({
-                        "id": attr["id"],
-                        "name": attr["name"],
-                        "options": option_values[:10],
-                        "visible": True,
-                        "variation": True,
-                    })
-                    attrs_synced += 1
+                if model_label.strip().lower() in p2_protected_attr_names_b:
+                    await _log(db, job.id, LogLevel.info,
+                               f"  {prod.sku}: skipping Sunsky's raw '{model_label}' variant "
+                               f"dump ({len(option_values)} values) — a rule already owns this "
+                               f"attribute name, protecting its correctly-extracted value")
+                else:
+                    attr = await get_or_create_attr(model_label)
+                    if attr:
+                        for val in option_values:
+                            await get_or_create_term(attr["id"], val)
+                        woo_attrs.append({
+                            "id": attr["id"],
+                            "name": attr["name"],
+                            "options": option_values[:10],
+                            "visible": True,
+                            "variation": True,
+                        })
+                        attrs_synced += 1
 
             # ── Spec attributes: paramsTable HTML key-value pairs ──
             params_html = str(raw.get("paramsTable") or "")
@@ -2294,6 +2323,8 @@ async def _run_sync(db, job):
                 for spec_key, spec_val in list(spec_pairs.items())[:15]:
                     if len(spec_key) > 60 or len(spec_val) > 100:
                         continue
+                    if spec_key.strip().lower() in p2_protected_attr_names_b:
+                        continue  # same collision risk as the modelLabel case above
                     attr = await get_or_create_attr(spec_key)
                     if attr:
                         await get_or_create_term(attr["id"], spec_val)
