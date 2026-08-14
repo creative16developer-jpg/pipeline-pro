@@ -89,6 +89,15 @@ def _extract_sunsky_cat(raw: dict, name_map: Optional[dict[str, str]] = None) ->
     return cat_id
 
 
+def _extract_sunsky_cat_id(raw: dict) -> str:
+    """Raw numeric Sunsky category ID from a product's raw_data — the stable
+    match key sunsky_category_mappings.sunsky_cat_id exists for (see model
+    docstring). Mirrors job_tasks.py's _get_sunsky_cat_id so Category Review,
+    Content Review, and Sync all agree on the same value for the same product.
+    """
+    return str(raw.get("categoryId") or raw.get("catId") or raw.get("category_id") or "").strip()
+
+
 def _mapping_woo_cats(m: SunskyCategoryMapping) -> list[dict]:
     """Return list of {id, name} dicts from a saved mapping row."""
     if m.woo_cats_json:
@@ -251,6 +260,25 @@ async def map_confirm(
     if pl.status != "review":
         raise HTTPException(status_code=400, detail=f"Pipeline is not in review state (current: {pl.status})")
 
+    # Build resolved-name → raw Sunsky category ID, from this pipeline's own
+    # products, so each mapping row can be saved with sunsky_cat_id filled in
+    # immediately rather than staying NULL until Sync's Step A runs and
+    # backfills it after the fact. Without this, Content Review's display
+    # (which matches by ID, see pipeline.py's content-data) can't find a
+    # mapping that was, in fact, just saved correctly.
+    from services.enrich_service import get_effective_category_name_map
+    category_name_map = await get_effective_category_name_map(db)
+    name_to_cat_id: dict[str, str] = {}
+    batch_products = (
+        await db.execute(select(Product).where(Product.fetch_job_id == pl.fetch_job_id))
+    ).scalars().all()
+    for p in batch_products:
+        raw = p.raw_data or {}
+        resolved_name = _extract_sunsky_cat(raw, category_name_map)
+        cat_id = _extract_sunsky_cat_id(raw)
+        if resolved_name and cat_id:
+            name_to_cat_id.setdefault(resolved_name.strip().lower(), cat_id)
+
     for entry in req.mappings:
         if not entry.sunsky_cat or not entry.woo_cats:
             continue
@@ -261,6 +289,7 @@ async def map_confirm(
 
         cats_json = json.dumps([{"id": c.id, "name": c.name} for c in entry.woo_cats])
         profile_id = entry.profile_id or None
+        sunsky_cat_id = name_to_cat_id.get(entry.sunsky_cat.strip().lower())
 
         if entry.save_as_rule:
             stmt = (
@@ -268,6 +297,7 @@ async def map_confirm(
                 .values(
                     store_id=pl.store_id,
                     sunsky_cat=entry.sunsky_cat,
+                    sunsky_cat_id=sunsky_cat_id,
                     woo_cat_id=primary_cat.id if primary_cat else None,
                     woo_cat_name=primary_cat.name if primary_cat else None,
                     woo_cats_json=cats_json,
@@ -280,6 +310,7 @@ async def map_confirm(
                 .on_conflict_do_update(
                     index_elements=["store_id", "sunsky_cat"],
                     set_={
+                        "sunsky_cat_id":      sunsky_cat_id,
                         "woo_cat_id":         primary_cat.id if primary_cat else None,
                         "woo_cat_name":       primary_cat.name if primary_cat else None,
                         "woo_cats_json":      cats_json,
@@ -298,6 +329,7 @@ async def map_confirm(
                 .values(
                     store_id=pl.store_id,
                     sunsky_cat=entry.sunsky_cat,
+                    sunsky_cat_id=sunsky_cat_id,
                     woo_cat_id=primary_cat.id if primary_cat else None,
                     woo_cat_name=primary_cat.name if primary_cat else None,
                     woo_cats_json=cats_json,
@@ -310,6 +342,7 @@ async def map_confirm(
                 .on_conflict_do_update(
                     index_elements=["store_id", "sunsky_cat"],
                     set_={
+                        "sunsky_cat_id":      sunsky_cat_id,
                         "woo_cats_json":      cats_json,
                         "primary_woo_cat_id": primary_id,
                         "woo_cat_id":         primary_cat.id if primary_cat else None,

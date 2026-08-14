@@ -327,7 +327,9 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             })
 
     by_name: dict[str, str] = {}
+    by_cat_id: dict[str, str] = {}
     sunsky_name_by_product: dict[int, str] = {}
+    sunsky_id_by_product: dict[int, str] = {}
     try:
         from services.enrich_service import extract_sunsky_category
         # Deliberately NOT using get_effective_category_name_map() here --
@@ -347,7 +349,9 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         starred_rows = (await db.execute(_sel_star(StarredSunskyCategory))).scalars().all()
         starred_only_map = {r.cat_id: r.name for r in starred_rows}
         for p in products:
-            sunsky_name_by_product[p.id] = extract_sunsky_category(p.raw_data or {}, starred_only_map)
+            raw = p.raw_data or {}
+            sunsky_name_by_product[p.id] = extract_sunsky_category(raw, starred_only_map)
+            sunsky_id_by_product[p.id] = str(raw.get("categoryId") or raw.get("catId") or raw.get("category_id") or "").strip()
     except Exception as _name_e:
         logger.warning(f"[content-data] category name resolution failed: {_name_e}")
 
@@ -374,6 +378,17 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             # marker (we don't have the real WooCommerce name to show) and
             # let the per-product loop fall back to the Sunsky category
             # name, which is still accurate and informative either way.
+            #
+            # by_cat_id is now the PRIMARY lookup: sunsky_cat_id is a stable
+            # numeric ID that doesn't depend on which of the several category
+            # NAME resolvers (starred-only here vs. starred+live-fallback in
+            # Category Review vs. Sync's own BFS walk) happened to produce
+            # which string. Matching by name (by_name) is kept only as a
+            # fallback for mapping rows saved before sunsky_cat_id existed.
+            by_cat_id = {
+                m.sunsky_cat_id: (m.woo_cat_name or True)
+                for m in map_rows if m.woo_cat_id and m.sunsky_cat_id
+            }
             by_name = {
                 m.sunsky_cat.strip().lower(): (m.woo_cat_name or True)
                 for m in map_rows if m.woo_cat_id
@@ -388,7 +403,10 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     for p in products:
         has_description = bool(p.description)
         sunsky_cat_name = sunsky_name_by_product.get(p.id, "")
-        _mapped_val = by_name.get(sunsky_cat_name.strip().lower()) if sunsky_cat_name else None
+        sunsky_cat_id = sunsky_id_by_product.get(p.id, "")
+        _mapped_val = by_cat_id.get(sunsky_cat_id) if sunsky_cat_id else None
+        if _mapped_val is None and sunsky_cat_name:
+            _mapped_val = by_name.get(sunsky_cat_name.strip().lower())
         resolved_woo_cat = _mapped_val if isinstance(_mapped_val, str) else None
         is_mapped = _mapped_val is not None
         product_list.append({
