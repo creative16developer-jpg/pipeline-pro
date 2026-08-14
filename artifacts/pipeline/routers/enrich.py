@@ -197,10 +197,21 @@ async def get_enrich_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
     result = []
     for pid, attr_list in by_product.items():
         p = products.get(pid)
+        pname = p.name if p else f"#{pid}"
+        psku  = (p.site_sku or p.sku) if p else ""
         result.append({
+            # NOTE: two live frontend consumers of this endpoint expect two
+            # different field-name conventions (PipelineDetail.tsx wants
+            # id/name/sku; Pipelines.tsx wants product_id/product_name/
+            # product_sku). Sending both until the frontend duplication is
+            # consolidated onto one convention — see handoff doc "major
+            # findings" for the same pattern elsewhere in this codebase.
+            "id":           pid,
+            "name":         pname,
+            "sku":          psku,
             "product_id":   pid,
-            "product_name": p.name if p else f"#{pid}",
-            "product_sku":  (p.site_sku or p.sku) if p else "",
+            "product_name": pname,
+            "product_sku":  psku,
             "attrs":        attr_list,
         })
 
