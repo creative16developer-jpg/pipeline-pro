@@ -638,7 +638,11 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const handleUploadAll = async () => {
     setSaving(true);
     try {
-      const r = await fetch(`/api/pipelines/${pl.id}/content-confirm`, { method: "POST" });
+      const r = await fetch(`/api/pipelines/${pl.id}/content-confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ excluded_product_ids: Array.from(excluded) }),
+      });
       if (!r.ok) throw new Error(await r.text());
       toast({ title: "Upload started", description: "Products are being uploaded to WooCommerce…" });
       onDone();

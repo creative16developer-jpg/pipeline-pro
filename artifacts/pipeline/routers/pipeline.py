@@ -440,8 +440,14 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
 
 # ── Content Confirm (Review B → start upload) ─────────────────────────────────
 
+from pydantic import BaseModel as _BaseModel
+
+class ContentConfirmRequest(_BaseModel):
+    excluded_product_ids: list[int] = []
+
+
 @router.post("/{pl_id}/content-confirm")
-async def content_confirm(pl_id: int, db: AsyncSession = Depends(get_db)):
+async def content_confirm(pl_id: int, body: ContentConfirmRequest = ContentConfirmRequest(), db: AsyncSession = Depends(get_db)):
     """Confirm content review and start the upload step."""
     pl = await db.get(PipelineJob, pl_id)
     if not pl:
@@ -470,6 +476,27 @@ async def content_confirm(pl_id: int, db: AsyncSession = Depends(get_db)):
         .where(ProductEnrichAttr.pipeline_job_id == pl.id)
         .values(confirmed=True)
     )
+
+    # "Exclude from upload" in Content Review previously did NOTHING on the
+    # backend -- it was local React state (`excluded` Set in
+    # ContentReviewSection) that only filtered what displayed in that one
+    # browser tab. Upload All sent no body at all, and _run_upload selects
+    # products purely by status + fetch_job_id, with zero awareness of
+    # which products the operator had flagged. Confirmed live: two
+    # "LC.IMEEKE" products marked excluded were uploaded anyway, landing in
+    # WooCommerce as broken Draft/Uncategorized/0-stock listings.
+    #
+    # Fix: persist the excluded IDs into this pipeline's own config (no
+    # schema change / migration needed -- PipelineJob.config is already a
+    # JSON column) under upload_config, which _resume_pipeline already
+    # merges into the Upload Job's own config verbatim. _run_upload reads
+    # it from there and excludes those product IDs from its query.
+    if body.excluded_product_ids:
+        pl_cfg = dict(pl.config or {})
+        upload_cfg = dict(pl_cfg.get("upload_config", {}))
+        upload_cfg["excluded_product_ids"] = body.excluded_product_ids
+        pl_cfg["upload_config"] = upload_cfg
+        pl.config = pl_cfg
 
     # Set back to "review" so _resume_pipeline passes its guard check
     # (_resume_pipeline handles the running/upload transition itself)

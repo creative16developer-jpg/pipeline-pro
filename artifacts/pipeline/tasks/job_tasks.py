@@ -798,6 +798,12 @@ async def _run_upload(db, job):
 
     cfg = job.config or {}
     skip_images = cfg.get("skip_images", False)
+    # See routers/pipeline.py content_confirm -- Content Review's "Exclude
+    # from upload" checkbox previously had zero effect on the backend.
+    # These IDs, when present, come from the operator explicitly excluding
+    # specific products before confirming, and must never be uploaded even
+    # though they'd otherwise match base_filter below.
+    excluded_product_ids: set[int] = set(cfg.get("excluded_product_ids") or [])
     limit = cfg.get("limit", 200)
 
     # ── Resolve which products to upload, scoped by source job
@@ -852,6 +858,11 @@ async def _run_upload(db, job):
             ),
             Product.woo_product_id.is_(None),
         ]
+
+    if excluded_product_ids:
+        base_filter.append(Product.id.notin_(excluded_product_ids))
+        await _log(db, job.id, LogLevel.info,
+                   f"  {len(excluded_product_ids)} product(s) excluded by operator — will not be uploaded")
 
     if fetch_job_id:
         stamped_filter = base_filter + [Product.fetch_job_id == fetch_job_id]
