@@ -582,7 +582,10 @@ export default function Pipeline() {
     }
   };
 
-  const isRunDisabled = running || fetching || !storeId || (productSource !== "sunsky" && !fetchJobId);
+  const isRunDisabled =
+    running || fetching || !storeId ||
+    (productSource === "skus" && !skusInput.trim()) ||
+    (productSource !== "sunsky" && productSource !== "skus" && !fetchJobId);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Render
