@@ -600,6 +600,24 @@ async def run_field(
     ai_model = gs.get("ai_model") or None
     fallback_strategy = gs.get("fallback_strategy", "safe")
 
+    # Client feedback: "The logic option in different fields catch wrong/
+    # unwanted data... I think we should lock the specs table for using
+    # in any mode – logic/ai/derive." Every generator (logic and derive)
+    # and the AI prompt builder (_build_product_context/_extract_specs in
+    # ai_generator.py) all read the SAME product['raw_data']['paramsTable']
+    # field -- so stripping it once here, on a local copy, before any mode
+    # branch runs, covers all three modes with one change instead of
+    # editing every individual generator function separately (which is
+    # exactly the kind of per-path drift this whole codebase has
+    # repeatedly suffered from).
+    if gs.get("lock_specs_table", False):
+        product = dict(product)  # shallow copy -- don't mutate the caller's dict
+        for raw_key in ("raw_data", "rawData"):
+            if isinstance(product.get(raw_key), dict) and "paramsTable" in product[raw_key]:
+                raw_copy = dict(product[raw_key])
+                raw_copy["paramsTable"] = ""
+                product[raw_key] = raw_copy
+
     value = ""
     source = "logic"
     error_msg: str | None = None

@@ -97,6 +97,7 @@ interface GlobalSettings {
   max_calls_per_product: number;
   keyword_strategy: string;
   fallback_strategy: string;
+  lock_specs_table: boolean;
 }
 
 interface ProviderInfo {
@@ -167,6 +168,7 @@ const DEFAULT_CONFIG: GenerateConfig = {
     max_calls_per_product: 3,
     keyword_strategy: "auto",
     fallback_strategy: "safe",
+    lock_specs_table: false,
   },
   fields: Object.fromEntries(
     FIELD_LIST.map((f) => [
@@ -1040,6 +1042,17 @@ export default function ContentGeneration() {
                 <Toggle
                   checked={config.globalSettings.ai_enabled}
                   onChange={(v) => patchGlobal({ ai_enabled: v })}
+                />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-border/40">
+                <div>
+                  <p className="text-sm font-medium">Lock Specs Table</p>
+                  <p className="text-xs text-muted-foreground">Block the raw Sunsky specs table from every mode (AI, Logic, Derive)</p>
+                </div>
+                <Toggle
+                  checked={config.globalSettings.lock_specs_table}
+                  onChange={(v) => patchGlobal({ lock_specs_table: v })}
                 />
               </div>
 
