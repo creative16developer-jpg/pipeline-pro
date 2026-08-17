@@ -178,7 +178,7 @@ const DEFAULT_CONFIG: GenerateConfig = {
           f === "title"
             ? { max_chars: 120 }
             : f === "description"
-            ? { structure: ["intro", "features", "benefits", "compatibility", "closing"], keyword_source: "auto" }
+            ? { structure: ["intro", "features", "benefits", "compatibility", "closing"], keyword_source: "auto", max_chars: 2000 }
             : f === "slug"
             ? { max_chars: 70, ensure_unique: true }
             : f === "meta_title"
@@ -409,6 +409,17 @@ function FieldConfigPanel({
           {/* ── Field-specific options ────────────────────────────────────── */}
           {field === "description" && (
             <>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Max Characters</label>
+                <input
+                  type="number"
+                  value={opt.max_chars ?? 2000}
+                  min={200} max={5000}
+                  onChange={(e) => setOpt({ max_chars: Number(e.target.value) })}
+                  className={cn(inputCls, "mt-2")}
+                />
+                <p className="text-xs text-muted-foreground mt-1">Counts visible text only, not HTML tags. Trims by whole paragraph/list item, never mid-word.</p>
+              </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Content Structure</label>
                 <div className="mt-2 space-y-2">

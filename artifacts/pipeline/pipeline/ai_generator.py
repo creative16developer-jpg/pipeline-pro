@@ -115,7 +115,7 @@ def _build_prompt(field: str, product: dict, options: dict) -> str:
     format_args = {
         "ctx": ctx,
         "field": field,
-        "max_chars": options.get("max_chars", 120 if field == "title" else 60 if field == "meta_title" else 155),
+        "max_chars": options.get("max_chars", 120 if field == "title" else 60 if field == "meta_title" else 2000 if field == "description" else 155),
         "max_words": options.get("max_words", 30),
         "max_tags": options.get("max_tags", 8),
         "structure": ", ".join(options.get("structure", ["intro", "features", "benefits", "compatibility"])),

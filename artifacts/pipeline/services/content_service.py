@@ -88,7 +88,14 @@ VALIDATORS: dict[str, dict] = {
     "tags":              {"non_empty": True, "max_items": 3},
     "image_alt":         {"non_empty": True, "max_chars": 125},
     "image_names":       {"non_empty": True, "max_chars": 70},
-    "description":       {"min_words": 50, "max_words": 300,
+    # max_chars default here is deliberately generous (2000) -- Description
+    # had NO configurable length limit at all before this (client feedback:
+    # "Description need to have an option for Max Characters"), only a
+    # hardcoded "under 200 words" instruction inside the AI prompt that
+    # nothing on the backend actually enforced. The operator's own
+    # Settings -> Content Generation value (options.max_chars) always wins
+    # over this default -- see the max_chars lookup below.
+    "description":       {"min_words": 50, "max_words": 300, "max_chars": 2000,
                           "banned_words": ["the best", "100%", "guarantee"]},
     "short_description": {"non_empty": True, "max_chars": 400},
     "meta_title":        {"non_empty": True, "max_chars": 60},
@@ -106,6 +113,58 @@ VALIDATORS: dict[str, dict] = {
 def _strip_html(text: str) -> str:
     text = html.unescape(text)
     return re.sub(r"<[^>]+>", "", text).strip()
+
+
+def _truncate_html_blocks(value: str, max_chars: int) -> str:
+    """Shorten HTML content to at most max_chars of VISIBLE text, by
+    dropping whole trailing top-level block elements (</p>, </ul>, </ol>) --
+    never by slicing raw characters, which would risk cutting a tag in
+    half and producing broken HTML. Used for the 'description' field only
+    (the one generated field that's actual HTML, not plain text).
+
+    If even the first block already exceeds max_chars on its own, that
+    block is kept whole rather than mangled -- matching the client's
+    'never truncate mid-word' request: a slightly-over-budget complete
+    block beats a broken one.
+    """
+    if len(_strip_html(value)) <= max_chars:
+        return value
+
+    # Split only on TOP-LEVEL block-closing tags (</p>, </ul>, </ol>).
+    # </li> is deliberately excluded -- <li> elements are never top-level
+    # in this generator's output, always nested inside <ul>/<ol>, so
+    # treating </li> as a split boundary would let a kept block end with
+    # <ul> opened but not yet closed by its later </ul>. The whole
+    # <ul>...</ul> (all its <li> children together) is kept or dropped as
+    # one atomic unit instead.
+    parts = re.split(r"(</(?:p|ul|ol)>)", value)
+    blocks: list[str] = []
+    buf = ""
+    for part in parts:
+        buf += part
+        if re.fullmatch(r"</(?:p|ul|ol)>", part):
+            blocks.append(buf)
+            buf = ""
+    if buf:
+        blocks.append(buf)
+
+    kept: list[str] = []
+    running_len = 0
+    for block in blocks:
+        block_text_len = len(_strip_html(block))
+        if not kept:
+            # Always keep at least one block, even if it alone exceeds
+            # max_chars -- an empty description is worse than a slightly
+            # long one, and this mirrors the "show the last word/block in
+            # full rather than cut it" rule from client feedback.
+            kept.append(block)
+            running_len += block_text_len
+            continue
+        if running_len + block_text_len > max_chars:
+            break
+        kept.append(block)
+        running_len += block_text_len
+    return "".join(kept).strip()
 
 
 def _slugify(text: str) -> str:
@@ -191,6 +250,30 @@ def _validate(field: str, value: str, rules: dict) -> tuple[bool, str]:
 # Logic generators
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _truncate_no_mid_word(value: str, max_chars: int, boundary: str = " ") -> str:
+    """Never cut a word (or hyphen-token, for slugs) in half: if the cut
+    point at max_chars doesn't already land on `boundary`, extend forward
+    to the next occurrence of it instead of chopping mid-word. Matches
+    client feedback: 'priority should be given to displaying the last
+    word in full, even if it exceeds the setting by a few characters.'
+
+    Used by every field generator below instead of each doing its own
+    (previously inconsistent, often mid-word/ellipsis) truncation --
+    confirmed live that _logic_title's old `name[:max_chars-1] + "…"`
+    style cuts produced things like 'Premium Wireless Bluetooth He…',
+    chopping "Headphones" in half, on every run, regardless of the
+    canonical word-boundary-safe logic added to the shared enforcement
+    step in run_field() -- because the value was already <= max_chars by
+    the time it got there, having been pre-truncated (badly) here first.
+    """
+    if len(value) <= max_chars:
+        return value
+    if value[max_chars] == boundary:
+        return value[:max_chars].rstrip(boundary)
+    next_b = value.find(boundary, max_chars)
+    return (value if next_b == -1 else value[:next_b]).rstrip(boundary)
+
+
 def _logic_title(product: dict, options: dict, resolved: dict) -> str:
     csv_title = (product.get("csv_title") or "").strip()
     if csv_title:
@@ -201,7 +284,7 @@ def _logic_title(product: dict, options: dict, resolved: dict) -> str:
         name = name[0].upper() + name[1:]
 
     max_chars = int(options.get("max_chars", 120))
-    return (name[:max_chars - 1] + "…") if len(name) > max_chars else name
+    return _truncate_no_mid_word(name, max_chars)
 
 
 def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
@@ -284,7 +367,7 @@ def _derive_slug(product: dict, options: dict, resolved: dict) -> str:
         fb = f"product-{sku[-8:].lower()}" if sku else "product"
         return fb[:max_chars]
 
-    slug = slug[:max_chars]
+    slug = _truncate_no_mid_word(slug, max_chars, boundary="-")
     if sku and sku[-4:].lower() not in slug:
         suffix = f"-{sku[-4:].lower()}"
         if len(slug) + len(suffix) <= max_chars:
@@ -315,8 +398,9 @@ def _derive_image_alt(product: dict, options: dict, resolved: dict) -> str:
     else:
         alt = f"{title} – {sku}" if sku else title
 
-    if len(alt) > 125:
-        alt = alt[:125].rsplit(" ", 1)[0]
+    max_chars = int(options.get("max_chars", 125))
+    if len(alt) > max_chars:
+        alt = _truncate_no_mid_word(alt, max_chars)
 
     return alt
 
@@ -332,14 +416,20 @@ def _derive_meta_title(product: dict, options: dict, resolved: dict) -> str:
     if len(meta) > max_chars:
         if len(title) <= max_chars:
             return title
-        return title[:max_chars - 1] + "…"
+        return _truncate_no_mid_word(title, max_chars)
 
     return meta
 
 
 def _derive_image_names(product: dict, options: dict, resolved: dict) -> str:
     slug = resolved.get("slug", "") or _slugify(product.get("name", "product"))
-    return f"{slug}-1.webp"[:70]
+    max_chars = int(options.get("max_chars", 70))
+    suffix = "-1.webp"
+    # Truncate only the slug portion, on a hyphen boundary -- never slice
+    # through the suffix itself, which would produce a broken filename
+    # with no valid extension (e.g. "...-1.we" instead of "...-1.webp").
+    slug = _truncate_no_mid_word(slug, max(max_chars - len(suffix), 1), boundary="-")
+    return f"{slug}{suffix}"
 
 
 _FOCUS_KEYWORD_STOPWORDS = {
@@ -370,11 +460,9 @@ def _derive_focus_keyword(product: dict, options: dict, resolved: dict) -> str:
     phrase = " ".join(dict.fromkeys(phrase_words))  # de-dupe, preserve order
 
     if not phrase:
-        phrase = title[:max_chars]
-    if len(phrase) > max_chars:
-        cut = phrase[:max_chars]
-        last_space = cut.rfind(" ")
-        phrase = cut[:last_space] if last_space > max_chars * 0.6 else cut
+        phrase = _truncate_no_mid_word(title, max_chars)
+    elif len(phrase) > max_chars:
+        phrase = _truncate_no_mid_word(phrase, max_chars)
     return phrase.strip()
 
 
@@ -593,20 +681,35 @@ async def run_field(
         # (_derive_slug does its own [:max_chars]); this brings AI/Logic
         # mode output in line with the same limit instead of just noting
         # it was broken after the fact.
-        if "max_chars" in rules and len(value) > rules["max_chars"]:
-            max_chars = rules["max_chars"]
-            if field == "slug":
-                value = value[:max_chars].rstrip("-")
+        #
+        # options.get("max_chars") -- the operator's actual Settings ->
+        # Content Generation value -- now takes priority over rules'
+        # static default. Previously this always enforced the hardcoded
+        # default (e.g. slug=70) even if the operator had configured a
+        # different value in Settings; their custom value only ever
+        # reached the AI prompt / logic generators, never this safety net,
+        # so a stricter or looser custom setting was silently ignored here.
+        effective_max = options.get("max_chars", rules.get("max_chars"))
+        if effective_max and len(_strip_html(value) if field == "description" else value) > effective_max:
+            max_chars = int(effective_max)
+            if field == "description":
+                # HTML content -- never slice raw characters (risks cutting
+                # a tag in half). Drop whole trailing blocks instead.
+                value = _truncate_html_blocks(value, max_chars)
+            elif field == "slug":
+                # Same never-cut-mid-token rule as everywhere else, using
+                # "-" as the boundary since that's how slugs join words.
+                # Was a raw value[:max_chars] slice, which could (and did,
+                # confirmed live) re-chop a slug that _derive_slug had
+                # already correctly extended past max_chars to finish its
+                # last word -- undoing that fix right back to a mid-word
+                # cut by the time it reached WooCommerce.
+                value = _truncate_no_mid_word(value, max_chars, boundary="-")
             else:
-                # Prefer cutting on a word boundary so we don't chop a
-                # word in half -- but only if that doesn't throw away
-                # too much (>15% of the budget), otherwise a hard cut is
-                # closer to what was actually asked for.
-                cut = value[:max_chars]
-                last_space = cut.rfind(" ")
-                if last_space > max_chars * 0.85:
-                    cut = cut[:last_space]
-                value = cut.rstrip()
+                # Never truncate mid-word (client feedback: "priority
+                # should be given to displaying the last word in full,
+                # even if it exceeds the setting by a few characters").
+                value = _truncate_no_mid_word(value, max_chars)
             logger.info(f"[{field}] truncated to {len(value)} chars (limit {max_chars})")
 
     result: dict = {"field": field, "value": value, "source": source, "status": "ok"}
