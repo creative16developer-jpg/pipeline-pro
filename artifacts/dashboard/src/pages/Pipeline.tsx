@@ -3,7 +3,7 @@ import { useLocation, useSearch } from "wouter";
 import {
   Play, Zap, ChevronDown, ChevronRight, RotateCcw,
   CloudDownload, Cpu, Upload, ArrowRightLeft, Sparkles,
-  Info, Loader2, AlertTriangle, FileText, Layers, Check, CheckCircle2, Eye
+  Info, Loader2, AlertTriangle, FileText, Layers, Check, CheckCircle2, Eye, Download
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -831,6 +831,7 @@ export default function Pipeline() {
                       { col: "Site SKU",      desc: "Your WooCommerce SKU",       required: true },
                       { col: "Product Title", desc: "Name for the product",       required: true },
                       { col: "Price",         desc: "WooCommerce regular_price",  required: false },
+                      { col: "QTY",           desc: "Stock quantity (0 is valid)", required: false },
                     ].map(({ col, desc, required }) => (
                       <div key={col} className="bg-background/60 rounded-lg p-2 flex items-start justify-between gap-1">
                         <div>
@@ -843,6 +844,19 @@ export default function Pipeline() {
                       </div>
                     ))}
                   </div>
+                  {/* Template download — client feedback: "CSV template export
+                      in new pipeline, otherwise can't match the format... don't
+                      know the required and optional fields." Same columns as
+                      the hint grid above, generated server-side so it can
+                      never drift out of sync with what /csv/upload actually
+                      accepts. */}
+                  <a
+                    href="/api/csv/template"
+                    download
+                    className="flex items-center justify-center gap-1.5 text-xs text-primary hover:underline"
+                  >
+                    <Download className="w-3 h-3" /> Download CSV template
+                  </a>
                   {/* Upload row */}
                   <div className="flex gap-2">
                     <label className="flex-1 cursor-pointer">

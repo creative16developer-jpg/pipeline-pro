@@ -121,6 +121,41 @@ async def _enrich_csv_products_from_sunsky(job_id: int, skus: list[str]) -> None
 
 
 # ---------------------------------------------------------------------------
+# GET /api/csv/template — sample CSV matching REQUIRED_COLUMNS/optional cols
+# exactly, so the operator has a real, always-in-sync starting point instead
+# of guessing the expected header names/order (client feedback: "CSV
+# template export in new pipeline, otherwise can't match the format... don't
+# know the required and optional fields").
+# ---------------------------------------------------------------------------
+
+OPTIONAL_COLUMNS = ["Price", "QTY"]
+
+@router.get("/template")
+async def download_csv_template():
+    from fastapi.responses import StreamingResponse
+
+    # Required columns in the stable, documented order (Sunsky SKU, Site SKU,
+    # Product Title) rather than REQUIRED_COLUMNS' arbitrary set iteration
+    # order, which can differ between Python runs.
+    header = ["Sunsky SKU", "Site SKU", "Product Title"] + OPTIONAL_COLUMNS
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(header)
+    # One real example row and one showing the optional columns left blank,
+    # so it's clear at a glance that Price/QTY are genuinely optional.
+    writer.writerow(["TBD0557780301", "BIKE-CUSHION-001", "Wheel Up Mountain Bike Cushion Cover", "19.99", "37"])
+    writer.writerow(["TBD0602299302", "BIKE-SEATPOST-001", "FMFXTR Mountain Bike Seat Post", "", ""])
+    buf.seek(0)
+
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=pipelinepro_csv_import_template.csv"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # POST /api/csv/upload
 # ---------------------------------------------------------------------------
 
