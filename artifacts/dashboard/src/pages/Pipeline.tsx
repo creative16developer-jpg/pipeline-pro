@@ -233,9 +233,18 @@ function ProductBrowseModal({
                       <input type="checkbox" checked={selected.has(p.sku)} onChange={() => toggle(p.sku)} onClick={(e) => e.stopPropagation()} />
                     </td>
                     <td className="py-2 pr-3 w-12">
-                      {p.image
-                        ? <img src={p.image} alt="" className="w-10 h-10 rounded object-cover" />
-                        : <div className="w-10 h-10 rounded bg-secondary" />}
+                      {p.image ? (
+                        <div className="w-10 h-10 rounded bg-secondary overflow-hidden">
+                          <img
+                            src={p.image}
+                            alt=""
+                            className="w-10 h-10 object-cover"
+                            onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
+                          />
+                        </div>
+                      ) : (
+                        <div className="w-10 h-10 rounded bg-secondary" />
+                      )}
                     </td>
                     <td className="py-2 pr-3">
                       <div className="line-clamp-2">{p.name}</div>

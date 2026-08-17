@@ -720,9 +720,14 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   title="Open full size"
-                                  className="w-11 h-11 rounded-lg overflow-hidden border border-border block hover:border-violet-400 transition-colors"
+                                  className="w-11 h-11 rounded-lg overflow-hidden border border-border block hover:border-violet-400 transition-colors bg-muted/50"
                                 >
-                                  <img src={url} alt={`${p.name} image ${idx + 1}`} className="w-full h-full object-cover" />
+                                  <img
+                                    src={url}
+                                    alt={`${p.name} image ${idx + 1}`}
+                                    className="w-full h-full object-cover"
+                                    onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
+                                  />
                                 </a>
                               ))
                             ) : (

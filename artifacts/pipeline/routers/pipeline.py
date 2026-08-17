@@ -250,7 +250,6 @@ async def resume_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
 async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     """Return products from this pipeline's fetch job for content review."""
     from models.models import Product, Image
-    from config import get_settings
     pl = await db.get(PipelineJob, pl_id)
     if not pl:
         raise HTTPException(404, f"Pipeline #{pl_id} not found")
@@ -273,8 +272,6 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     product_ids = [p.id for p in products]
     images_by_product: dict[int, list[str]] = {}
     if product_ids:
-        settings = get_settings()
-        base = (settings.server_base_url or "").rstrip("/")
         img_rows = (
             await db.execute(
                 select(Image)
@@ -284,8 +281,23 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         ).scalars().all()
         for img in img_rows:
             url = None
-            if img.processed_path and base:
-                url = f"{base}/media/images/{Path(img.processed_path).name}"
+            if img.processed_path:
+                # /media/images is mounted (main.py) as static files on
+                # this SAME server that serves the dashboard, so a plain
+                # relative URL always resolves for the browser's own
+                # preview -- no need for settings.server_base_url (an
+                # absolute external URL) at all, that's only needed when
+                # handing a URL to WooCommerce to sideload from a
+                # different domain. Previously this required
+                # server_base_url to be set, which broke every preview
+                # when the deployment instead uses the WP-media-upload
+                # path (wp_username + wp_app_password), which doesn't
+                # need or set that value -- uploads worked fine via that
+                # separate code path, but Content Review showed "N/A" for
+                # every image regardless, since a processed file existed
+                # on disk the whole time with no configured way to
+                # preview it.
+                url = f"/media/images/{Path(img.processed_path).name}"
             elif img.original_url and img.original_url.startswith(("http://", "https://")):
                 # Fall back to Sunsky's original remote URL when there's no
                 # processed/local copy yet (or no server_base_url configured)

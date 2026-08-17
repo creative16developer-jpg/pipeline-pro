@@ -200,14 +200,25 @@ def _normalise_category(raw: dict) -> dict:
 
 def _normalise_images(raw: dict) -> list[str]:
     images: list = []
-    for field in ("images", "imageList", "imgs", "picList", "imageUrls", "pics"):
+    for field in (
+        "images", "imageList", "imgs", "picList", "imageUrls", "pics",
+        # Additional candidates for search/list-shaped responses, which
+        # commonly use a different (often terser) field name than the
+        # detail endpoint for the same data -- Content Review's images
+        # (sourced via get_product_detail -> product!detail.do) are
+        # confirmed working, but the "Select a Product" browse popup
+        # (sourced via search_products -> product!search.do) showed no
+        # image at all, which points at exactly this kind of endpoint-
+        # specific naming mismatch rather than a URL-format problem.
+        "indexImage", "mainPic", "smallImage", "coverImage", "cover", "img",
+    ):
         val = raw.get(field)
         if val:
             images = val if isinstance(val, list) else [val]
             break
 
     if not images:
-        for field in ("picUrl", "mainImage", "image", "pic", "thumbnail"):
+        for field in ("picUrl", "mainImage", "image", "pic", "thumbnail", "imgUrl"):
             val = raw.get(field)
             if val:
                 images = [val]
@@ -232,6 +243,18 @@ def _normalise_images(raw: dict) -> list[str]:
             result.append(url)
         if len(result) >= 5:
             break
+
+    if not result and raw:
+        # Nothing matched any known field name -- log the actual raw keys
+        # so this is diagnosable from server logs (pm2 logs pipeline-api)
+        # instead of a silent, permanent "no image" with no way to tell
+        # why. If Sunsky's search endpoint uses some other field name not
+        # in the lists above, this line will show exactly what it is.
+        candidate_keys = [k for k in raw.keys() if "img" in k.lower() or "pic" in k.lower() or "image" in k.lower()]
+        if candidate_keys:
+            print(f"[sunsky_client] _normalise_images found no usable image, "
+                  f"but raw data has image-like keys not in our field list: {candidate_keys} "
+                  f"(values: {[raw.get(k) for k in candidate_keys]})")
     return result
 
 
