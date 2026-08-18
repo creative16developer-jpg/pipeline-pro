@@ -353,6 +353,11 @@ export default function Pipeline() {
   const [csvFile, setCsvFile]           = useState<File | null>(null);
   const [csvUploading, setCsvUploading] = useState(false);
   const [csvUploadDone, setCsvUploadDone] = useState(false);
+  // Client feedback: needed a way to import a fresh CSV even after one
+  // already exists -- previously csvJobs.length === 0 was the ONLY way
+  // to reach the upload UI at all, permanently locking anyone who'd ever
+  // done one CSV import into only ever re-selecting old jobs from then on.
+  const [showNewCsvUpload, setShowNewCsvUpload] = useState(false);
 
   // ── Options ────────────────────────────────────────────────────────────────
   const [includeEnrich,   setIncludeEnrich]   = useState(false);
@@ -462,6 +467,8 @@ export default function Pipeline() {
       if (!res.ok) throw new Error(data?.detail || `Upload failed (${res.status})`);
       toast({ title: "CSV imported", description: `${data.imported} products loaded.` });
       setCsvUploadDone(true);
+      setShowNewCsvUpload(false);
+      setCsvFile(null);
       // Reload source jobs so the new import appears in the selector
       setLoadingJobs(true);
       const csvData = await fetch("/api/jobs?type=csv_import&status=completed&limit=50").then((r) => r.json());
@@ -827,8 +834,16 @@ export default function Pipeline() {
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="w-4 h-4 animate-spin" /> Loading imports…
                 </div>
-              ) : csvJobs.length === 0 ? (
+              ) : csvJobs.length === 0 || showNewCsvUpload ? (
                 <div className="rounded-xl border border-border/50 bg-secondary/30 p-4 space-y-3">
+                  {csvJobs.length > 0 && (
+                    <button
+                      onClick={() => setShowNewCsvUpload(false)}
+                      className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                    >
+                      <ChevronRight className="w-3 h-3 rotate-180" /> Back to existing imports
+                    </button>
+                  )}
                   <p className="text-sm text-amber-400 flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 shrink-0" />
                     No CSV imports found. Upload a CSV file to continue.
@@ -914,6 +929,21 @@ export default function Pipeline() {
                       <span>CSV import — title and SKU come from the file.</span>
                     </div>
                   )}
+                  <div className="mt-2 flex items-center justify-between">
+                    <button
+                      onClick={() => setShowNewCsvUpload(true)}
+                      className="text-xs text-primary hover:underline flex items-center gap-1"
+                    >
+                      <Upload className="w-3 h-3" /> Upload new CSV
+                    </button>
+                    <a
+                      href="/api/csv/template"
+                      download
+                      className="flex items-center gap-1.5 text-xs text-primary hover:underline"
+                    >
+                      <Download className="w-3 h-3" /> Download CSV template
+                    </a>
+                  </div>
                 </>
               )}
             </div>
