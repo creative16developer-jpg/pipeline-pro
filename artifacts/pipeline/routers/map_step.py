@@ -140,13 +140,19 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
     from services.enrich_service import get_effective_category_name_map
     category_name_map = await get_effective_category_name_map(db)
 
-    # Extract unique Sunsky categories
+    # Extract unique Sunsky categories, and which SKUs fall into each --
+    # client feedback: "On Cat.Review step don't see the selected products
+    # ... if I don't see the products on cat.review how to determine the
+    # categories." Previously this only tracked counts, with no way to
+    # see which specific products they represented.
     cat_counts: dict[str, int] = {}
+    cat_skus: dict[str, list[str]] = {}
     for p in products:
         raw = p.raw_data or {}
         cat = _extract_sunsky_cat(raw, category_name_map)
         if cat:
             cat_counts[cat] = cat_counts.get(cat, 0) + 1
+            cat_skus.setdefault(cat, []).append(p.site_sku or p.sku or f"#{p.id}")
 
     # Load saved mappings for this store
     saved_rows = (
@@ -188,6 +194,7 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         categories.append({
             "sunsky_cat":         cat,
             "product_count":      count,
+            "sample_skus":        cat_skus.get(cat, [])[:10],
             "woo_cats":           woo_cat_list,
             "primary_woo_cat_id": primary_id,
             "profile_id":         m.profile_id if m else None,
@@ -195,11 +202,17 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             "times_used":         m.times_used if m else 0,
         })
 
-    # ── CSV import fallback ──────────────────────────────────────────────────
-    # When products have no Sunsky category in raw_data (e.g. CSV-sourced
-    # pipelines), cat_counts is empty.  Inject a synthetic entry so the user
-    # can still assign a WooCommerce category to the whole batch.
-    if not categories and total_products > 0:
+    # Client feedback confirmed this exact bug live: "I selected 3
+    # products but it seems only 2 are available here." Previously this
+    # fallback only fired when categories was completely EMPTY (`not
+    # categories`) -- but a MIXED batch, where some products extract a
+    # real Sunsky category and one or more don't, left those uncategorized
+    # products silently missing from the response with no indication at
+    # all: sum(c['product_count'] for c in categories) could legitimately
+    # be less than total_products and nothing here ever surfaced the gap.
+    categorized_count = sum(c["product_count"] for c in categories)
+    uncategorized_count = total_products - categorized_count
+    if uncategorized_count > 0:
         fetch_job = await db.get(Job, pl.fetch_job_id) if pl.fetch_job_id else None
         is_csv = fetch_job and fetch_job.type == JobType.csv_import
         label = "CSV Import" if is_csv else "Uncategorised Products"
@@ -208,7 +221,8 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         primary_id = m.primary_woo_cat_id if m else (woo_cat_list[0]["id"] if woo_cat_list else None)
         categories.append({
             "sunsky_cat":         label,
-            "product_count":      total_products,
+            "product_count":      uncategorized_count,
+            "sample_skus":        [],
             "woo_cats":           woo_cat_list,
             "primary_woo_cat_id": primary_id,
             "profile_id":         m.profile_id if m else None,

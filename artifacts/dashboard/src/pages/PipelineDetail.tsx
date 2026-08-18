@@ -505,11 +505,17 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
         const s = sel[c.sunsky_cat] ?? { woo_cat_id: null, profile_id: null, save_as_rule: true };
         return (
           <div key={c.sunsky_cat} className="bg-card border border-border rounded-[10px] p-5">
-            <div className="flex items-center gap-3 mb-4 flex-wrap">
+            <div className="flex items-center gap-3 mb-1 flex-wrap">
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[12px] font-medium bg-amber-500/15 text-amber-400">Unmapped</span>
               <strong className="text-[15px]">{c.sunsky_cat}</strong>
               <span className="text-[12px] text-muted-foreground/60">{c.product_count} product{c.product_count !== 1 ? "s" : ""} in this batch</span>
             </div>
+            {c.sample_skus && c.sample_skus.length > 0 && (
+              <div className="mb-4 text-[11px] text-muted-foreground/70 font-mono">
+                {c.sample_skus.join(", ")}
+                {c.product_count > c.sample_skus.length && ` +${c.product_count - c.sample_skus.length} more`}
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block text-[12px] font-medium text-foreground/70 mb-1.5">WooCommerce Category</label>
@@ -586,7 +592,7 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
         <div className="bg-emerald-500/10 border border-emerald-500/30 border-l-[3px] border-l-emerald-500 rounded-lg px-4 py-3 text-[13px] text-emerald-300">
           <strong>✓ Already mapped — applied automatically</strong><br />
           <span className="text-[12px] mt-0.5 block">
-            {knownCats.map(c => `${c.sunsky_cat} → ${c.woo_cats?.[0]?.name ?? "?"}`).join(" · ")}
+            {knownCats.map(c => `${c.sunsky_cat} (${c.product_count}) → ${c.woo_cats?.[0]?.name ?? "?"}`).join(" · ")}
           </span>
         </div>
       )}
