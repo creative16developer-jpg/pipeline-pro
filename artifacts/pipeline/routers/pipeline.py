@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 import asyncio
+import json
 import logging
 import math
 from pathlib import Path
@@ -421,8 +422,30 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             _mapped_val = by_name.get(sunsky_cat_name.strip().lower())
         resolved_woo_cat = _mapped_val if isinstance(_mapped_val, str) else None
         is_mapped = _mapped_val is not None
+
+        # Manual per-product override takes priority, mirroring the exact
+        # same priority job_tasks.py already applies at real Upload time
+        # (cat_source == "manual" wins). Previously this preview never
+        # checked it at all -- saving an override here would have looked
+        # like it silently did nothing, even though Upload would apply it
+        # correctly. Client feedback item #8: "to be able to edit all
+        # details."
+        manual_cat_name = None
+        if getattr(p, "cat_source", None) == "manual" and p.manual_woo_cats_json:
+            try:
+                _manual_cats = json.loads(p.manual_woo_cats_json)
+                _match = next((c for c in _manual_cats if c.get("id") == p.manual_primary_woo_cat_id), None)
+                manual_cat_name = (_match or (_manual_cats[0] if _manual_cats else {})).get("name")
+            except Exception:
+                pass
+        if manual_cat_name:
+            resolved_woo_cat = manual_cat_name
+            is_mapped = True
+
         product_list.append({
             "id": p.id,
+            "cat_source": getattr(p, "cat_source", "auto"),
+            "manual_primary_woo_cat_id": p.manual_primary_woo_cat_id,
             "sku": p.sku,
             "name": p.name,
             "description": p.description or "",

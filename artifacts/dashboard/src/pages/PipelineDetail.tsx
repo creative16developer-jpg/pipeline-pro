@@ -668,6 +668,9 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   };
   const [goingBack, setGoingBack] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [storeCats, setStoreCats] = useState<{ id: number; name: string }[]>([]);
+  const [savingCategory, setSavingCategory] = useState<number | null>(null);
+  const [categoryDraft, setCategoryDraft] = useState<Record<number, string>>({});
 
   useEffect(() => {
     fetch(`/api/pipelines/${pl.id}/content-data`)
@@ -675,7 +678,45 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
       .then(setData)
       .catch(() => toast({ title: "Failed to load content data", variant: "destructive" }))
       .finally(() => setLoading(false));
+    if (pl.store_id) {
+      fetch(`/api/stores/${pl.store_id}/categories`)
+        .then(r => r.ok ? r.json() : [])
+        .then(d => setStoreCats((Array.isArray(d) ? d : []).map((c: any) => ({ id: c.wooId ?? c.woo_id ?? c.id, name: c.name }))))
+        .catch(() => {});
+    }
   }, [pl.id]);
+
+  const handleSaveCategory = async (pid: number) => {
+    // Client feedback item #8: "to be able to edit all details." Backend
+    // mechanism (cat_source="manual") already existed and is genuinely
+    // respected at real Upload/Sync time -- this was just never exposed
+    // in Content Review's own UI before.
+    const selectedId = categoryDraft[pid];
+    if (!selectedId) return;
+    const cat = storeCats.find(c => String(c.id) === selectedId);
+    if (!cat) return;
+    setSavingCategory(pid);
+    try {
+      const r = await fetch(`/api/products/${pid}/categories`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ woo_cats: [{ id: cat.id, name: cat.name }], primary_woo_cat_id: cat.id }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      setData((prev: any) => ({
+        ...prev,
+        products: (prev?.products ?? []).map((p: any) =>
+          p.id === pid ? { ...p, category_name: cat.name, category_mapped: true, cat_source: "manual" } : p
+        ),
+      }));
+      setCategoryDraft(prev => { const next = { ...prev }; delete next[pid]; return next; });
+      toast({ title: "Category updated" });
+    } catch (e: any) {
+      toast({ title: "Failed to update category", description: e.message, variant: "destructive" });
+    } finally {
+      setSavingCategory(null);
+    }
+  };
 
   const allProducts: any[]    = data?.products ?? [];
   const needsAttention        = allProducts.filter(p => p.needs_attention && !excluded.has(p.id));
@@ -987,22 +1028,50 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                         </div>
                       )}
 
-                      {/* Category — what the client originally asked for:
-                          visibility into every detail before upload,
-                          same idea as Baselinker's per-product view. */}
+                      {/* Category — client feedback item #8: "to be able
+                          to edit all details." Backend override mechanism
+                          (cat_source="manual") already existed and is
+                          genuinely respected at real Upload/Sync time --
+                          this was just never exposed in this screen. */}
                       <div>
                         <label className="block text-[12px] font-medium text-foreground/70 mb-1">Category</label>
-                        {p.category_name ? (
+                        <div className="flex items-center gap-2 mb-2">
+                          {p.category_name ? (
+                            <>
+                              <span className="text-sm">{p.category_name}</span>
+                              {p.cat_source === "manual" ? (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20" title="Manually overridden — this exact category will be used at upload, regardless of the batch's Sunsky category mapping">manual</span>
+                              ) : p.category_mapped ? (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">mapped</span>
+                              ) : (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20" title="Sunsky category name shown — no saved WooCommerce mapping found yet">unmapped</span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-sm text-muted-foreground italic">No category resolved</span>
+                          )}
+                        </div>
+                        {storeCats.length > 0 && (
                           <div className="flex items-center gap-2">
-                            <span className="text-sm">{p.category_name}</span>
-                            {p.category_mapped ? (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">mapped</span>
-                            ) : (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20" title="Sunsky category name shown — no saved WooCommerce mapping found yet">unmapped</span>
-                            )}
+                            <select
+                              value={categoryDraft[p.id] ?? ""}
+                              onChange={e => setCategoryDraft(prev => ({ ...prev, [p.id]: e.target.value }))}
+                              className="flex-1 px-3 py-1.5 border border-border rounded-lg text-[12px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                            >
+                              <option value="">Override category…</option>
+                              {storeCats.map(c => (
+                                <option key={c.id} value={c.id}>{c.name}</option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => handleSaveCategory(p.id)}
+                              disabled={!categoryDraft[p.id] || savingCategory === p.id}
+                              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-violet-500 hover:bg-violet-600 text-white disabled:opacity-50 flex items-center gap-1"
+                            >
+                              {savingCategory === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                              Set
+                            </button>
                           </div>
-                        ) : (
-                          <span className="text-sm text-muted-foreground italic">No category resolved</span>
                         )}
                       </div>
 
