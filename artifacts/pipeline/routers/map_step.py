@@ -372,6 +372,13 @@ async def map_confirm(
 
     # Transition to content_review so the user can review generated content before upload
     pl.status = "content_review"
+    # Previously never set here (or anywhere) -- current_step stayed stuck
+    # at whatever it was before ("generate"), so a Cancel + "Continue from
+    # last step" on a pipeline paused here had no way to know it was
+    # actually sitting at Content Review, and fell through to a generic
+    # re-execute path instead. Client feedback: "Cancel+Continue doesn't
+    # resume where left off, goes back to Cat.Review and re-waits."
+    pl.current_step = "content_review"
     pl.updated_at = datetime.now(timezone.utc)
     await db.commit()
 

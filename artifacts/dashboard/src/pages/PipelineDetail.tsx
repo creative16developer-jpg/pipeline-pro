@@ -621,6 +621,7 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const [tab, setTab]           = useState<"all"|"attention"|"ready">("all");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
+  const [goingBack, setGoingBack] = useState(false);
 
   useEffect(() => {
     fetch(`/api/pipelines/${pl.id}/content-data`)
@@ -655,6 +656,23 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
     } catch (e: any) {
       toast({ title: "Failed to start upload", description: e.message, variant: "destructive" });
     } finally { setSaving(false); }
+  };
+
+  const handleAssignCategory = async () => {
+    // Client feedback item #10 ("major issue"): "Can't go back on
+    // previous steps if want to change something." Goes back to Category
+    // Review without losing any already-generated content -- it's all
+    // saved in the DB independent of which screen is currently showing.
+    if (!confirm("Go back to Category Review? Your generated content won't be lost — you'll return here after re-confirming categories.")) return;
+    setGoingBack(true);
+    try {
+      const r = await fetch(`/api/pipelines/${pl.id}/back-to-category-review`, { method: "POST" });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Back to Category Review" });
+      onDone();
+    } catch (e: any) {
+      toast({ title: "Failed to go back", description: e.message, variant: "destructive" });
+    } finally { setGoingBack(false); }
   };
 
   if (loading) return <div className="flex items-center gap-2 py-8 text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>;
@@ -816,7 +834,15 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
           <div className="flex gap-2 flex-wrap">
             <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">Exclude selected</button>
             <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">Re-generate content</button>
-            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">Assign category</button>
+            <button
+              onClick={handleAssignCategory}
+              disabled={goingBack}
+              title="Go back to Category Review to fix a category assignment"
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {goingBack ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+              Assign category
+            </button>
           </div>
           <button onClick={handleUploadAll} disabled={saving}
             className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[13px] font-medium transition-colors disabled:opacity-50">

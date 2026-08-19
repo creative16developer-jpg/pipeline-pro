@@ -458,6 +458,43 @@ class ContentConfirmRequest(_BaseModel):
     excluded_product_ids: list[int] = []
 
 
+@router.post("/{pl_id}/back-to-category-review")
+async def back_to_category_review(pl_id: int, db: AsyncSession = Depends(get_db)):
+    """Go back from Content Review to Category Review, e.g. to fix a
+    wrong/missing category assignment without restarting the whole
+    pipeline. Client feedback item #10 ("major issue"): "Can't go back on
+    previous steps if want to change something."
+
+    Pure navigation -- deletes nothing. Generated content
+    (ProductEnrichAttr, Product fields) and existing category mappings
+    are already saved independently in the DB; going back just changes
+    which screen renders. Confirming Category Review again afterward
+    (map_confirm) naturally transitions forward to content_review again,
+    same as the first time through -- the already-generated content is
+    still there when the operator lands back on Content Review.
+    """
+    pl = await db.get(PipelineJob, pl_id)
+    if not pl:
+        raise HTTPException(404, f"Pipeline #{pl_id} not found")
+    if pl.status != "content_review":
+        raise HTTPException(400, f"Can only go back to Category Review from Content Review (current status: {pl.status})")
+
+    pl.status = "review"
+    pl.current_step = "review"
+    pl.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    from models.models import PipelineLog
+    db.add(PipelineLog(
+        pipeline_job_id=pl_id, level="info", step="review",
+        message="Operator went back to Category Review from Content Review",
+        created_at=datetime.now(timezone.utc),
+    ))
+    await db.commit()
+
+    return _pl_dict(pl)
+
+
 @router.post("/{pl_id}/content-confirm")
 async def content_confirm(pl_id: int, body: ContentConfirmRequest = ContentConfirmRequest(), db: AsyncSession = Depends(get_db)):
     """Confirm content review and start the upload step."""
@@ -586,7 +623,10 @@ async def continue_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
 
     current_step = pl.current_step or "process"
 
-    # Review / enrich states — just flip status back so the review UI reappears
+    # Review / enrich / content-review states — just flip status back so
+    # the corresponding review screen reappears. Nothing needs to be
+    # re-executed: whatever was already generated/mapped/extracted is
+    # already saved in the DB, independent of pipeline status.
     if current_step == "review":
         pl.status = "review"
         pl.updated_at = datetime.now(timezone.utc)
@@ -595,6 +635,12 @@ async def continue_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
 
     if current_step == "enrich":
         pl.status = "enrich_review"
+        pl.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        return _pl_dict(pl)
+
+    if current_step == "content_review":
+        pl.status = "content_review"
         pl.updated_at = datetime.now(timezone.utc)
         await db.commit()
         return _pl_dict(pl)
