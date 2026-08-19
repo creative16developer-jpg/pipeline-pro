@@ -722,6 +722,64 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const needsAttention        = allProducts.filter(p => p.needs_attention && !excluded.has(p.id));
   const ready                 = allProducts.filter(p => !p.needs_attention && !excluded.has(p.id));
 
+  const [imageActionLoading, setImageActionLoading] = useState<number | null>(null);
+
+  const handleDeleteImage = async (pid: number, imageId: number) => {
+    setImageActionLoading(imageId);
+    try {
+      const r = await fetch(`/api/products/${pid}/images/${imageId}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(await r.text());
+      setData((prev: any) => ({
+        ...prev,
+        products: (prev?.products ?? []).map((p: any) => {
+          if (p.id !== pid) return p;
+          const nextImages = (p.images ?? []).filter((img: any) => img.id !== imageId);
+          return { ...p, images: nextImages, image_count: nextImages.length };
+        }),
+      }));
+      toast({ title: "Image excluded" });
+    } catch (e: any) {
+      toast({ title: "Failed to exclude image", description: e.message, variant: "destructive" });
+    } finally {
+      setImageActionLoading(null);
+    }
+  };
+
+  const handleMoveImage = async (pid: number, idx: number, direction: -1 | 1) => {
+    const product = allProducts.find((p: any) => p.id === pid);
+    const images = product?.images ?? [];
+    const targetIdx = idx + direction;
+    if (targetIdx < 0 || targetIdx >= images.length) return;
+
+    const reordered = [...images];
+    [reordered[idx], reordered[targetIdx]] = [reordered[targetIdx], reordered[idx]];
+    const orderedIds = reordered.map((img: any) => img.id);
+
+    setImageActionLoading(reordered[idx].id);
+    // Optimistic update -- reflect the new order immediately, revert on failure.
+    setData((prev: any) => ({
+      ...prev,
+      products: (prev?.products ?? []).map((p: any) => p.id === pid ? { ...p, images: reordered } : p),
+    }));
+    try {
+      const r = await fetch(`/api/products/${pid}/images/reorder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image_ids: orderedIds }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+    } catch (e: any) {
+      toast({ title: "Failed to reorder images", description: e.message, variant: "destructive" });
+      // Revert on failure
+      setData((prev: any) => ({
+        ...prev,
+        products: (prev?.products ?? []).map((p: any) => p.id === pid ? { ...p, images } : p),
+      }));
+    } finally {
+      setImageActionLoading(null);
+    }
+  };
+
   const displayed = useMemo(() => {
     const active = allProducts.filter(p => !excluded.has(p.id));
     if (tab === "attention") return active.filter(p => p.needs_attention);
@@ -992,24 +1050,54 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                       {p.image_count > 0 && (
                         <div>
                           <label className="block text-[12px] font-medium text-foreground/70 mb-1">Images</label>
-                          <div className="flex gap-2 flex-wrap">
-                            {p.image_urls && p.image_urls.length > 0 ? (
-                              p.image_urls.map((url: string, idx: number) => (
-                                <a
-                                  key={idx}
-                                  href={url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  title="Open full size"
-                                  className="w-11 h-11 rounded-lg overflow-hidden border border-border block hover:border-violet-400 transition-colors bg-muted/50"
-                                >
-                                  <img
-                                    src={url}
-                                    alt={`${p.name} image ${idx + 1}`}
-                                    className="w-full h-full object-cover"
-                                    onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
-                                  />
-                                </a>
+                          <div className="flex gap-3 flex-wrap">
+                            {p.images && p.images.length > 0 ? (
+                              p.images.map((img: any, idx: number) => (
+                                <div key={img.id} className="flex flex-col items-center gap-1">
+                                  <a
+                                    href={img.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={idx === 0 ? "Main image — open full size" : "Open full size"}
+                                    className={cn(
+                                      "w-11 h-11 rounded-lg overflow-hidden border block hover:border-violet-400 transition-colors bg-muted/50",
+                                      idx === 0 ? "border-violet-400" : "border-border"
+                                    )}
+                                  >
+                                    <img
+                                      src={img.url}
+                                      alt={`${p.name} image ${idx + 1}`}
+                                      className="w-full h-full object-cover"
+                                      onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
+                                    />
+                                  </a>
+                                  <div className="flex items-center gap-0.5">
+                                    <button
+                                      onClick={() => handleMoveImage(p.id, idx, -1)}
+                                      disabled={idx === 0 || imageActionLoading === img.id}
+                                      title="Move earlier"
+                                      className="w-4 h-4 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:cursor-default"
+                                    >
+                                      <ChevronRight className="w-3 h-3 rotate-180" />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteImage(p.id, img.id)}
+                                      disabled={imageActionLoading === img.id}
+                                      title="Exclude this image"
+                                      className="w-4 h-4 flex items-center justify-center text-muted-foreground hover:text-red-400 disabled:opacity-30"
+                                    >
+                                      {imageActionLoading === img.id ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <XIcon className="w-3 h-3" />}
+                                    </button>
+                                    <button
+                                      onClick={() => handleMoveImage(p.id, idx, 1)}
+                                      disabled={idx === p.images.length - 1 || imageActionLoading === img.id}
+                                      title="Move later"
+                                      className="w-4 h-4 flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-20 disabled:cursor-default"
+                                    >
+                                      <ChevronRight className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
                               ))
                             ) : (
                               // image_count > 0 but no URLs resolved (e.g. no

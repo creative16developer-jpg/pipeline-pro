@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from database import get_db
-from models.models import Product, ProductStatus
+from models.models import Product, ProductStatus, Image
 from schemas.schemas import ProductListOut, ProductOut
 
 import math
@@ -194,5 +194,59 @@ async def clear_product_category_override(
     product.manual_woo_cats_json = None
     product.manual_primary_woo_cat_id = None
     product.cat_source = "auto"
+    await db.commit()
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-image editing (client feedback item #8 -- last piece of the Review-
+# screen overhaul: exclude or reorder individual images in a product's
+# gallery from Content Review).
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.delete("/{product_id}/images/{image_id}")
+async def delete_product_image(product_id: int, image_id: int, db: AsyncSession = Depends(get_db)):
+    """Remove a single image from a product's gallery. A hard delete
+    (not a status flag) -- images are re-created fresh on every Process
+    run anyway (see patch 42's fix for the duplicate-image bug), so
+    there's no meaningful "excluded but still present" state to track
+    between runs; the row simply won't exist until the next Process run
+    recreates the full set.
+    """
+    img = await db.get(Image, image_id)
+    if not img or img.product_id != product_id:
+        raise HTTPException(404, "Image not found on this product")
+    await db.delete(img)
+    await db.commit()
+    return {"ok": True}
+
+
+class ImageReorderRequest(BaseModel):
+    image_ids: list[int]  # full ordered list of this product's image IDs
+
+
+@router.post("/{product_id}/images/reorder")
+async def reorder_product_images(
+    product_id: int,
+    body: ImageReorderRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Set gallery order from a full ordered list of image IDs.
+    position=0 also becomes the new is_main (first image is the product's
+    primary/featured image in WooCommerce)."""
+    rows = (
+        await db.execute(select(Image).where(Image.product_id == product_id))
+    ).scalars().all()
+    by_id = {r.id: r for r in rows}
+
+    missing = [iid for iid in body.image_ids if iid not in by_id]
+    if missing:
+        raise HTTPException(400, f"Image ID(s) not found on this product: {missing}")
+
+    for position, image_id in enumerate(body.image_ids):
+        img = by_id[image_id]
+        img.position = position
+        img.is_main = (position == 0)
+
     await db.commit()
     return {"ok": True}

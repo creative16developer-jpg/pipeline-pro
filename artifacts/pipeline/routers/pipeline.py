@@ -271,7 +271,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     # build servable URLs the same way job_tasks.py already does for the
     # WordPress-upload fallback (settings.server_base_url + /media/images/).
     product_ids = [p.id for p in products]
-    images_by_product: dict[int, list[str]] = {}
+    images_by_product: dict[int, list[dict]] = {}
     if product_ids:
         img_rows = (
             await db.execute(
@@ -310,7 +310,13 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
                 # <img src> just produces a permanently broken image icon.
                 url = img.original_url
             if url:
-                images_by_product.setdefault(img.product_id, []).append(url)
+                # id + position included (not just the URL) so the
+                # frontend can support per-image delete/reorder -- client
+                # feedback item #8. Position is included for the reorder
+                # UI's own bookkeeping, not required for display.
+                images_by_product.setdefault(img.product_id, []).append(
+                    {"id": img.id, "url": url, "position": img.position}
+                )
 
     # Attributes and resolved category name — same data we've been checking
     # via raw SQL all session, now visible directly in this review card
@@ -461,7 +467,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             "tags": p.tags or "",
             "status": p.status.value if hasattr(p.status, "value") else str(p.status),
             "image_count": p.image_count,
-            "image_urls": images_by_product.get(p.id, []),
+            "images": images_by_product.get(p.id, []),
             "category_id": p.category_id or "",
             "category_name": resolved_woo_cat or sunsky_cat_name or "",
             "category_mapped": is_mapped,
