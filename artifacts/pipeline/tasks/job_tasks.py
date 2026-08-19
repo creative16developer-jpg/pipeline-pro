@@ -1002,8 +1002,19 @@ async def _run_upload(db, job):
             if not skip_images:
                 image_urls = await _resolve_product_images(db, job, product, raw, wc, store)
                 if image_urls:
-                    alt_text = product.image_alt or product.name or ""
-                    payload["images"] = [{"src": url, "alt": alt_text} for url in image_urls]
+                    # Client feedback: "duplicate/non-unique alt text across
+                    # images" -- previously every photo in the gallery got
+                    # the exact same alt string. The main (first) image
+                    # keeps the clean base text, since that's the one most
+                    # likely to matter for SEO/accessibility; each
+                    # additional image gets a numbered suffix so it's still
+                    # descriptive (not a bare "image 2" with no product
+                    # context) while being distinct from the others.
+                    base_alt = product.image_alt or product.name or ""
+                    payload["images"] = [
+                        {"src": url, "alt": (base_alt if i == 0 else f"{base_alt} - {i + 1}") if base_alt else ""}
+                        for i, url in enumerate(image_urls)
+                    ]
 
             # ── Check if SKU already exists in WooCommerce (prevents duplicates)
             existing_woo = await wc.get_product_by_sku(store, product.sku)
