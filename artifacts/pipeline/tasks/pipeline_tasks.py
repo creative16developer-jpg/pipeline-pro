@@ -1078,3 +1078,56 @@ async def _resume_pipeline(pipeline_job_id: int):
                 await _advance_queue(db, pl.store_id, pl.id)
     finally:
         await celery_engine.dispose()
+
+
+async def _regenerate_content(pipeline_job_id: int):
+    """Re-run content generation for a pipeline currently paused at
+    Content Review, then return to Content Review with the fresh results.
+    Client feedback item #10: the "Re-generate content" button in Content
+    Review had no onClick handler at all -- pure dead UI, same as
+    "Assign category" before that fix.
+
+    Mirrors _resume_pipeline's exact structure (fresh DB session via
+    make_session_factory, try/except -> failed status on error, finally ->
+    _advance_queue) for consistency with the rest of this file. Reuses
+    _run_generate as-is -- the same function the main pipeline flow calls
+    -- rather than duplicating content-generation logic, which is exactly
+    the kind of per-path divergence that's caused real bugs elsewhere in
+    this codebase this session.
+    """
+    from database import make_session_factory
+    from models.models import PipelineJob
+
+    CelerySession, celery_engine = make_session_factory()
+    try:
+        async with CelerySession() as db:
+            pl = await db.get(PipelineJob, pipeline_job_id)
+            if not pl or pl.status != "running" or pl.current_step != "generate":
+                return
+
+            await _plog(db, pl.id, "generate", "info",
+                        f"{_make_pl_id(pl.id)} re-generating content (operator requested)")
+
+            try:
+                cfg = pl.config or {}
+                stats = await _run_generate(db, pl, cfg)
+
+                pl.status = "content_review"
+                pl.current_step = "content_review"
+                pl.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                await _plog(db, pl.id, "content_review", "info",
+                            f"Content re-generated: {stats}")
+
+            except Exception as e:
+                pl.status = "failed"
+                pl.error_message = str(e)
+                pl.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                await _plog(db, pl.id, "generate", "error",
+                            f"Re-generate failed: {e}")
+
+            finally:
+                await _advance_queue(db, pl.store_id, pl.id)
+    finally:
+        await celery_engine.dispose()

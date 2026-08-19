@@ -3,7 +3,7 @@ import { useRoute, Link, useLocation } from "wouter";
 import {
   ArrowLeft, CheckCircle2, XCircle, Loader2, Clock, Play,
   RotateCcw, Square, RefreshCw, AlertTriangle, Check, X as XIcon,
-  Upload, Eye, Terminal, Zap, ChevronDown, ChevronRight, Trash2, Plus,
+  Upload, Eye, Terminal, Zap, ChevronDown, ChevronRight, Trash2, Plus, Sparkles,
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -621,7 +621,9 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const [tab, setTab]           = useState<"all"|"attention"|"ready">("all");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [goingBack, setGoingBack] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
 
   useEffect(() => {
     fetch(`/api/pipelines/${pl.id}/content-data`)
@@ -675,6 +677,38 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
     } finally { setGoingBack(false); }
   };
 
+  const handleRegenerateContent = async () => {
+    if (!confirm("Re-generate content for this pipeline's products? This runs content generation again and will overwrite the current generated fields.")) return;
+    setRegenerating(true);
+    try {
+      const r = await fetch(`/api/pipelines/${pl.id}/regenerate-content`, { method: "POST" });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Re-generating content", description: "This may take a moment — the page will update automatically." });
+      onDone();
+    } catch (e: any) {
+      toast({ title: "Failed to start re-generation", description: e.message, variant: "destructive" });
+      setRegenerating(false);
+    }
+  };
+
+  const handleExcludeSelected = () => {
+    // Reuses the already-working single-product "Exclude from upload"
+    // mechanism (patch 31) -- excluded_product_ids flows correctly to
+    // content-confirm and _run_upload already. Bulk exclude is just
+    // "add every currently-selected ID to that same set."
+    if (selected.size === 0) {
+      toast({ title: "Nothing selected", description: "Check the products you want to exclude first." });
+      return;
+    }
+    setExcluded(prev => {
+      const s = new Set(prev);
+      selected.forEach(id => s.add(id));
+      return s;
+    });
+    toast({ title: `${selected.size} product${selected.size !== 1 ? "s" : ""} excluded from upload` });
+    setSelected(new Set());
+  };
+
   if (loading) return <div className="flex items-center gap-2 py-8 text-muted-foreground"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>;
 
   const readyCount = ready.length;
@@ -701,6 +735,27 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
         </div>
 
         {/* Product rows */}
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <input
+            type="checkbox"
+            checked={displayed.length > 0 && displayed.every((p: any) => selected.has(p.id))}
+            onChange={() => setSelected(prev => {
+              const allSelected = displayed.length > 0 && displayed.every((p: any) => prev.has(p.id));
+              if (allSelected) {
+                const s = new Set(prev);
+                displayed.forEach((p: any) => s.delete(p.id));
+                return s;
+              }
+              const s = new Set(prev);
+              displayed.forEach((p: any) => s.add(p.id));
+              return s;
+            })}
+            className="w-3.5 h-3.5 rounded shrink-0 cursor-pointer accent-violet-500"
+          />
+          <span className="text-[12px] text-muted-foreground">
+            {selected.size > 0 ? `${selected.size} selected` : "Select all visible"}
+          </span>
+        </div>
         <div className="space-y-2 mb-4">
           {displayed.slice(0, 50).map((p: any) => {
             const isExp = expanded.has(p.id);
@@ -710,6 +765,13 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                   className="flex items-center gap-3 px-4 py-3 cursor-pointer bg-card hover:bg-card/50"
                   onClick={() => setExpanded(prev => { const s = new Set(prev); s.has(p.id) ? s.delete(p.id) : s.add(p.id); return s; })}
                 >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(p.id)}
+                    onClick={e => e.stopPropagation()}
+                    onChange={() => setSelected(prev => { const s = new Set(prev); s.has(p.id) ? s.delete(p.id) : s.add(p.id); return s; })}
+                    className="w-3.5 h-3.5 rounded shrink-0 cursor-pointer accent-violet-500"
+                  />
                   {p.needs_attention
                     ? <span className="inline-flex px-2 py-0.5 rounded-full text-[12px] font-medium bg-amber-500/15 text-amber-400 flex-shrink-0">Needs attention</span>
                     : <span className="inline-flex px-2 py-0.5 rounded-full text-[12px] font-medium bg-emerald-500/15 text-emerald-400 flex-shrink-0">Ready</span>
@@ -832,8 +894,21 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
         {/* Footer actions */}
         <div className="flex items-center justify-between pt-3 border-t border-border flex-wrap gap-3">
           <div className="flex gap-2 flex-wrap">
-            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">Exclude selected</button>
-            <button className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">Re-generate content</button>
+            <button
+              onClick={handleExcludeSelected}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background flex items-center gap-1.5"
+            >
+              Exclude selected{selected.size > 0 ? ` (${selected.size})` : ""}
+            </button>
+            <button
+              onClick={handleRegenerateContent}
+              disabled={regenerating}
+              title="Re-run content generation for this pipeline's products"
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {regenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+              Re-generate content
+            </button>
             <button
               onClick={handleAssignCategory}
               disabled={goingBack}

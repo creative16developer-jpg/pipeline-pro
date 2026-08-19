@@ -495,6 +495,36 @@ async def back_to_category_review(pl_id: int, db: AsyncSession = Depends(get_db)
     return _pl_dict(pl)
 
 
+@router.post("/{pl_id}/regenerate-content")
+async def regenerate_content(pl_id: int, db: AsyncSession = Depends(get_db)):
+    """Re-run content generation for this pipeline's products, then
+    return to Content Review with the fresh results. Client feedback
+    item #10: "Re-generate content" had no onClick handler at all,
+    same dead-UI bug as "Assign category" before that fix.
+    """
+    pl = await db.get(PipelineJob, pl_id)
+    if not pl:
+        raise HTTPException(404, f"Pipeline #{pl_id} not found")
+    if pl.status != "content_review":
+        raise HTTPException(400, f"Can only re-generate content from Content Review (current status: {pl.status})")
+
+    pl.status = "running"
+    pl.current_step = "generate"
+    pl.updated_at = datetime.now(timezone.utc)
+
+    db.add(PipelineLog(
+        pipeline_job_id=pl_id, level="info", step="generate",
+        message="Operator requested content re-generation from Content Review",
+        created_at=datetime.now(timezone.utc),
+    ))
+    await db.commit()
+
+    from tasks.pipeline_tasks import _regenerate_content
+    asyncio.create_task(_regenerate_content(pl.id))
+
+    return {"ok": True, "message": f"PL-{str(pl_id).zfill(3)} re-generating content"}
+
+
 @router.post("/{pl_id}/content-confirm")
 async def content_confirm(pl_id: int, body: ContentConfirmRequest = ContentConfirmRequest(), db: AsyncSession = Depends(get_db)):
     """Confirm content review and start the upload step."""
