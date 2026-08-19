@@ -3,7 +3,7 @@ import { useLocation, useSearch } from "wouter";
 import {
   Play, Zap, ChevronDown, ChevronRight, RotateCcw,
   CloudDownload, Cpu, Upload, ArrowRightLeft, Sparkles,
-  Info, Loader2, AlertTriangle, FileText, Layers, Check, CheckCircle2, Eye, Download
+  Info, Loader2, AlertTriangle, FileText, Layers, Check, CheckCircle2, Eye, Download, ImageIcon
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -135,6 +135,13 @@ function ProductBrowseModal({
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // On-demand image preview -- client feedback: real images needed, but
+  // Sunsky's only real image source (product!getImages.do) is a full ZIP
+  // download, too heavy to fetch eagerly for every row on every page
+  // load. Only fetched when the operator explicitly clicks to preview
+  // one specific product.
+  const [previewRequested, setPreviewRequested] = useState<Set<string>>(new Set());
+  const [previewFailed, setPreviewFailed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!open) return;
@@ -242,8 +249,27 @@ function ProductBrowseModal({
                             onError={(e) => { (e.target as HTMLImageElement).style.visibility = "hidden"; }}
                           />
                         </div>
+                      ) : previewRequested.has(p.sku) && !previewFailed.has(p.sku) ? (
+                        <div className="w-10 h-10 rounded bg-secondary overflow-hidden flex items-center justify-center">
+                          <img
+                            src={`/api/sunsky/preview-image/${encodeURIComponent(p.sku)}`}
+                            alt=""
+                            className="w-10 h-10 object-cover"
+                            onError={() => setPreviewFailed(prev => new Set(prev).add(p.sku))}
+                          />
+                        </div>
+                      ) : previewFailed.has(p.sku) ? (
+                        <div title="No image available for this product" className="w-10 h-10 rounded bg-secondary flex items-center justify-center text-[9px] text-muted-foreground/50">
+                          N/A
+                        </div>
                       ) : (
-                        <div className="w-10 h-10 rounded bg-secondary" />
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPreviewRequested(prev => new Set(prev).add(p.sku)); }}
+                          title="Click to load the real product image"
+                          className="w-10 h-10 rounded bg-secondary flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
+                        >
+                          <ImageIcon className="w-4 h-4" />
+                        </button>
                       )}
                     </td>
                     <td className="py-2 pr-3">

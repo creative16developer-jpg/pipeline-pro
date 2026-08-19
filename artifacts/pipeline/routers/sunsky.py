@@ -142,50 +142,66 @@ async def browse_products(
     except Exception as e:
         raise HTTPException(502, f"Sunsky API error searching products: {e}")
 
-    print(f"[browse_products] patch 52 active — {len(result['products'])} result(s), "
-          f"checking which need a detail-fetch fallback for images")
-
-    # Confirmed via server logs: Sunsky's search API only ever returns
-    # picCount/baseImgCount (counts), never actual image URLs -- no field
-    # name was ever going to fix this, the data simply isn't in the
-    # search response. Real images require a separate per-product detail
-    # call. Bounded concurrency (not all N at once) to avoid making the
-    # rate-limit situation worse; each call is isolated so one failure
-    # doesn't take down the whole page -- that product just falls back
-    # to no image, same as before, rather than erroring the request.
-    sem = asyncio.Semaphore(5)
-
-    async def _fetch_image(p: dict) -> Optional[str]:
-        existing = (p.get("images") or [None])[0]
-        if existing:
-            return existing
-        async with sem:
-            try:
-                detail = await sunsky_client.get_product_detail(p["sku"])
-            except Exception as e:
-                print(f"[browse_products] detail-fetch for {p['sku']} failed: {e}")
-                return None
-        if detail and detail.get("images"):
-            print(f"[browse_products] detail-fetch for {p['sku']} found {len(detail['images'])} image(s)")
-            return detail["images"][0]
-        print(f"[browse_products] detail-fetch for {p['sku']} returned no images either")
-        return None
-
-    fetched_images = await asyncio.gather(*[_fetch_image(p) for p in result["products"]])
-
     return {
         "products": [
             {
                 "sku": p["sku"],
                 "name": p["name"],
                 "price": p.get("price"),
-                "image": img,
+                "image": (p.get("images") or [None])[0],
             }
-            for p, img in zip(result["products"], fetched_images)
+            for p in result["products"]
         ],
         "total": result["total"],
         "pages": result["pages"],
     }
+
+
+@router.get("/preview-image/{item_no}")
+async def preview_product_image(item_no: str):
+    """On-demand real image preview for one product in the Select-a-
+    Product browse popup. Confirmed via three rounds of live testing
+    (patches 52, 54, 55) that Sunsky's JSON responses (search AND
+    detail) never carry image URLs for these products under any field
+    name or HTML-embedded extraction -- the only real image source is
+    product!getImages.do, which returns a full ZIP archive of every
+    product photo, not a lightweight URL.
+
+    Deliberately NOT called eagerly for every row on every page load
+    (that was patch 52's approach, reverted here) -- a ZIP download per
+    product for up to 20 products per page would add real latency and
+    API load for images most operators never actually look closely at.
+    Called only when the operator clicks to preview one specific
+    product, and only the first image is extracted from the ZIP before
+    discarding the rest.
+    """
+    import zipfile
+    import io
+
+    zip_bytes = await sunsky_client.download_product_images(item_no)
+    if not zip_bytes:
+        raise HTTPException(404, "No images available for this product")
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            image_names = sorted(
+                n for n in zf.namelist()
+                if n.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
+                and not n.startswith("__MACOSX")
+            )
+            if not image_names:
+                raise HTTPException(404, "ZIP contained no recognizable image files")
+            image_bytes = zf.read(image_names[0])
+            ext = image_names[0].rsplit(".", 1)[-1].lower()
+    except zipfile.BadZipFile:
+        raise HTTPException(502, "Sunsky returned an unreadable image archive")
+
+    media_type = {
+        "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+        "webp": "image/webp", "gif": "image/gif",
+    }.get(ext, "application/octet-stream")
+
+    return Response(content=image_bytes, media_type=media_type)
 
 
 @router.post("/fetch", response_model=SunskyFetchResult)
