@@ -142,6 +142,9 @@ async def browse_products(
     except Exception as e:
         raise HTTPException(502, f"Sunsky API error searching products: {e}")
 
+    print(f"[browse_products] patch 52 active — {len(result['products'])} result(s), "
+          f"checking which need a detail-fetch fallback for images")
+
     # Confirmed via server logs: Sunsky's search API only ever returns
     # picCount/baseImgCount (counts), never actual image URLs -- no field
     # name was ever going to fix this, the data simply isn't in the
@@ -159,10 +162,13 @@ async def browse_products(
         async with sem:
             try:
                 detail = await sunsky_client.get_product_detail(p["sku"])
-            except Exception:
+            except Exception as e:
+                print(f"[browse_products] detail-fetch for {p['sku']} failed: {e}")
                 return None
         if detail and detail.get("images"):
+            print(f"[browse_products] detail-fetch for {p['sku']} found {len(detail['images'])} image(s)")
             return detail["images"][0]
+        print(f"[browse_products] detail-fetch for {p['sku']} returned no images either")
         return None
 
     fetched_images = await asyncio.gather(*[_fetch_image(p) for p in result["products"]])
