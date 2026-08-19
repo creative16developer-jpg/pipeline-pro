@@ -98,6 +98,7 @@ interface GlobalSettings {
   keyword_strategy: string;
   fallback_strategy: string;
   lock_specs_table: boolean;
+  target_language: string;
 }
 
 interface ProviderInfo {
@@ -169,6 +170,7 @@ const DEFAULT_CONFIG: GenerateConfig = {
     keyword_strategy: "auto",
     fallback_strategy: "safe",
     lock_specs_table: false,
+    target_language: "bg",
   },
   fields: Object.fromEntries(
     FIELD_LIST.map((f) => [
@@ -1054,6 +1056,21 @@ export default function ContentGeneration() {
                   checked={config.globalSettings.lock_specs_table}
                   onChange={(v) => patchGlobal({ lock_specs_table: v })}
                 />
+              </div>
+
+              <div className="flex items-center justify-between p-3 rounded-xl bg-secondary/30 border border-border/40">
+                <div>
+                  <p className="text-sm font-medium">Target Language</p>
+                  <p className="text-xs text-muted-foreground">Language for generated content (title, description, SEO fields, etc.) — brand/model names are never translated. Slug and image filenames always stay in English.</p>
+                </div>
+                <select
+                  value={config.globalSettings.target_language ?? "bg"}
+                  onChange={(e) => patchGlobal({ target_language: e.target.value })}
+                  className="bg-background border border-border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-primary shrink-0"
+                >
+                  <option value="bg">Bulgarian</option>
+                  <option value="en">English</option>
+                </select>
               </div>
 
               <div className="p-3 rounded-xl bg-secondary/30 border border-border/40">

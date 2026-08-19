@@ -378,12 +378,19 @@ def _logic_description(product: dict, options: dict, resolved: dict) -> str:
     desc = _strip_html(product.get("description", ""))
     raw = _get_raw(product)
     specs = _parse_params_table(raw.get("paramsTable", ""))
+    lang = options.get("target_language", "bg")
 
     structure = options.get("structure", ["intro", "features", "benefits", "compatibility", "closing"])
     parts: list[str] = []
 
     if "intro" in structure:
-        body = desc or "A quality product designed for reliable performance."
+        # {name} is interpolated verbatim regardless of language -- it's
+        # Sunsky's own English product name/brand text, which client
+        # feedback item #16 explicitly says must never be translated:
+        # "We need to lock logic to not generate brand names or models
+        # in bulgarian... Input from sunsky is always in english."
+        fallback = "Качествен продукт, създаден за надеждна работа." if lang == "bg" else "A quality product designed for reliable performance."
+        body = desc or fallback
         parts.append(f"<p><strong>{name}</strong> — {body}</p>")
 
     if "features" in structure and specs:
@@ -394,18 +401,26 @@ def _logic_description(product: dict, options: dict, resolved: dict) -> str:
         parts.append(f"<ul>{items}</ul>")
 
     if "benefits" in structure:
-        parts.append(
-            "<p>Built to high quality standards, "
-            "offering outstanding value and reliable performance.</p>"
+        benefits_text = (
+            "Произведен по високи стандарти за качество, предлагащ отлична стойност и надеждна работа."
+            if lang == "bg" else
+            "Built to high quality standards, offering outstanding value and reliable performance."
         )
+        parts.append(f"<p>{benefits_text}</p>")
 
     if "compatibility" in structure:
         brand = _get_brand(specs)
         if brand:
-            parts.append(f"<p><em>Compatible with: {brand}</em></p>")
+            label = "Съвместим с" if lang == "bg" else "Compatible with"
+            parts.append(f"<p><em>{label}: {brand}</em></p>")
 
     if "closing" in structure:
-        parts.append(f"<p>Order your {name} today and experience the difference quality makes.</p>")
+        closing_text = (
+            f"Поръчайте своя {name} днес и усетете разликата, която качеството прави."
+            if lang == "bg" else
+            f"Order your {name} today and experience the difference quality makes."
+        )
+        parts.append(f"<p>{closing_text}</p>")
 
     return "\n".join(parts) if parts else (desc or name)
 
@@ -545,9 +560,14 @@ def _derive_short_description(product: dict, options: dict, resolved: dict) -> s
 def _derive_meta_description(product: dict, options: dict, resolved: dict) -> str:
     desc = resolved.get("description", "") or product.get("description", "")
     text = _strip_html(desc)
+    lang = options.get("target_language", "bg")
 
     if len(text) < 80:
-        cta = " Shop now for the best selection and premium quality."
+        cta = (
+            " Пазарувайте сега за най-добрия избор и премиум качество."
+            if lang == "bg" else
+            " Shop now for the best selection and premium quality."
+        )
         text = (text + cta)[:160]
 
     if len(text) > 160:
@@ -656,6 +676,18 @@ async def run_field(
     ai_provider = gs.get("ai_provider", "openai") or "openai"
     ai_model = gs.get("ai_model") or None
     fallback_strategy = gs.get("fallback_strategy", "safe")
+
+    # Client feedback item #16: global target-language toggle (Bulgarian
+    # default), applied to every generated field EXCEPT slug and
+    # image_names -- "except url slug (keep logic as is right now) and
+    # image file names." Injected into options here (same single-point
+    # pattern as the specs-table lock above) so both AI mode (via
+    # _build_prompt's {language_instruction}) and Logic/Derive mode
+    # generators can read options.get("target_language") uniformly with
+    # no separate plumbing needed. Excluded fields never see it at all,
+    # rather than relying on every generator to remember to ignore it.
+    if field not in ("slug", "image_names"):
+        options = {**options, "target_language": gs.get("target_language", "bg")}
 
     # Client feedback: "The logic option in different fields catch wrong/
     # unwanted data... I think we should lock the specs table for using

@@ -105,6 +105,34 @@ def _build_product_context(product: dict) -> str:
     return f"Product Name: {name}\nSKU: {sku}\nDescription: {desc or '(none)'}\nSpecifications:\n{specs_text}"
 
 
+def _language_instruction(options: dict) -> str:
+    """Client feedback item #16: global target-language toggle (Bulgarian
+    default). Never applied to slug/image_names -- content_service.py's
+    run_field only injects options["target_language"] for fields other
+    than those two, so this function is simply never invoked for them
+    (their prompt templates don't reference {language_instruction} at all).
+
+    Brand/model names must never be translated even in Bulgarian output:
+    "We need to lock logic to not generate brand names or models in
+    bulgarian. For example GoPro, Apple Iphone, Samsung Galaxy aways
+    need to be in english, not translated. Input from sunsky is always
+    in english."
+    """
+    lang = options.get("target_language", "bg")
+    if lang == "en":
+        return "Write all content in English."
+    return (
+        "Write all content in Bulgarian (Cyrillic script), natural and "
+        "fluent for a Bulgarian e-commerce audience. EXCEPTION: brand "
+        "names, model names, and product line names (e.g. GoPro, Apple "
+        "iPhone, Samsung Galaxy, Xiaomi, Honor, FMFXTR) must NEVER be "
+        "translated or transliterated into Cyrillic -- always keep them "
+        "in their original English/Latin form exactly as given in the "
+        "product data, even though the surrounding sentence is in "
+        "Bulgarian."
+    )
+
+
 def _build_prompt(field: str, product: dict, options: dict) -> str:
     """Fill in the externalised template for `field` from PROMPT_TEMPLATES
     (pipeline/prompts.json). Falls back to the 'default' template for any
@@ -119,6 +147,7 @@ def _build_prompt(field: str, product: dict, options: dict) -> str:
         "max_words": options.get("max_words", 30),
         "max_tags": options.get("max_tags", 8),
         "structure": ", ".join(options.get("structure", ["intro", "features", "benefits", "compatibility"])),
+        "language_instruction": _language_instruction(options),
     }
     return template.format(**format_args)
 
