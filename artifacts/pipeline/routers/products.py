@@ -32,6 +32,21 @@ class ProductCategoriesUpdate(BaseModel):
     primary_woo_cat_id: Optional[int] = None
 
 
+class ProductFieldsUpdate(BaseModel):
+    name: Optional[str] = None
+    site_sku: Optional[str] = None
+    price: Optional[str] = None
+    sale_price: Optional[str] = None
+    stock_quantity: Optional[int] = None
+    description: Optional[str] = None
+    short_description: Optional[str] = None
+    slug: Optional[str] = None
+    meta_title: Optional[str] = None
+    meta_description: Optional[str] = None
+    focus_keyword: Optional[str] = None
+    tags: Optional[str] = None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # List + Detail
 # ─────────────────────────────────────────────────────────────────────────────
@@ -106,6 +121,35 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
         from services.enrich_service import get_effective_category_name_map
         category_name_map = await get_effective_category_name_map(db)
         out.category_name = category_name_map.get(str(product.category_id))
+    return out
+
+
+@router.patch("/{product_id}/fields")
+async def update_product_fields(
+    product_id: int,
+    body: ProductFieldsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save inline edits from the Content Review screen. Client feedback
+    item #8 (Baselinker reference video): "options available for manual
+    editing: quantity, sales and regular prices, woo sku and to be able
+    to edit all details."
+
+    Partial update -- only fields actually present in the request body
+    are changed (model_fields_set, not just non-None, so a deliberate
+    clear-to-empty-string is distinguished from "field not sent").
+    """
+    product = await db.get(Product, product_id)
+    if not product:
+        raise HTTPException(404, "Product not found")
+
+    for field in body.model_fields_set:
+        setattr(product, field, getattr(body, field))
+
+    await db.commit()
+    await db.refresh(product)
+
+    out = ProductOut.model_validate(product)
     return out
 
 

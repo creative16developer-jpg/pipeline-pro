@@ -227,6 +227,13 @@ async def create_product(store: Store, product_data: dict) -> dict:
     if sku:
         payload["sku"] = sku
 
+    # Client feedback item #8: sale_price alongside regular_price.
+    # Only sent when present -- an empty/zero sale_price would incorrectly
+    # mark the product "On Sale" at $0 in WooCommerce.
+    sale_price = (product_data.get("sale_price", "") or "").strip()
+    if sale_price:
+        payload["sale_price"] = sale_price
+
     slug = (product_data.get("slug", "") or "").strip()
     if slug:
         payload["slug"] = slug
@@ -341,6 +348,8 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
         payload["name"] = product_data["name"] or "Unnamed Product"
     if "price" in product_data:
         payload["regular_price"] = str(product_data["price"] or "0")
+    if "sale_price" in product_data and product_data["sale_price"]:
+        payload["sale_price"] = str(product_data["sale_price"]).strip()
     if "description" in product_data:
         payload["description"] = product_data["description"] or ""
     if "short_description" in product_data:

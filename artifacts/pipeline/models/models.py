@@ -97,6 +97,10 @@ class Product(Base):
     # Tracks source of each field: {"description": "ai:openai", "short_description": "logic", ...}
     content_source = Column(JSON, nullable=True)
     price = Column(String, nullable=True)
+    # Client feedback item #8 (Baselinker reference): "sales and regular
+    # prices" both need to be editable. Regular price (price) already
+    # existed; sale_price is new -- see add_product_sale_price.sql.
+    sale_price = Column(String, nullable=True)
     stock_status = Column(String, nullable=True)
     # Real numeric quantity. Nullable — when absent we fall back to a
     # stock_status-derived placeholder (see job_tasks.py upload payload).

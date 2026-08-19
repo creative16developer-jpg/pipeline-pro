@@ -622,6 +622,50 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Client feedback item #8 (Baselinker reference): "options available
+  // for manual editing: quantity, sales and regular prices, woo sku and
+  // to be able to edit all details." drafts holds UNSAVED per-product
+  // field edits; getField reads the draft if present, else the loaded
+  // value -- so the UI shows what the operator typed even before saving.
+  const [drafts, setDrafts] = useState<Record<number, Record<string, any>>>({});
+  const [savingProduct, setSavingProduct] = useState<number | null>(null);
+
+  const getField = (p: any, field: string) => drafts[p.id]?.[field] ?? p[field] ?? "";
+  const setDraftField = (pid: number, field: string, value: any) =>
+    setDrafts(prev => ({ ...prev, [pid]: { ...prev[pid], [field]: value } }));
+  const hasDraft = (pid: number) => !!drafts[pid] && Object.keys(drafts[pid]).length > 0;
+
+  const handleSaveProduct = async (pid: number) => {
+    const changes = drafts[pid];
+    if (!changes) return;
+    setSavingProduct(pid);
+    try {
+      // stock_quantity must be a number (or null), not the raw string
+      // the input naturally produces.
+      const body: any = { ...changes };
+      if ("stock_quantity" in body) {
+        body.stock_quantity = body.stock_quantity === "" ? null : Number(body.stock_quantity);
+      }
+      const r = await fetch(`/api/products/${pid}/fields`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      // Merge saved values into local product list so the UI reflects
+      // the save without needing a full re-fetch of every product.
+      setData((prev: any) => ({
+        ...prev,
+        products: (prev?.products ?? []).map((p: any) => p.id === pid ? { ...p, ...changes } : p),
+      }));
+      setDrafts(prev => { const next = { ...prev }; delete next[pid]; return next; });
+      toast({ title: "Saved" });
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setSavingProduct(null);
+    }
+  };
   const [goingBack, setGoingBack] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
 
@@ -785,15 +829,125 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                     <div className="grid grid-cols-1 gap-3 mt-3">
                       <div>
                         <label className="block text-[12px] font-medium text-foreground/70 mb-1">Product Title</label>
-                        <input defaultValue={p.name} className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400" />
+                        <input
+                          value={getField(p, "name")}
+                          onChange={e => setDraftField(p.id, "name", e.target.value)}
+                          className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                        />
                       </div>
-                      {p.description && (
+
+                      {/* Qty / Price row -- Baselinker reference: "quantity,
+                          sales and regular prices, woo sku" all editable
+                          inline, not buried behind a separate screen. */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                         <div>
-                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Description</label>
-                          <textarea defaultValue={p.description} rows={3}
-                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400 resize-y" />
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Woo SKU</label>
+                          <input
+                            value={getField(p, "site_sku")}
+                            onChange={e => setDraftField(p.id, "site_sku", e.target.value)}
+                            placeholder={p.sku}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Stock Qty</label>
+                          <input
+                            type="number"
+                            value={getField(p, "stock_quantity")}
+                            onChange={e => setDraftField(p.id, "stock_quantity", e.target.value)}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Regular Price</label>
+                          <input
+                            value={getField(p, "price")}
+                            onChange={e => setDraftField(p.id, "price", e.target.value)}
+                            placeholder="0.00"
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Sale Price</label>
+                          <input
+                            value={getField(p, "sale_price")}
+                            onChange={e => setDraftField(p.id, "sale_price", e.target.value)}
+                            placeholder="Optional"
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[12px] font-medium text-foreground/70 mb-1">Description</label>
+                        <textarea
+                          value={getField(p, "description")}
+                          onChange={e => setDraftField(p.id, "description", e.target.value)}
+                          rows={3}
+                          className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400 resize-y"
+                        />
+                      </div>
+
+                      {/* SEO fields -- client feedback: Content Review only
+                          ever showed Title/Description/Images/Category/
+                          Attributes; Slug, Meta Title, Meta Description,
+                          and Focus Keyword existed on every product the
+                          whole time but were never visible or editable
+                          here at all. */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Slug</label>
+                          <input
+                            value={getField(p, "slug")}
+                            onChange={e => setDraftField(p.id, "slug", e.target.value)}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400 font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Focus Keyword</label>
+                          <input
+                            value={getField(p, "focus_keyword")}
+                            onChange={e => setDraftField(p.id, "focus_keyword", e.target.value)}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Meta Title</label>
+                          <input
+                            value={getField(p, "meta_title")}
+                            onChange={e => setDraftField(p.id, "meta_title", e.target.value)}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Meta Description</label>
+                          <input
+                            value={getField(p, "meta_description")}
+                            onChange={e => setDraftField(p.id, "meta_description", e.target.value)}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                      </div>
+
+                      {hasDraft(p.id) && (
+                        <div className="flex items-center gap-2 sticky bottom-0 bg-card/95 backdrop-blur-sm py-2 -mx-4 px-4 border-t border-violet-500/30">
+                          <button
+                            onClick={() => handleSaveProduct(p.id)}
+                            disabled={savingProduct === p.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-500 hover:bg-violet-600 text-white text-[12px] font-medium disabled:opacity-50"
+                          >
+                            {savingProduct === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                            Save changes
+                          </button>
+                          <button
+                            onClick={() => setDrafts(prev => { const next = { ...prev }; delete next[p.id]; return next; })}
+                            className="text-[12px] text-muted-foreground hover:text-foreground px-2"
+                          >
+                            Discard
+                          </button>
                         </div>
                       )}
+
                       {p.image_count > 0 && (
                         <div>
                           <label className="block text-[12px] font-medium text-foreground/70 mb-1">Images</label>

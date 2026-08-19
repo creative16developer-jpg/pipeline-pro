@@ -91,6 +91,9 @@ class ProductOut(BaseModel):
     image_names: Optional[str] = None
     content_source: Optional[Any] = None
     price: Optional[str] = None
+    sale_price: Optional[str] = None
+    site_sku: Optional[str] = None
+    stock_quantity: Optional[int] = None
     stock_status: Optional[str] = None
     status: str
     category_id: Optional[str] = None

@@ -991,6 +991,13 @@ async def _run_upload(db, job):
                     else (10 if product.stock_status == "in_stock" else 0)
                 ),
             }
+            # Only included when set -- an empty-string sale_price would
+            # incorrectly mark the product "On Sale" at $0 in WooCommerce.
+            # Client feedback item #8: "sales and regular prices" both
+            # need to be editable (Baselinker reference); regular price
+            # already flowed through correctly, sale_price never existed.
+            if product.sale_price:
+                payload["sale_price"] = product.sale_price
             if woo_cat_ids:
                 payload["categories"] = [{"id": cid} for cid in woo_cat_ids]
 
