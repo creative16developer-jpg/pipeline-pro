@@ -788,6 +788,22 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   }, [allProducts, tab, excluded]);
 
   const handleUploadAll = async () => {
+    // Confirmed live: typing a value into any of these fields looks
+    // identical to a saved one (the input just shows what you typed),
+    // with no visual cue it was never persisted -- proceeding straight
+    // to Upload after editing but before clicking "Save changes"
+    // silently uploads the OLD database values instead, since Upload
+    // reads directly from the Product row, not from browser-local
+    // draft state that was never sent anywhere.
+    const draftCount = Object.keys(drafts).filter(pid => Object.keys(drafts[Number(pid)] ?? {}).length > 0).length;
+    if (draftCount > 0) {
+      const proceed = confirm(
+        `${draftCount} product${draftCount !== 1 ? "s have" : " has"} unsaved edits. ` +
+        `These will NOT be included in the upload unless you save them first.\n\n` +
+        `Click Cancel to go back and save, or OK to upload anyway using the current saved values.`
+      );
+      if (!proceed) return;
+    }
     setSaving(true);
     try {
       const r = await fetch(`/api/pipelines/${pl.id}/content-confirm`, {
@@ -919,6 +935,11 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                     ? <span className="inline-flex px-2 py-0.5 rounded-full text-[12px] font-medium bg-amber-500/15 text-amber-400 flex-shrink-0">Needs attention</span>
                     : <span className="inline-flex px-2 py-0.5 rounded-full text-[12px] font-medium bg-emerald-500/15 text-emerald-400 flex-shrink-0">Ready</span>
                   }
+                  {hasDraft(p.id) && (
+                    <span title="Edited but not saved yet — won't be included in Upload until you click Save changes" className="inline-flex px-2 py-0.5 rounded-full text-[12px] font-medium bg-orange-500/15 text-orange-400 flex-shrink-0">
+                      Unsaved
+                    </span>
+                  )}
                   <strong className="text-[13px]">{p.name}</strong>
                   <span className="text-[12px] text-muted-foreground">{p.sku}{p.price ? ` · $${p.price}` : ""}</span>
                   <span className="ml-auto text-muted-foreground/60 text-[12px]">{isExp ? "▾" : "›"}</span>
