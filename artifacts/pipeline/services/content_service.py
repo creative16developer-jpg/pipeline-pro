@@ -287,30 +287,87 @@ def _logic_title(product: dict, options: dict, resolved: dict) -> str:
     return _truncate_no_mid_word(name, max_chars)
 
 
+_TAG_STOPWORDS = {
+    "for", "new", "the", "a", "an", "with", "and", "or", "of", "to", "in",
+    "original", "genuine", "hot", "sale", "1pc", "2pcs", "3pcs", "set",
+}
+
+# Values that look like a raw measurement/quantity rather than a real,
+# taggable product attribute (weight, dimensions, package counts) --
+# these show up constantly in Sunsky's spec tables and are meaningless
+# as tags on their own.
+_TAG_MEASUREMENT_RE = re.compile(
+    r"^\s*[\d.]+\s*(kgs?|g|lbs?|oz|cm|mm|inch(es)?|pcs?|pieces?)\s*$", re.IGNORECASE
+)
+# Spec keys worth preferring, in priority order, over an arbitrary first
+# value. Includes common synonyms (mirrors _get_brand's own key list above)
+# so e.g. "Compatible Brand" is recognized just as reliably as "Brand".
+_TAG_PREFERRED_SPEC_KEYS = (
+    "color", "colour", "brand", "compatible brand", "manufacturer",
+    "material", "style",
+)
+
+
+def _clean_tag_word(w: str) -> str:
+    """Strip stray punctuation a raw title word can carry -- e.g. a
+    trailing "Blue)" -> "Blue". Does NOT handle parenthesis-as-word-
+    boundary (e.g. "Case(Silver)"); that's split out before this runs.
+    """
+    return re.sub(r"[^\w\s-]", "", w).strip()
+
+
+def _tag_case(w: str) -> str:
+    """Title Case, except genuine all-caps brand/model codes (FMFXTR,
+    ZTTO, etc.) -- common in Sunsky product titles -- which .title()
+    would otherwise mangle into "Fmfxtr", damaging the actual brand name.
+    """
+    if len(w) >= 3 and w.isupper():
+        return w
+    return w.title()
+
+
 def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
     raw = _get_raw(product)
     specs = _parse_params_table(raw.get("paramsTable", ""))
     name = product.get("name", "")
-    words = name.split()
+    # Split on whitespace AND parenthesis/bracket boundaries -- confirmed
+    # live that "Case(Silver)" was reaching WooCommerce as a merged,
+    # malformed "Casesilver" tag when parentheses were only stripped as
+    # characters instead of treated as separating two distinct words.
+    raw_words = re.split(r"[\s()\[\]]+", name)
+    words = [_clean_tag_word(w) for w in raw_words]
+    words = [w for w in words if w and w.lower() not in _TAG_STOPWORDS]
 
     tags: list[str] = []
     cat = product.get("category", "")
     if cat:
-        tags.append(cat.strip().title())
+        tags.append(_tag_case(cat.strip()))
     elif words:
-        tags.append(words[0].strip().title())
+        tags.append(_tag_case(words[0]))
 
     if len(words) > 1:
-        last = words[-1].strip().title()
+        last = _tag_case(words[-1])
         if last not in tags:
             tags.append(last)
 
-    for v in specs.values():
-        if isinstance(v, str) and 2 < len(v) < 30:
-            cleaned = v.strip().title()
-            if cleaned not in tags:
-                tags.append(cleaned)
+    # Prefer a known-useful spec key (Color/Brand/Material/Style) over an
+    # arbitrary first value in raw HTML table order, which could just as
+    # easily be a package weight or dimension -- confirmed live picking up
+    # "0.08Kgs" as a "tag" this way.
+    spec_tag = None
+    specs_lower = {k.strip().lower(): v for k, v in specs.items()}
+    for key in _TAG_PREFERRED_SPEC_KEYS:
+        v = specs_lower.get(key)
+        if isinstance(v, str) and v.strip():
+            spec_tag = _tag_case(v.strip())
+            break
+    if not spec_tag:
+        for v in specs.values():
+            if isinstance(v, str) and 2 < len(v) < 30 and not _TAG_MEASUREMENT_RE.match(v):
+                spec_tag = _tag_case(v.strip())
                 break
+    if spec_tag and spec_tag not in tags:
+        tags.append(spec_tag)
 
     max_tags = int(options.get("max_tags", 3))
     return ", ".join(tags[:max_tags])
