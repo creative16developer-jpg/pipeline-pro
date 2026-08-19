@@ -8,6 +8,7 @@ from pipeline import sunsky_client
 from datetime import datetime, timezone
 from pydantic import BaseModel
 from typing import Optional
+import asyncio
 
 router = APIRouter(prefix="/sunsky", tags=["sunsky"])
 
@@ -141,15 +142,40 @@ async def browse_products(
     except Exception as e:
         raise HTTPException(502, f"Sunsky API error searching products: {e}")
 
+    # Confirmed via server logs: Sunsky's search API only ever returns
+    # picCount/baseImgCount (counts), never actual image URLs -- no field
+    # name was ever going to fix this, the data simply isn't in the
+    # search response. Real images require a separate per-product detail
+    # call. Bounded concurrency (not all N at once) to avoid making the
+    # rate-limit situation worse; each call is isolated so one failure
+    # doesn't take down the whole page -- that product just falls back
+    # to no image, same as before, rather than erroring the request.
+    sem = asyncio.Semaphore(5)
+
+    async def _fetch_image(p: dict) -> Optional[str]:
+        existing = (p.get("images") or [None])[0]
+        if existing:
+            return existing
+        async with sem:
+            try:
+                detail = await sunsky_client.get_product_detail(p["sku"])
+            except Exception:
+                return None
+        if detail and detail.get("images"):
+            return detail["images"][0]
+        return None
+
+    fetched_images = await asyncio.gather(*[_fetch_image(p) for p in result["products"]])
+
     return {
         "products": [
             {
                 "sku": p["sku"],
                 "name": p["name"],
                 "price": p.get("price"),
-                "image": (p.get("images") or [None])[0],
+                "image": img,
             }
-            for p in result["products"]
+            for p, img in zip(result["products"], fetched_images)
         ],
         "total": result["total"],
         "pages": result["pages"],
