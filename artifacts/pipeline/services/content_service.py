@@ -275,6 +275,97 @@ def _truncate_no_mid_word(value: str, max_chars: int, boundary: str = " ") -> st
     return (value if next_b == -1 else value[:next_b]).rstrip(boundary)
 
 
+# Client feedback item #16 follow-up: Focus Keyword (and Meta Title,
+# Image Alt, which all derive from resolved["title"]) showed English
+# text even with Target Language=Bulgarian, because _logic_title never
+# had any language logic at all -- it just cleaned/truncated the raw
+# Sunsky name. Fixed via a real, deterministic word/phrase glossary
+# translator (see _translate_title_bg below), NOT an AI call -- Logic
+# mode's "never uses AI" guarantee (verified and told to the client
+# during the Lock Specs Table work) stays true. This is a curated
+# glossary, not full machine translation: word order and Bulgarian
+# grammatical agreement (adjective gender matching the noun that
+# follows) won't always be perfect, but the meaning comes through
+# correctly and brand/model names are never touched.
+#
+# Longest phrase first (checked before single words) so multi-word
+# terms translate as a unit instead of word-by-word ("screen
+# protector" as one concept, not "screen" + "protector" separately).
+_EN_BG_PHRASES: list[tuple[str, str]] = [
+    ("screen protector", "протектор за екран"),
+    ("tempered glass", "закалено стъкло"),
+    ("full coverage", "пълно покритие"),
+    ("fast charging", "бързо зареждане"),
+    ("charging cable", "кабел за зареждане"),
+    ("power bank", "външна батерия"),
+    ("phone case", "калъф за телефон"),
+    ("card holder", "поставка за карти"),
+    ("card slot", "гнездо за карта"),
+    ("memory card", "карта с памет"),
+    ("micro sd", "micro SD"),
+    ("sim tray", "поставка за SIM"),
+    ("sim card", "SIM карта"),
+    ("noise cancellation", "шумопотискане"),
+    ("wireless earphones", "безжични слушалки"),
+    ("wireless charging", "безжично зареждане"),
+    ("wireless charger", "безжично зарядно"),
+    ("shock proof", "удароустойчив"),
+    ("shockproof", "удароустойчив"),
+    ("water proof", "водоустойчив"),
+    ("waterproof", "водоустойчив"),
+    ("dust proof", "прахоустойчив"),
+    ("scratch resistant", "устойчив на надрасквания"),
+    ("anti scratch", "устойчив на надраскване"),
+]
+_EN_BG_WORDS: dict[str, str] = {
+    "case": "калъф", "cover": "покритие", "protective": "защитен",
+    "protector": "протектор", "protection": "защита",
+    "wireless": "безжичен", "bluetooth": "Bluetooth",
+    "charger": "зарядно", "charging": "зареждане", "cable": "кабел",
+    "adapter": "адаптер", "battery": "батерия",
+    "earphones": "слушалки", "earbuds": "слушалки", "headphones": "слушалки",
+    "speaker": "тонколона", "microphone": "микрофон",
+    "watch": "часовник", "band": "каишка", "strap": "каишка",
+    "holder": "поставка", "mount": "стойка", "stand": "стойка",
+    "bag": "чанта", "pouch": "калъфче", "sleeve": "калъф",
+    "shell": "черупка", "bumper": "бъмпер",
+    "silicone": "силиконов", "leather": "кожен", "metal": "метален",
+    "plastic": "пластмасов", "glass": "стъклен",
+    "durable": "издръжлив", "premium": "премиум", "universal": "универсален",
+    "compatible": "съвместим", "portable": "преносим", "foldable": "сгъваем",
+    "mini": "мини", "slim": "тънък", "ultra-thin": "ултра тънък",
+    "replacement": "резервен", "spare": "резервен",
+    "set": "комплект", "kit": "комплект", "pack": "пакет",
+    "phone": "телефон", "tablet": "таблет", "laptop": "лаптоп",
+    "screen": "екран", "camera": "камера", "lens": "обектив",
+    "with": "с", "for": "за", "and": "и",
+}
+
+
+def _translate_title_bg(text: str) -> str:
+    """Real, deterministic word/phrase substitution -- see the module-
+    level comment above _EN_BG_PHRASES for why this exists and its
+    honest limitations (curated glossary, not full machine translation).
+    Case-insensitive matching; unmatched tokens (brand names, model
+    numbers, technical codes) pass through completely unchanged, which
+    is exactly the desired behavior for preserving brand/model names.
+
+    Uses \\b word-boundary regex substitution rather than manual
+    split(" ") + strip-punctuation tokenizing -- confirmed live the
+    latter misses words with INTERNAL punctuation like "Case(Silver)"
+    (the parenthesis sits mid-token, not at the edges), the exact same
+    bug class already found and fixed in Tags logic (patch 44). \\b
+    already correctly treats the boundary before "(" as a word edge
+    without needing any manual tokenization at all.
+    """
+    result = text
+    for en, bg in _EN_BG_PHRASES:
+        result = re.sub(re.escape(en), bg, result, flags=re.IGNORECASE)
+    for en, bg in _EN_BG_WORDS.items():
+        result = re.sub(r"\b" + re.escape(en) + r"\b", bg, result, flags=re.IGNORECASE)
+    return result
+
+
 def _logic_title(product: dict, options: dict, resolved: dict) -> str:
     csv_title = (product.get("csv_title") or "").strip()
     if csv_title:
@@ -283,6 +374,10 @@ def _logic_title(product: dict, options: dict, resolved: dict) -> str:
     name = _strip_html(product.get("name", ""))
     if name:
         name = name[0].upper() + name[1:]
+
+    lang = options.get("target_language", "bg")
+    if lang == "bg" and name:
+        name = _translate_title_bg(name)
 
     max_chars = int(options.get("max_chars", 120))
     return _truncate_no_mid_word(name, max_chars)
@@ -480,7 +575,15 @@ def _logic_description(product: dict, options: dict, resolved: dict) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _derive_slug(product: dict, options: dict, resolved: dict) -> str:
-    title = resolved.get("title", "") or product.get("name", "")
+    # Deliberately does NOT use resolved["title"] -- client feedback
+    # item #16 explicit exception: "except url slug (keep logic as is
+    # right now)". Title can now be Bulgarian (Cyrillic) via
+    # _logic_title's real translation; _slugify() does
+    # text.encode("ascii","ignore"), which would silently strip every
+    # Cyrillic character and produce an empty/garbled slug if this used
+    # the resolved (possibly-Bulgarian) title instead of the raw,
+    # always-English Sunsky product name.
+    title = product.get("name", "") or resolved.get("title", "")
     sku = product.get("site_sku") or product.get("sku", "")
     max_chars = int(options.get("max_chars", 70))
 
@@ -556,6 +659,10 @@ def _derive_image_names(product: dict, options: dict, resolved: dict) -> str:
 
 _FOCUS_KEYWORD_STOPWORDS = {
     "for", "with", "and", "the", "a", "an", "of", "to", "in", "on",
+    # Bulgarian equivalents -- Title can now produce Bulgarian text (see
+    # _translate_title_bg), which uses these exact words for the same
+    # filler terms.
+    "за", "с", "и", "в", "на",
 }
 
 
