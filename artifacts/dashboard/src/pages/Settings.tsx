@@ -175,6 +175,77 @@ interface CatMapping {
   last_used_at: string | null;
 }
 
+// Searchable combobox: free-text input (still supports typing a raw ID or a
+// brand-new/unlisted value -- some fields legitimately need that) PLUS a
+// filtered dropdown of known options underneath, so a typo doesn't silently
+// create a mapping that will never match anything real. Click an option to
+// select it outright; keep typing to filter; click outside or Escape closes
+// the list without losing whatever's currently in the input.
+function SearchableCombobox({
+  value, onChange, options, placeholder, emptyHint,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { id: string; label: string; sublabel?: string }[];
+  placeholder?: string;
+  emptyHint?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = value.trim().toLowerCase();
+    if (!q) return options.slice(0, 50);
+    return options
+      .filter(o => o.label.toLowerCase().includes(q) || o.id.toLowerCase().includes(q))
+      .slice(0, 50);
+  }, [value, options]);
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <input
+        type="text"
+        placeholder={placeholder}
+        value={value}
+        onChange={e => { onChange(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={e => { if (e.key === "Escape") setOpen(false); }}
+        className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary placeholder:font-sans placeholder:text-muted-foreground"
+      />
+      {open && (
+        <div className="absolute z-20 mt-1 w-full max-h-64 overflow-y-auto rounded-lg border border-border bg-popover shadow-lg">
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-xs text-muted-foreground">
+              {emptyHint ?? "No matches — you can still type a new value freely."}
+            </div>
+          ) : (
+            filtered.map(o => (
+              <button
+                key={o.id}
+                type="button"
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => { onChange(o.label); setOpen(false); }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center justify-between gap-2"
+              >
+                <span className="font-sans">{o.label}</span>
+                {o.sublabel && <span className="text-xs text-muted-foreground font-mono shrink-0">{o.sublabel}</span>}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CategoryMappingDictionary() {
   const { toast } = useToast();
   const [stores, setStores] = useState<any[]>([]);
@@ -191,6 +262,7 @@ function CategoryMappingDictionary() {
   const [addingNew, setAddingNew] = useState(false);
   const [newSunskyCat, setNewSunskyCat] = useState("");
   const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null }>({ woo_cats: [], primary_id: null, profile_id: null });
+  const [starredCats, setStarredCats] = useState<{ id: string; name: string }[]>([]);
 
   // Import Mapping state
   const importRef = useRef<HTMLInputElement>(null);
@@ -211,6 +283,10 @@ function CategoryMappingDictionary() {
     fetch("/api/attr-profiles")
       .then(r => r.json())
       .then(d => setProfiles((d.profiles ?? []).map((p: any) => ({ id: p.id, name: p.name }))))
+      .catch(() => {});
+    fetch("/api/sunsky/starred-categories")
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setStarredCats((Array.isArray(d) ? d : (d.categories ?? [])).map((c: any) => ({ id: String(c.id), name: c.name }))))
       .catch(() => {});
   }, []);
 
@@ -455,12 +531,14 @@ function CategoryMappingDictionary() {
 
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">Sunsky Category (ID or Name)</label>
-            <input
-              type="text"
-              placeholder="e.g. 110358  or  Mobile Accessories"
+            <SearchableCombobox
               value={newSunskyCat}
-              onChange={e => setNewSunskyCat(e.target.value)}
-              className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary placeholder:font-sans placeholder:text-muted-foreground"
+              onChange={setNewSunskyCat}
+              options={starredCats.map(c => ({ id: c.id, label: c.name, sublabel: c.id }))}
+              placeholder="e.g. 110358  or  Mobile Accessories"
+              emptyHint={starredCats.length === 0
+                ? "No starred categories yet — star some on the Sunsky Categories page, or type a raw ID/name here."
+                : "No matches in your starred categories — you can still type a new ID or name freely."}
             />
           </div>
 
@@ -866,25 +944,24 @@ function AIExtractionRulesTab() {
       <div className="grid grid-cols-2 gap-3">
         <div className="col-span-2 space-y-1">
           <label className="text-xs font-medium text-muted-foreground">WooCommerce Attribute Name *</label>
-          <input
-            list="extraction-rule-woo-attrs"
-            type="text"
-            placeholder="e.g. Color, Brand, Material — doesn't need to exist in WooCommerce yet"
+          {/* Combobox: free-text (typing a brand-new name is always allowed --
+              attributes are get-or-created in WooCommerce at upload time
+              anyway, a rule never actually needed the attribute to exist
+              beforehand) PLUS a dropdown of already-synced attributes, so a
+              typo doesn't silently create a near-duplicate ("Colour" vs
+              "Color"). Was a native <datalist>, which most people never
+              notice is there at all -- swapped for the same explicit
+              combobox used for Sunsky Category, for a consistent, more
+              discoverable UX app-wide. */}
+          <SearchableCombobox
             value={form.woo_attr_name}
-            onChange={e => setForm(f => ({ ...f, woo_attr_name: e.target.value }))}
-            className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+            onChange={v => setForm(f => ({ ...f, woo_attr_name: v }))}
+            options={availableWooAttrs.map(a => ({ id: String(a.id), label: a.name }))}
+            placeholder="e.g. Color, Brand, Material — doesn't need to exist in WooCommerce yet"
+            emptyHint={wooAttrs.length === 0
+              ? "No WooCommerce attributes synced yet — that's fine, just type the name freely. It'll be created automatically on upload."
+              : "No matches — you can still type a brand-new attribute name freely."}
           />
-          {/* Suggests already-synced attributes via the native datalist picker
-              (type-ahead, still freely editable) when there are any — but
-              typing a brand-new name is always allowed. Attributes are
-              get-or-created in WooCommerce at upload time anyway, so a rule
-              never actually needed the attribute to exist beforehand; the
-              old select-only version just made that a hard requirement by
-              accident, which blocked rule creation completely on a store
-              with nothing synced yet (e.g. right after a full reset). */}
-          <datalist id="extraction-rule-woo-attrs">
-            {availableWooAttrs.map(a => <option key={a.id} value={a.name} />)}
-          </datalist>
           {wooAttrs.length === 0 && (
             <div className="flex items-center gap-2 rounded-lg border border-border/50 bg-secondary/30 px-3 py-2 text-xs text-muted-foreground">
               <Info className="w-3.5 h-3.5 shrink-0" />
@@ -2555,6 +2632,15 @@ function AttrMappingModal({
       : { ...EMPTY_FORM }
   );
   const [saving, setSaving] = useState(false);
+  const [wooAttrOptions, setWooAttrOptions] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    if (!storeId) return;
+    fetch(`/api/stores/${storeId}/woo-attributes`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setWooAttrOptions((Array.isArray(d) ? d : []).map((a: any) => ({ id: String(a.id), name: a.name }))))
+      .catch(() => {});
+  }, [storeId]);
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
 
@@ -2615,11 +2701,14 @@ function AttrMappingModal({
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
               WooCommerce Attribute Name
             </label>
-            <input
-              className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
-              placeholder="e.g. Color, Brand, Material"
+            <SearchableCombobox
               value={form.woo_attr_name}
-              onChange={e => set("woo_attr_name", e.target.value)}
+              onChange={v => set("woo_attr_name", v)}
+              options={wooAttrOptions.map(a => ({ id: a.id, label: a.name }))}
+              placeholder="e.g. Color, Brand, Material"
+              emptyHint={wooAttrOptions.length === 0
+                ? "No WooCommerce attributes synced yet — type the name freely."
+                : "No matches — you can still type a brand-new attribute name freely."}
             />
           </div>
 
