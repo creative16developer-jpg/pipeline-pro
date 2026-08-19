@@ -373,7 +373,7 @@ async def _run_fetch(db, job):
 async def _run_process(db, job):
     from models.models import Product, ProductStatus, Image, ImageStatus, LogLevel
     from pipeline.image_processor import ImageProcessor
-    from sqlalchemy import select
+    from sqlalchemy import select, delete
 
     cfg = job.config or {}
     limit = cfg.get("limit", 200)
@@ -507,6 +507,24 @@ async def _run_process(db, job):
             await _log(db, job.id, LogLevel.info,
                        f"Processing {product.sku}: "
                        f"{'ZIP' if zip_bytes else str(len(image_urls)) + ' URL(s)'}")
+
+            # Client feedback confirmed live: duplicate images (e.g. an
+            # 800x800 AND a 1200x1200 version of the same photo) sitting
+            # together in the WooCommerce gallery. Root cause: nothing here
+            # ever deleted a product's existing Image rows before Process
+            # created a new set, so every repeated Process run (Force
+            # Re-run, or simply re-running the pipeline) ACCUMULATED a
+            # fresh batch on top of whatever was already there from a
+            # previous run. _resolve_product_images' upload query selects
+            # every Image row with status=compressed for the product,
+            # regardless of which run created it -- so every accumulated
+            # duplicate got uploaded to WordPress every single time Upload
+            # ran. Only delete once we know there's real new data to
+            # replace them with, so a failed/empty fetch this run can't
+            # wipe out otherwise-good images from a previous successful run.
+            if zip_bytes or image_urls:
+                await db.execute(delete(Image).where(Image.product_id == product.id))
+                await db.commit()
 
             processed_count = 0
 
