@@ -506,7 +506,14 @@ async def get_product_detail(item_no: str) -> Optional[dict]:
         data = await _post("product!detail.do", {"itemNo": item_no, "lang": "en"})
         raw = data.get("data", {})
         if not raw or not isinstance(raw, dict):
+            print(f"[sunsky_client] get_product_detail({item_no!r}): raw 'data' is empty/not a dict — full response keys: {list(data.keys())}")
             return None
+        # Diagnostic: confirm live whether the detail endpoint's response
+        # for THIS item_no genuinely carries no image data at all (e.g.
+        # querying a variant/child SKU rather than its parent SPU, which
+        # some sourcing APIs only attach full images to), vs. having
+        # image data under some field name not yet recognized.
+        print(f"[sunsky_client] get_product_detail({item_no!r}): raw response has {len(raw)} top-level keys: {sorted(raw.keys())}")
         return _normalise_product(raw)
     except _SunskyAuthError as exc:
         print(f"[sunsky_client] {exc} — falling back to mock product data for {item_no!r}.")
