@@ -7,6 +7,7 @@ from schemas.schemas import StoreCreate, StoreUpdate, StoreOut, WooCategoryOut
 from pipeline import woo_client
 from datetime import datetime, timezone
 import httpx
+import re
 
 router = APIRouter(prefix="/stores", tags=["stores"])
 
@@ -81,6 +82,70 @@ async def list_store_categories(store_id: int, db: AsyncSession = Depends(get_db
     return result.scalars().all()
 
 
+@router.post("/{store_id}/categories/translate")
+async def translate_store_categories(store_id: int, db: AsyncSession = Depends(get_db)):
+    """Populate name_en for any of this store's categories that don't have
+    one yet, using whichever AI provider is already configured (reuses the
+    same setup as Content Generation -- no separate translation API/key
+    needed). Client feedback item #8: an English-speaking operator mapping
+    Bulgarian WooCommerce categories has no way to know what a Bulgarian
+    category name means without this hint.
+    """
+    import json as _json
+    from pipeline.ai_generator import generate_with_ai, get_provider_status, AIGenerationError
+
+    rows = (
+        await db.execute(
+            select(WooCategory).where(WooCategory.store_id == store_id, WooCategory.name_en.is_(None))
+        )
+    ).scalars().all()
+    if not rows:
+        return {"translated": 0, "message": "Nothing to translate — all categories already have an English name cached."}
+
+    status = get_provider_status()
+    provider = next((p for p in ("openai", "anthropic", "gemini") if status.get(p, {}).get("configured")), None)
+    if not provider:
+        raise HTTPException(400, "No AI provider is configured (Settings → AI Provider Keys) — translation needs one, same as Content Generation.")
+
+    # One batched call for every untranslated name, rather than one call per
+    # category -- much cheaper and faster for a store with many categories.
+    names = [r.name for r in rows]
+    prompt = (
+        "Translate each of the following e-commerce category names into English. "
+        "If a name is already in English, return it unchanged. "
+        "Keep translations short and natural, matching normal category-name style "
+        "(e.g. Title Case, no trailing punctuation). "
+        "Return ONLY a JSON object mapping each ORIGINAL name to its English translation, "
+        "with no explanation, no markdown, no code fences.\n\n"
+        + _json.dumps(names, ensure_ascii=False)
+    )
+    try:
+        raw = await generate_with_ai(
+            field="category_translation", product={}, provider=provider, model=None,
+            options={"_prompt_override": prompt},
+        )
+    except AIGenerationError as e:
+        raise HTTPException(502, f"Translation failed: {e}")
+
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned.strip())
+    try:
+        translations: dict = _json.loads(cleaned)
+    except Exception:
+        raise HTTPException(502, f"Translation response wasn't valid JSON: {raw[:200]}")
+
+    translated_count = 0
+    for r in rows:
+        en = translations.get(r.name)
+        if en and isinstance(en, str) and en.strip():
+            r.name_en = en.strip()
+            translated_count += 1
+    await db.commit()
+
+    return {"translated": translated_count, "requested": len(rows)}
+
+
 @router.post("/{store_id}/categories")
 async def sync_store_categories(store_id: int, db: AsyncSession = Depends(get_db)):
     store = await db.get(Store, store_id)
@@ -91,13 +156,28 @@ async def sync_store_categories(store_id: int, db: AsyncSession = Depends(get_db
     except Exception as e:
         raise HTTPException(502, f"Failed to fetch categories from WooCommerce: {e}")
 
+    # Preserve cached English translations (name_en) across this delete-and-
+    # recreate cycle, keyed by the stable woo_id -- otherwise every re-sync
+    # would silently wipe them, forcing a re-translate (and re-spending AI
+    # calls) on every single "Sync Categories" click.
+    existing = (
+        await db.execute(select(WooCategory).where(WooCategory.store_id == store_id))
+    ).scalars().all()
+    name_en_by_woo_id = {c.woo_id: (c.name, c.name_en) for c in existing if c.name_en}
+
     await db.execute(delete(WooCategory).where(WooCategory.store_id == store_id))
 
     for c in raw_cats:
+        prev = name_en_by_woo_id.get(c["id"])
+        # Only reuse the cached translation if the underlying name hasn't
+        # changed since it was translated -- a renamed category should be
+        # retranslated, not keep a stale translation of its old text.
+        carried_name_en = prev[1] if prev and prev[0] == c["name"] else None
         cat = WooCategory(
             store_id=store_id,
             woo_id=c["id"],
             name=c["name"],
+            name_en=carried_name_en,
             slug=c["slug"],
             parent_id=c.get("parent") or None,
             count=c.get("count", 0),

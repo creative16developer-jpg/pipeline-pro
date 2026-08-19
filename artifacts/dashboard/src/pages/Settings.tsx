@@ -73,7 +73,7 @@ const inputCls =
 // Mini WooCatTree — used inside the inline edit row
 // ─────────────────────────────────────────────────────────────────────────────
 
-interface WooOpt { id: number; name: string; parent_id: number }
+interface WooOpt { id: number; name: string; name_en?: string | null; parent_id: number }
 interface WooCatEntry { id: number; name: string }
 interface TreeNode { opt: WooOpt; children: TreeNode[]; depth: number }
 
@@ -136,11 +136,15 @@ function MiniCatTree({ tree, selected, primaryId, onToggle, onSetPrimary }: {
           <input type="checkbox" checked={checked} onChange={() => onToggle(node.opt)} className="w-3.5 h-3.5 rounded shrink-0 cursor-pointer accent-primary" />
           <span
             onClick={() => onToggle(node.opt)}
+            title={node.opt.name_en ? `${node.opt.name} — ${node.opt.name_en}` : node.opt.name}
             className={cn("text-xs cursor-pointer flex-1 min-w-0 truncate",
               checked ? (isPrimary ? "text-emerald-400 font-medium" : "text-blue-400") : "text-foreground"
             )}
           >
             {node.opt.name}
+            {node.opt.name_en && (
+              <span className="text-muted-foreground/60 font-normal"> ({node.opt.name_en})</span>
+            )}
           </span>
           {checked && !isPrimary && (
             <button onClick={() => onSetPrimary(node.opt.id)} className="text-[10px] text-blue-400/70 hover:text-emerald-400 px-1 shrink-0 transition-colors">Set primary</button>
@@ -263,6 +267,7 @@ function CategoryMappingDictionary() {
   const [newSunskyCat, setNewSunskyCat] = useState("");
   const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null }>({ woo_cats: [], primary_id: null, profile_id: null });
   const [starredCats, setStarredCats] = useState<{ id: string; name: string }[]>([]);
+  const [translating, setTranslating] = useState(false);
 
   // Import Mapping state
   const importRef = useRef<HTMLInputElement>(null);
@@ -290,7 +295,7 @@ function CategoryMappingDictionary() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
+  const reloadAll = () => {
     if (!storeId) return;
     setLoading(true);
     Promise.all([
@@ -303,12 +308,36 @@ function CategoryMappingDictionary() {
         setWooOpts(cats.map((c: any) => ({
           id: c.wooId ?? c.woo_id ?? c.id,
           name: c.name,
+          name_en: c.nameEn ?? c.name_en ?? null,
           parent_id: c.parentId ?? c.parent_id ?? 0,
         })));
       })
       .catch(() => toast({ title: "Failed to load mappings", variant: "destructive" }))
       .finally(() => setLoading(false));
-  }, [storeId]);
+  };
+
+  useEffect(reloadAll, [storeId]);
+
+  const handleTranslateCategories = async () => {
+    if (!storeId) return;
+    setTranslating(true);
+    try {
+      const r = await fetch(`/api/stores/${storeId}/categories/translate`, { method: "POST" });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || "Translation failed");
+      toast({
+        title: data.translated > 0 ? "Categories translated" : "Nothing to translate",
+        description: data.translated > 0
+          ? `${data.translated} of ${data.requested} categories got an English hint.`
+          : (data.message ?? "All categories already have an English name cached."),
+      });
+      reloadAll();
+    } catch (e: any) {
+      toast({ title: "Translation failed", description: e.message, variant: "destructive" });
+    } finally {
+      setTranslating(false);
+    }
+  };
 
   const reload = () => {
     if (!storeId) return;
@@ -481,6 +510,15 @@ function CategoryMappingDictionary() {
         </div>
         <button onClick={reload} disabled={loading} className="p-2 rounded-xl border border-border hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors" title="Refresh">
           <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+        </button>
+        <button
+          onClick={handleTranslateCategories}
+          disabled={translating || !storeId}
+          title="Translate WooCommerce category names to English for reference — doesn't change the actual categories"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border bg-secondary/50 hover:bg-secondary text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50 shrink-0 transition-colors"
+        >
+          {translating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+          Translate Categories
         </button>
         <button
           onClick={() => importRef.current?.click()}

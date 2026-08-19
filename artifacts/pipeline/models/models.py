@@ -255,6 +255,12 @@ class WooCategory(Base):
     store_id = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False)
     woo_id = Column(Integer, nullable=False)
     name = Column(String, nullable=False)
+    # Cached English translation of `name`, populated on demand via
+    # POST /stores/{id}/categories/translate -- see add_woo_category_name_en.sql.
+    # NULL until translated; client feedback item #8 (Bulgarian category
+    # names need an English hint so an English-speaking operator can map
+    # them without knowing Bulgarian).
+    name_en = Column(String, nullable=True)
     slug = Column(String, nullable=False)
     parent_id = Column(Integer, nullable=True)
     count = Column(Integer, nullable=False, default=0)

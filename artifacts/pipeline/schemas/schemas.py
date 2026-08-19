@@ -66,6 +66,7 @@ class WooCategoryOut(BaseModel):
     store_id: int
     woo_id: int
     name: str
+    name_en: Optional[str] = None
     slug: str
     parent_id: Optional[int] = None
     count: int
