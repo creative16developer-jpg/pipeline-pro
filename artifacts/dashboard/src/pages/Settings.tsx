@@ -4,7 +4,7 @@ import {
   Settings as SettingsIcon, Key, Eye, EyeOff, CheckCircle2,
   XCircle, Save, Trash2, Loader2, Info, Sparkles, ExternalLink,
   RefreshCw, Tag, Search, ChevronDown, ChevronRight, Edit2, X, Plus,
-  Upload, FileSpreadsheet, AlertCircle, Wrench, ImageIcon
+  Upload, FileSpreadsheet, AlertCircle, Wrench, ImageIcon, Copy
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useStores } from "@/hooks/use-stores";
@@ -2646,11 +2646,13 @@ function ConditionBadge({ type, value }: { type: string; value: string | null })
 
 function AttrMappingModal({
   rule,
+  seedFrom,
   onClose,
   onSaved,
   storeId,
 }: {
   rule: AttrMappingRule | null;
+  seedFrom?: AttrMappingRule | null;
   onClose: () => void;
   onSaved: (r: AttrMappingRule) => void;
   storeId: number | null;
@@ -2666,6 +2668,21 @@ function AttrMappingModal({
           instruction: rule.instruction ?? "",
           condition_type: rule.condition_type,
           condition_value: rule.condition_value ?? "",
+        }
+      : seedFrom
+      ? {
+          // Duplicate: everything carries over EXCEPT the attribute name,
+          // which is unique per store -- keeping the original would just
+          // collide on save. Blank forces picking a new one, which matches
+          // the actual use case anyway (a same-shaped rule for a
+          // DIFFERENT attribute, not an exact clone of an existing one).
+          woo_attr_name: "",
+          rule_type: seedFrom.rule_type,
+          source_field: seedFrom.source_field ?? "",
+          fixed_value: seedFrom.fixed_value ?? "",
+          instruction: seedFrom.instruction ?? "",
+          condition_type: seedFrom.condition_type,
+          condition_value: seedFrom.condition_value ?? "",
         }
       : { ...EMPTY_FORM }
   );
@@ -2727,12 +2744,18 @@ function AttrMappingModal({
       >
         <div className="flex items-center justify-between">
           <h3 className="text-base font-semibold text-foreground">
-            {rule ? "Edit Rule" : "Add Attribute Mapping Rule"}
+            {rule ? "Edit Rule" : seedFrom ? `Duplicate Rule — from "${seedFrom.woo_attr_name}"` : "Add Attribute Mapping Rule"}
           </h3>
           <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
             <X className="w-4 h-4" />
           </button>
         </div>
+        {seedFrom && !rule && (
+          <div className="flex items-center gap-2 rounded-lg border border-violet-500/20 bg-violet-500/10 px-3 py-2 text-xs text-violet-300 -mt-2">
+            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+            Rule Type, Source/Value, and Condition are copied from "{seedFrom.woo_attr_name}" — just pick a new attribute name below.
+          </div>
+        )}
 
         <div className="space-y-4">
           <div>
@@ -2892,6 +2915,7 @@ function AttributeMappingTab() {
   const [rules, setRules] = useState<AttrMappingRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalRule, setModalRule] = useState<AttrMappingRule | "new" | null>(null);
+  const [duplicateSeed, setDuplicateSeed] = useState<AttrMappingRule | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
 
   const fetchRules = async (sid: number | null) => {
@@ -2919,6 +2943,16 @@ function AttributeMappingTab() {
       toast({ title: "Delete failed", description: e.message, variant: "destructive" });
     }
     setDeleting(null);
+  };
+
+  const handleDuplicate = (rule: AttrMappingRule) => {
+    // Client feedback item #11 (doc): "We need to have an option to copy
+    // rows in Attribute Mapping ... like Baselinker has, to speed up
+    // creating similar rules." Opens the modal in create-new mode
+    // (modalRule="new" -> rule=null -> POST on save, never overwrites the
+    // original), pre-filled from this rule via seedFrom.
+    setDuplicateSeed(rule);
+    setModalRule("new");
   };
 
   const handleSaved = (saved: AttrMappingRule) => {
@@ -3047,6 +3081,13 @@ function AttributeMappingTab() {
                         <Edit2 className="w-3 h-3" /> Edit
                       </button>
                       <button
+                        onClick={() => handleDuplicate(rule)}
+                        title="Duplicate this rule as a starting point for a new attribute"
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <Copy className="w-3 h-3" /> Duplicate
+                      </button>
+                      <button
                         onClick={() => handleDelete(rule.id)}
                         disabled={deleting === rule.id}
                         className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors disabled:opacity-50"
@@ -3072,8 +3113,9 @@ function AttributeMappingTab() {
       {modalRule !== null && (
         <AttrMappingModal
           rule={modalRule === "new" ? null : modalRule}
+          seedFrom={modalRule === "new" ? duplicateSeed : null}
           storeId={storeId}
-          onClose={() => setModalRule(null)}
+          onClose={() => { setModalRule(null); setDuplicateSeed(null); }}
           onSaved={handleSaved}
         />
       )}
