@@ -21,6 +21,7 @@ import asyncio
 import html
 import logging
 import re
+import zlib
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -287,6 +288,42 @@ def _logic_title(product: dict, options: dict, resolved: dict) -> str:
     return _truncate_no_mid_word(name, max_chars)
 
 
+# Client feedback item #3 (doc): "The logic option at the moment works
+# as Derive option and just copy part of the description." Confirmed:
+# _logic_description's old intro did `body = desc or fallback` -- when
+# Sunsky's raw description existed, it was used VERBATIM as the "logic"
+# output, which is genuinely a "derive" (extract-and-clean) behavior,
+# not "logic" (rule-based composition). These templates compose a real
+# sentence from structured data (product name) instead, so Logic mode
+# never reproduces the raw source text for this field. Several variants
+# per language, chosen deterministically per product (via SKU hash) so
+# regenerating the same product is stable, but different products in a
+# batch don't all read identically.
+_INTRO_TEMPLATES_EN = [
+    "{name} is designed to deliver reliable performance and lasting value for everyday use.",
+    "Meet the {name} — built with care to combine practicality, durability, and everyday convenience.",
+    "The {name} offers a dependable, well-made solution for anyone looking for quality without compromise.",
+    "Discover the {name}, crafted to provide reliable performance backed by thoughtful, practical design.",
+]
+_INTRO_TEMPLATES_BG = [
+    "{name} е създаден да предложи надеждна работа и трайна стойност за ежедневна употреба.",
+    "Запознайте се с {name} — изработен внимателно, съчетаващ практичност, издръжливост и удобство.",
+    "{name} предлага надеждно и добре изработено решение за всеки, който търси качество без компромис.",
+    "Открийте {name}, създаден да осигури надеждна работа, подкрепена от практичен и обмислен дизайн.",
+]
+
+
+def _pick_variant(templates: list[str], seed: str) -> str:
+    """Deterministic (stable across re-generations of the same product)
+    but varied (different products land on different variants) pick --
+    Python's built-in hash() is randomized per-process by default and
+    would silently break the "stable per product" property, so this
+    uses zlib.crc32 instead.
+    """
+    idx = zlib.crc32(seed.encode("utf-8")) % len(templates)
+    return templates[idx]
+
+
 _TAG_STOPWORDS = {
     "for", "new", "the", "a", "an", "with", "and", "or", "of", "to", "in",
     "original", "genuine", "hot", "sale", "1pc", "2pcs", "3pcs", "set",
@@ -375,7 +412,6 @@ def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
 
 def _logic_description(product: dict, options: dict, resolved: dict) -> str:
     name = product.get("name", "Product")
-    desc = _strip_html(product.get("description", ""))
     raw = _get_raw(product)
     specs = _parse_params_table(raw.get("paramsTable", ""))
     lang = options.get("target_language", "bg")
@@ -389,9 +425,18 @@ def _logic_description(product: dict, options: dict, resolved: dict) -> str:
         # feedback item #16 explicitly says must never be translated:
         # "We need to lock logic to not generate brand names or models
         # in bulgarian... Input from sunsky is always in english."
-        fallback = "Качествен продукт, създаден за надеждна работа." if lang == "bg" else "A quality product designed for reliable performance."
-        body = desc or fallback
-        parts.append(f"<p><strong>{name}</strong> — {body}</p>")
+        #
+        # Deliberately does NOT read product["description"] at all --
+        # that was the exact bug (client feedback item #3): Logic mode
+        # was reproducing Sunsky's raw source text verbatim instead of
+        # composing anything. seed uses the product's own SKU (falling
+        # back to name) so the same product consistently gets the same
+        # variant across re-generations, while different products in a
+        # batch land on different ones.
+        templates = _INTRO_TEMPLATES_BG if lang == "bg" else _INTRO_TEMPLATES_EN
+        seed = str(product.get("site_sku") or product.get("sku") or name)
+        intro_text = _pick_variant(templates, seed).format(name=name)
+        parts.append(f"<p>{intro_text}</p>")
 
     if "features" in structure and specs:
         items = "".join(
@@ -422,7 +467,12 @@ def _logic_description(product: dict, options: dict, resolved: dict) -> str:
         )
         parts.append(f"<p>{closing_text}</p>")
 
-    return "\n".join(parts) if parts else (desc or name)
+    # Note: intentionally NOT "parts else (desc or name)" -- falling back
+    # to the raw Sunsky description here would reintroduce the exact
+    # copy-the-source bug this function was just fixed for for the intro
+    # section specifically. If structure excludes every section (an
+    # unusual config), fall back to just the name.
+    return "\n".join(parts) if parts else f"<p>{name}</p>"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
