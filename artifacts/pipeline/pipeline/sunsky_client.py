@@ -15,6 +15,7 @@ Open API Base URL: https://open.sunsky-online.com/openapi
 import asyncio
 import hashlib
 import json
+import re
 import httpx
 from pathlib import Path
 from typing import Optional
@@ -243,6 +244,30 @@ def _normalise_images(raw: dict) -> list[str]:
             result.append(url)
         if len(result) >= 5:
             break
+
+    if not result:
+        # Confirmed live via full raw-key dump (product!detail.do): these
+        # responses have picCount/baseImgCount (nonzero -- images do
+        # exist) but NO dedicated image-array field of any kind, checked
+        # or unchecked, anywhere in 38-40 top-level keys. Chinese B2B
+        # sourcing platforms commonly embed all product photos directly
+        # as <img> tags inside the HTML "description" field instead of a
+        # separate structured list -- this extracts them from there as a
+        # last resort before giving up.
+        desc_html = raw.get("description", "")
+        if isinstance(desc_html, str) and desc_html:
+            for src in re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', desc_html, re.IGNORECASE):
+                url = src.strip()
+                if not url:
+                    continue
+                if url.startswith("//"):
+                    url = "https:" + url
+                elif url.startswith("/"):
+                    url = SUNSKY_CDN + url
+                if url.startswith("http"):
+                    result.append(url)
+                if len(result) >= 5:
+                    break
 
     if not result and raw:
         # Nothing matched any known field name -- log the actual raw keys
