@@ -165,7 +165,31 @@ def _truncate_html_blocks(value: str, max_chars: int) -> str:
             break
         kept.append(block)
         running_len += block_text_len
-    return "".join(kept).strip()
+
+    result = "".join(kept).strip()
+
+    # Client feedback confirmed live: "description doesn't follow the
+    # rule for max characters" -- the rule above always keeps the FIRST
+    # block whole with no upper bound of its own, so a description whose
+    # only generated content is one intro sentence could exceed the
+    # configured limit by any amount (149 chars against a 100-char
+    # setting, confirmed). If that single kept block is a simple <p>,
+    # truncate its inner TEXT at a word boundary instead of accepting it
+    # unconditionally oversized. Only for <p> -- <ul> lists are riskier
+    # to safely truncate mid-item without confusing partial output.
+    #
+    # This strips any inline tags (<strong>, <em>) from the block's
+    # content when truncation actually triggers -- re-truncating text
+    # that still contains an inline tag risks leaving it unclosed
+    # (broken HTML), and description's own intro template (the block
+    # this most commonly applies to) doesn't use inline tags anyway.
+    if len(kept) == 1 and len(_strip_html(result)) > max_chars:
+        m = re.fullmatch(r"<p>(.*)</p>\s*", result, re.DOTALL)
+        if m and len(_strip_html(m.group(1))) > max_chars:
+            visible = _strip_html(m.group(1))
+            result = f"<p>{_truncate_no_mid_word(visible, max_chars)}</p>"
+
+    return result
 
 
 def _slugify(text: str) -> str:
