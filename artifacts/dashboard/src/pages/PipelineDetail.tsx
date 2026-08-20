@@ -670,6 +670,9 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const [goingBack, setGoingBack] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [storeCats, setStoreCats] = useState<WooOpt[]>([]);
+  // Client feedback: "regenerate button it should not see" when AI
+  // Enabled is off. Fetched from the real saved config, not assumed.
+  const [aiEnabled, setAiEnabled] = useState(true);
   const [savingCategory, setSavingCategory] = useState<number | null>(null);
   // Client feedback item #9: "Review can't override the whole category
   // level include main and subcategories. Can override only last
@@ -685,6 +688,10 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
       .then(setData)
       .catch(() => toast({ title: "Failed to load content data", variant: "destructive" }))
       .finally(() => setLoading(false));
+    fetch(`/api/generate/saved-config`)
+      .then(r => r.ok ? r.json() : null)
+      .then(cfg => { if (cfg?.globalSettings) setAiEnabled(!!cfg.globalSettings.ai_enabled); })
+      .catch(() => {});
     if (pl.store_id) {
       fetch(`/api/stores/${pl.store_id}/categories`)
         .then(r => r.ok ? r.json() : [])
@@ -1398,15 +1405,17 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
             >
               Exclude selected{selected.size > 0 ? ` (${selected.size})` : ""}
             </button>
-            <button
-              onClick={handleRegenerateContent}
-              disabled={regenerating}
-              title="Re-run content generation for this pipeline's products"
-              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background disabled:opacity-50 flex items-center gap-1.5"
-            >
-              {regenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-              Re-generate content
-            </button>
+            {aiEnabled && (
+              <button
+                onClick={handleRegenerateContent}
+                disabled={regenerating}
+                title="Re-run content generation for this pipeline's products"
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {regenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                Re-generate content
+              </button>
+            )}
             <button
               onClick={handleAssignCategory}
               disabled={goingBack}
