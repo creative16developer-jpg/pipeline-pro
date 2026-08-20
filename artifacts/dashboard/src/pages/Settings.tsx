@@ -578,7 +578,7 @@ function CategoryMappingDictionary() {
           {search ? "No mappings match your search." : "No saved mappings yet. Run a pipeline to build up the dictionary."}
         </div>
       ) : (
-        <div className="bg-card border border-border/50 rounded-2xl overflow-hidden">
+        <div className="bg-card border border-border/50 rounded-2xl overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-secondary/40 border-b border-border/50">
               <tr>
@@ -1084,7 +1084,7 @@ function AIExtractionRulesTab() {
           No extraction rules yet — click <strong className="text-foreground">Add Rule</strong> to create your first.
         </div>
       ) : (
-        <div className="bg-card border border-border/50 rounded-2xl overflow-hidden">
+        <div className="bg-card border border-border/50 rounded-2xl overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-secondary/40 border-b border-border/50">
               <tr>
@@ -2960,7 +2960,7 @@ function AttributeMappingTab() {
       </div>
 
       {/* Table */}
-      <div className="bg-card border border-border/50 rounded-2xl overflow-hidden shadow-sm">
+      <div className="bg-card border border-border/50 rounded-2xl overflow-x-auto shadow-sm">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border/40 bg-secondary/30">
@@ -3004,27 +3004,28 @@ function AttributeMappingTab() {
                   <td className="px-4 py-3 text-muted-foreground text-xs max-w-[220px] truncate">{sourceLabel(rule)}</td>
                   <td className="px-4 py-3"><ConditionBadge type={rule.condition_type} value={rule.condition_value} /></td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1.5 justify-end">
+                    <div className="flex items-center gap-1 justify-end">
                       <button
                         onClick={() => setModalRule(rule)}
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                        title="Edit"
+                        className="p-2 rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
                       >
-                        <Edit2 className="w-3 h-3" /> Edit
+                        <Edit2 className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => handleDuplicate(rule)}
                         title="Duplicate this rule as a starting point for a new attribute"
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                        className="p-2 rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
                       >
-                        <Copy className="w-3 h-3" /> Duplicate
+                        <Copy className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => handleDelete(rule.id)}
                         disabled={deleting === rule.id}
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors disabled:opacity-50"
+                        title="Delete"
+                        className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors disabled:opacity-50"
                       >
-                        {deleting === rule.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-                        Delete
+                        {deleting === rule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                       </button>
                     </div>
                   </td>
