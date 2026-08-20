@@ -542,10 +542,19 @@ def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
         if first_tag not in tags:
             tags.append(first_tag)
 
-    if len(words) > 1:
-        last_tag = _tag_case(words[-1])
-        if last_tag not in tags:
-            tags.append(last_tag)
+    # Client feedback confirmed live (twice): a "last word from the
+    # product name" tag was previously appended here too, but Sunsky's
+    # naming convention structurally puts color/pattern/variant info at
+    # the END of product names ("...Case(Silver)", "...Crystal
+    # Blossom") -- first "Silver" leaked through this way, then
+    # "Blossom" (a pattern name no color blocklist would ever contain)
+    # leaked through the exact same path. No word blocklist can be
+    # complete against an unbounded set of possible pattern names --
+    # removed the unreliable extraction itself rather than continuing
+    # to patch individual words into a list that will always have gaps.
+    # Brand/Model/Type (from specs) and the first name-word (reliably
+    # the brand/core product identity in this naming convention, not a
+    # trailing variant qualifier) are enough on their own.
 
     max_tags = int(options.get("max_tags", 3))
     return ", ".join(tags[:max_tags])
