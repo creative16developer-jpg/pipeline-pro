@@ -2604,10 +2604,20 @@ function AttrMappingModal({
   const [saving, setSaving] = useState(false);
   const [wooAttrOptions, setWooAttrOptions] = useState<{ id: string; name: string }[]>([]);
   const [storeCatOptions, setStoreCatOptions] = useState<{ id: string; name: string }[]>([]);
+  const { data: modalStores } = useStores();
+  // Client feedback confirmed live: creating a GLOBAL rule ("All Stores")
+  // showed "No categories synced yet" even on an account with real,
+  // synced categories -- storeId is null for global rules, and the fetch
+  // below was skipped entirely whenever it was. Category/attribute names
+  // are still useful as typeahead suggestions regardless of which store
+  // they came from (the rule itself can still apply globally either
+  // way) -- falls back to the first connected store's data instead of
+  // showing nothing.
+  const effectiveStoreId = storeId ?? modalStores?.[0]?.id ?? null;
 
   useEffect(() => {
-    if (!storeId) return;
-    fetch(`/api/stores/${storeId}/woo-attributes`)
+    if (!effectiveStoreId) return;
+    fetch(`/api/stores/${effectiveStoreId}/woo-attributes`)
       .then(r => r.ok ? r.json() : [])
       .then(d => setWooAttrOptions((Array.isArray(d) ? d : []).map((a: any) => ({ id: String(a.id), name: a.name }))))
       .catch(() => {});
@@ -2616,14 +2626,14 @@ function AttrMappingModal({
     // but want to see a dropdown menu when click on the field and if
     // start typing to see the categories" -- was a plain free-text
     // input with only a placeholder hint, no suggestions at all.
-    fetch(`/api/stores/${storeId}/categories`)
+    fetch(`/api/stores/${effectiveStoreId}/categories`)
       .then(r => r.ok ? r.json() : [])
       .then(d => {
         const cats = Array.isArray(d) ? d : [];
         setStoreCatOptions(cats.map((c: any) => ({ id: String(c.wooId ?? c.woo_id ?? c.id), name: c.name })));
       })
       .catch(() => {});
-  }, [storeId]);
+  }, [effectiveStoreId]);
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
 
