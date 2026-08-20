@@ -771,14 +771,34 @@ def _derive_meta_description(product: dict, options: dict, resolved: dict) -> st
             if lang == "bg" else
             " Shop now for the best selection and premium quality."
         )
-        text = (text + cta)[:160]
+        return (text + cta)[:160]
 
-    if len(text) > 160:
-        text = text[:159].rsplit(" ", 1)[0]
-        if not text.endswith((".", "!", "?")):
-            text += "."
+    if len(text) <= 160:
+        return text
 
-    return text
+    # Client feedback item #2 confirmed live: the old approach (raw
+    # character slice at 159, back off to the last space) produced
+    # grammatically nonsensical fragments like "Произведен по." --
+    # no single WORD was cut mid-way, but the result was still an
+    # incomplete, meaningless sentence fragment with an artificial
+    # period tacked on. Prefer whole SENTENCE boundaries instead, same
+    # pattern already used successfully in _derive_short_description.
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    result = ""
+    for s in sentences:
+        candidate = (result + " " + s).strip() if result else s
+        if len(candidate) <= 160:
+            result = candidate
+        else:
+            break
+
+    if result:
+        return result
+
+    # Even the FIRST sentence alone exceeds 160 chars -- fall back to
+    # word-boundary-safe truncation of that one sentence rather than
+    # returning nothing.
+    return _truncate_no_mid_word(sentences[0], 160) if sentences else text[:160]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
