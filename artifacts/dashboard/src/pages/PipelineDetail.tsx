@@ -759,6 +759,58 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const ready                 = allProducts.filter(p => !p.needs_attention && !excluded.has(p.id));
 
   const [imageActionLoading, setImageActionLoading] = useState<number | null>(null);
+  // Client feedback item #5: "In Review step can't edit/remove/add
+  // attributes. If I have all attributes mapped from Woo I need to have
+  // an option to add manually in this step."
+  const [editingAttr, setEditingAttr] = useState<{ pid: number; attrId: number | "new" } | null>(null);
+  const [attrDraft, setAttrDraft] = useState<{ name: string; value: string }>({ name: "", value: "" });
+  const [attrSaving, setAttrSaving] = useState(false);
+
+  const handleSaveAttr = async (pid: number) => {
+    const name = attrDraft.name.trim();
+    const value = attrDraft.value.trim();
+    if (!name) { toast({ title: "Attribute name is required" }); return; }
+    setAttrSaving(true);
+    try {
+      const r = await fetch(`/api/pipelines/${pl.id}/products/${pid}/attributes`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ attribute: name, raw_value: value }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const saved = await r.json();
+      setData((prev: any) => ({
+        ...prev,
+        products: (prev?.products ?? []).map((p: any) => {
+          if (p.id !== pid) return p;
+          const existing = (p.attributes ?? []).filter((a: any) => a.attribute !== name);
+          return { ...p, attributes: [...existing, saved] };
+        }),
+      }));
+      setEditingAttr(null);
+      setAttrDraft({ name: "", value: "" });
+      toast({ title: "Attribute saved" });
+    } catch (e: any) {
+      toast({ title: "Failed to save attribute", description: e.message, variant: "destructive" });
+    } finally {
+      setAttrSaving(false);
+    }
+  };
+
+  const handleDeleteAttr = async (pid: number, attrId: number) => {
+    try {
+      const r = await fetch(`/api/pipelines/${pl.id}/products/${pid}/attributes/${attrId}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(await r.text());
+      setData((prev: any) => ({
+        ...prev,
+        products: (prev?.products ?? []).map((p: any) =>
+          p.id === pid ? { ...p, attributes: (p.attributes ?? []).filter((a: any) => a.id !== attrId) } : p
+        ),
+      }));
+    } catch (e: any) {
+      toast({ title: "Failed to remove attribute", description: e.message, variant: "destructive" });
+    }
+  };
 
   const handleDeleteImage = async (pid: number, imageId: number) => {
     setImageActionLoading(imageId);
@@ -1219,27 +1271,79 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
 
                       {/* Attributes — same data checked via SQL all session,
                           now visible directly here instead. */}
-                      {p.attributes && p.attributes.length > 0 && (
-                        <div>
-                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Attributes</label>
-                          <div className="flex flex-wrap gap-1.5">
-                            {p.attributes.map((a: any, idx: number) => (
+                      <div>
+                        <label className="block text-[12px] font-medium text-foreground/70 mb-1">Attributes</label>
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                          {(p.attributes ?? []).map((a: any) => {
+                            const isEditing = editingAttr?.pid === p.id && editingAttr?.attrId === a.id;
+                            if (isEditing) {
+                              return (
+                                <div key={a.id} className="flex items-center gap-1 bg-card border border-violet-400 rounded-lg px-1.5 py-1">
+                                  <span className="text-[11px] text-muted-foreground">{a.attribute}:</span>
+                                  <input
+                                    autoFocus
+                                    value={attrDraft.value}
+                                    onChange={e => setAttrDraft(d => ({ ...d, value: e.target.value }))}
+                                    onKeyDown={e => { if (e.key === "Enter") handleSaveAttr(p.id); if (e.key === "Escape") setEditingAttr(null); }}
+                                    className="text-[11px] bg-transparent border-none outline-none w-24"
+                                  />
+                                  <button onClick={() => handleSaveAttr(p.id)} disabled={attrSaving} className="text-emerald-400 hover:text-emerald-300"><Check className="w-3 h-3" /></button>
+                                  <button onClick={() => setEditingAttr(null)} className="text-muted-foreground hover:text-foreground"><XIcon className="w-3 h-3" /></button>
+                                </div>
+                              );
+                            }
+                            return (
                               <span
-                                key={idx}
-                                title={`source: ${a.source}`}
+                                key={a.id}
+                                title={`source: ${a.source} — click to edit`}
                                 className={cn(
-                                  "text-[11px] px-2 py-1 rounded-lg border",
+                                  "text-[11px] px-2 py-1 rounded-lg border flex items-center gap-1.5 group cursor-pointer",
                                   a.flagged || !a.raw_value
                                     ? "bg-red-500/5 border-red-500/20 text-red-400/90"
                                     : "bg-emerald-500/5 border-emerald-500/20 text-emerald-400/90"
                                 )}
+                                onClick={() => { setEditingAttr({ pid: p.id, attrId: a.id }); setAttrDraft({ name: a.attribute, value: a.raw_value === "not found" ? "" : a.raw_value }); }}
                               >
                                 {a.attribute}: {a.raw_value || "not found"}
+                                <button
+                                  onClick={e => { e.stopPropagation(); handleDeleteAttr(p.id, a.id); }}
+                                  className="opacity-0 group-hover:opacity-100 hover:text-red-300 transition-opacity"
+                                  title="Remove attribute"
+                                >
+                                  <XIcon className="w-3 h-3" />
+                                </button>
                               </span>
-                            ))}
-                          </div>
+                            );
+                          })}
                         </div>
-                      )}
+                        {editingAttr?.pid === p.id && editingAttr?.attrId === "new" ? (
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              autoFocus
+                              placeholder="Attribute name"
+                              value={attrDraft.name}
+                              onChange={e => setAttrDraft(d => ({ ...d, name: e.target.value }))}
+                              className="text-[11px] px-2 py-1 rounded-lg border border-border bg-card w-28 focus:outline-none focus:border-violet-400"
+                            />
+                            <input
+                              placeholder="Value"
+                              value={attrDraft.value}
+                              onChange={e => setAttrDraft(d => ({ ...d, value: e.target.value }))}
+                              onKeyDown={e => { if (e.key === "Enter") handleSaveAttr(p.id); if (e.key === "Escape") setEditingAttr(null); }}
+                              className="text-[11px] px-2 py-1 rounded-lg border border-border bg-card w-28 focus:outline-none focus:border-violet-400"
+                            />
+                            <button onClick={() => handleSaveAttr(p.id)} disabled={attrSaving} className="text-emerald-400 hover:text-emerald-300"><Check className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => setEditingAttr(null)} className="text-muted-foreground hover:text-foreground"><XIcon className="w-3.5 h-3.5" /></button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => { setEditingAttr({ pid: p.id, attrId: "new" }); setAttrDraft({ name: "", value: "" }); }}
+                            className="text-[11px] text-violet-400 hover:text-violet-300 flex items-center gap-1"
+                          >
+                            <Plus className="w-3 h-3" /> Add attribute
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="mt-3 pt-3 border-t border-border flex gap-2">
                       <button onClick={() => setExcluded(prev => { const s = new Set(prev); s.add(p.id); return s; })}

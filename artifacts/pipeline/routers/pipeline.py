@@ -339,6 +339,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         ).scalars().all()
         for a in attr_rows:
             attrs_by_product.setdefault(a.product_id, []).append({
+                "id": a.id,
                 "attribute": a.attribute,
                 "raw_value": a.raw_value or "",
                 "source": a.source,
@@ -560,6 +561,88 @@ async def regenerate_content(pl_id: int, db: AsyncSession = Depends(get_db)):
     asyncio.create_task(_regenerate_content(pl.id))
 
     return {"ok": True, "message": f"PL-{str(pl_id).zfill(3)} re-generating content"}
+
+
+class AttributeUpsertRequest(BaseModel):
+    attribute: str
+    raw_value: str
+    woo_attr_name: Optional[str] = None
+
+
+@router.put("/{pl_id}/products/{product_id}/attributes")
+async def upsert_product_attribute(
+    pl_id: int, product_id: int, body: AttributeUpsertRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a new attribute, or edit an existing one if the attribute
+    name already exists for this product+pipeline. Client feedback item
+    #5: "In Review step can't edit/remove/add attributes. If I have all
+    attributes mapped from Woo I need to have an option to add manualy
+    in this step."
+
+    Sets confirmed=True immediately -- the operator typing a value in
+    directly is itself the confirmation, no need to wait for
+    content-confirm's later bulk-confirm sweep. source="manual" so it's
+    visually distinguishable from ai/rule_based/default-sourced values
+    in the UI and in any future auditing of where a value came from.
+    """
+    from models.models import ProductEnrichAttr
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    attribute = body.attribute.strip()
+    if not attribute:
+        raise HTTPException(400, "Attribute name is required")
+
+    stmt = (
+        pg_insert(ProductEnrichAttr)
+        .values(
+            pipeline_job_id=pl_id,
+            product_id=product_id,
+            attribute=attribute,
+            raw_value=body.raw_value.strip(),
+            normalised_value=body.raw_value.strip(),
+            woo_attr_name=body.woo_attr_name or attribute,
+            source="manual",
+            confirmed=True,
+            flagged=False,
+            confidence=1.0,
+        )
+        .on_conflict_do_update(
+            index_elements=["pipeline_job_id", "product_id", "attribute"],
+            set_={
+                "raw_value": body.raw_value.strip(),
+                "normalised_value": body.raw_value.strip(),
+                "woo_attr_name": body.woo_attr_name or attribute,
+                "source": "manual",
+                "confirmed": True,
+                "flagged": False,
+                "confidence": 1.0,
+            },
+        )
+        .returning(ProductEnrichAttr.id)
+    )
+    result = await db.execute(stmt)
+    attr_id = result.scalar_one()
+    await db.commit()
+
+    return {"id": attr_id, "attribute": attribute, "raw_value": body.raw_value.strip(), "source": "manual", "flagged": False}
+
+
+@router.delete("/{pl_id}/products/{product_id}/attributes/{attr_id}")
+async def delete_product_attribute(
+    pl_id: int, product_id: int, attr_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove an attribute entirely -- client feedback item #5."""
+    from models.models import ProductEnrichAttr
+
+    attr = await db.get(ProductEnrichAttr, attr_id)
+    if not attr or attr.pipeline_job_id != pl_id or attr.product_id != product_id:
+        raise HTTPException(404, "Attribute not found on this product/pipeline")
+
+    await db.delete(attr)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.post("/{pl_id}/content-confirm")
