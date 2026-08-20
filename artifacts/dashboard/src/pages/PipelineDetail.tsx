@@ -8,6 +8,7 @@ import {
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
 import { getStoreColor } from "@/lib/store-colors";
+import { buildTree, MiniCatTree, type WooOpt, type WooCatEntry } from "@/components/CategoryTree";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 
@@ -668,9 +669,15 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   };
   const [goingBack, setGoingBack] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
-  const [storeCats, setStoreCats] = useState<{ id: number; name: string }[]>([]);
+  const [storeCats, setStoreCats] = useState<WooOpt[]>([]);
   const [savingCategory, setSavingCategory] = useState<number | null>(null);
-  const [categoryDraft, setCategoryDraft] = useState<Record<number, string>>({});
+  // Client feedback item #9: "Review can't override the whole category
+  // level include main and subcategories. Can override only last
+  // subcategory. The last one need to be primary." Was a single flat
+  // <select> (one category ID as a string); now a full multi-select
+  // path per product, matching Settings.tsx's Category Mapping pattern.
+  const [categoryDraft, setCategoryDraft] = useState<Record<number, { woo_cats: WooCatEntry[]; primary_id: number | null }>>({});
+  const storeCatTree = useMemo(() => buildTree(storeCats), [storeCats]);
 
   useEffect(() => {
     fetch(`/api/pipelines/${pl.id}/content-data`)
@@ -681,32 +688,61 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
     if (pl.store_id) {
       fetch(`/api/stores/${pl.store_id}/categories`)
         .then(r => r.ok ? r.json() : [])
-        .then(d => setStoreCats((Array.isArray(d) ? d : []).map((c: any) => ({ id: c.wooId ?? c.woo_id ?? c.id, name: c.name }))))
+        .then(d => setStoreCats((Array.isArray(d) ? d : []).map((c: any) => ({
+          id: c.wooId ?? c.woo_id ?? c.id,
+          name: c.name,
+          name_en: c.nameEn ?? c.name_en ?? null,
+          parent_id: c.parentId ?? c.parent_id ?? 0,
+        }))))
         .catch(() => {});
     }
   }, [pl.id]);
+
+  const toggleDraftCategory = (pid: number, opt: WooOpt) => {
+    setCategoryDraft(prev => {
+      const cur = prev[pid] ?? { woo_cats: [], primary_id: null };
+      const exists = cur.woo_cats.some(c => c.id === opt.id);
+      const woo_cats = exists ? cur.woo_cats.filter(c => c.id !== opt.id) : [...cur.woo_cats, { id: opt.id, name: opt.name }];
+      // The most-recently-added (or, when removing the primary, the last
+      // remaining) selection becomes primary -- matches the client's
+      // "the last one need to be primary" request without requiring an
+      // extra manual step for the common case, while "Set primary" is
+      // still available to override that if a different level should be
+      // the primary WooCommerce category.
+      let primary_id = cur.primary_id;
+      if (exists && cur.primary_id === opt.id) {
+        primary_id = woo_cats.length > 0 ? woo_cats[woo_cats.length - 1].id : null;
+      } else if (!exists) {
+        primary_id = opt.id;
+      }
+      return { ...prev, [pid]: { woo_cats, primary_id } };
+    });
+  };
+
+  const setDraftPrimary = (pid: number, id: number) => {
+    setCategoryDraft(prev => ({ ...prev, [pid]: { woo_cats: prev[pid]?.woo_cats ?? [], primary_id: id } }));
+  };
 
   const handleSaveCategory = async (pid: number) => {
     // Client feedback item #8: "to be able to edit all details." Backend
     // mechanism (cat_source="manual") already existed and is genuinely
     // respected at real Upload/Sync time -- this was just never exposed
     // in Content Review's own UI before.
-    const selectedId = categoryDraft[pid];
-    if (!selectedId) return;
-    const cat = storeCats.find(c => String(c.id) === selectedId);
-    if (!cat) return;
+    const draft = categoryDraft[pid];
+    if (!draft || draft.woo_cats.length === 0) return;
     setSavingCategory(pid);
     try {
       const r = await fetch(`/api/products/${pid}/categories`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ woo_cats: [{ id: cat.id, name: cat.name }], primary_woo_cat_id: cat.id }),
+        body: JSON.stringify({ woo_cats: draft.woo_cats, primary_woo_cat_id: draft.primary_id }),
       });
       if (!r.ok) throw new Error(await r.text());
+      const primaryCat = draft.woo_cats.find(c => c.id === draft.primary_id) ?? draft.woo_cats[draft.woo_cats.length - 1];
       setData((prev: any) => ({
         ...prev,
         products: (prev?.products ?? []).map((p: any) =>
-          p.id === pid ? { ...p, category_name: cat.name, category_mapped: true, cat_source: "manual" } : p
+          p.id === pid ? { ...p, category_name: primaryCat.name, category_mapped: true, cat_source: "manual" } : p
         ),
       }));
       setCategoryDraft(prev => { const next = { ...prev }; delete next[pid]; return next; });
@@ -1161,24 +1197,21 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                           )}
                         </div>
                         {storeCats.length > 0 && (
-                          <div className="flex items-center gap-2">
-                            <select
-                              value={categoryDraft[p.id] ?? ""}
-                              onChange={e => setCategoryDraft(prev => ({ ...prev, [p.id]: e.target.value }))}
-                              className="flex-1 px-3 py-1.5 border border-border rounded-lg text-[12px] text-foreground bg-card focus:outline-none focus:border-violet-400"
-                            >
-                              <option value="">Override category…</option>
-                              {storeCats.map(c => (
-                                <option key={c.id} value={c.id}>{c.name}</option>
-                              ))}
-                            </select>
+                          <div className="space-y-2">
+                            <MiniCatTree
+                              tree={storeCatTree}
+                              selected={categoryDraft[p.id]?.woo_cats ?? []}
+                              primaryId={categoryDraft[p.id]?.primary_id ?? null}
+                              onToggle={opt => toggleDraftCategory(p.id, opt)}
+                              onSetPrimary={id => setDraftPrimary(p.id, id)}
+                            />
                             <button
                               onClick={() => handleSaveCategory(p.id)}
-                              disabled={!categoryDraft[p.id] || savingCategory === p.id}
+                              disabled={!categoryDraft[p.id]?.woo_cats.length || savingCategory === p.id}
                               className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-violet-500 hover:bg-violet-600 text-white disabled:opacity-50 flex items-center gap-1"
                             >
                               {savingCategory === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-                              Set
+                              Set category
                             </button>
                           </div>
                         )}
