@@ -2605,35 +2605,72 @@ function AttrMappingModal({
   const [wooAttrOptions, setWooAttrOptions] = useState<{ id: string; name: string }[]>([]);
   const [storeCatOptions, setStoreCatOptions] = useState<{ id: string; name: string }[]>([]);
   const { data: modalStores } = useStores();
-  // Client feedback confirmed live: creating a GLOBAL rule ("All Stores")
-  // showed "No categories synced yet" even on an account with real,
-  // synced categories -- storeId is null for global rules, and the fetch
-  // below was skipped entirely whenever it was. Category/attribute names
-  // are still useful as typeahead suggestions regardless of which store
-  // they came from (the rule itself can still apply globally either
-  // way) -- falls back to the first connected store's data instead of
-  // showing nothing.
-  const effectiveStoreId = storeId ?? modalStores?.[0]?.id ?? null;
 
   useEffect(() => {
-    if (!effectiveStoreId) return;
-    fetch(`/api/stores/${effectiveStoreId}/woo-attributes`)
-      .then(r => r.ok ? r.json() : [])
-      .then(d => setWooAttrOptions((Array.isArray(d) ? d : []).map((a: any) => ({ id: String(a.id), name: a.name }))))
-      .catch(() => {});
     // Client feedback: "settings – Attribute Mapping – Add Rule ...
     // Category Name. I don't want to input whole name of the category
     // but want to see a dropdown menu when click on the field and if
     // start typing to see the categories" -- was a plain free-text
     // input with only a placeholder hint, no suggestions at all.
-    fetch(`/api/stores/${effectiveStoreId}/categories`)
-      .then(r => r.ok ? r.json() : [])
-      .then(d => {
-        const cats = Array.isArray(d) ? d : [];
-        setStoreCatOptions(cats.map((c: any) => ({ id: String(c.wooId ?? c.woo_id ?? c.id), name: c.name })));
-      })
-      .catch(() => {});
-  }, [effectiveStoreId]);
+    if (storeId) {
+      // Store-scoped rule -- only this store's categories/attributes
+      // are relevant, no ambiguity about which store's data to show.
+      fetch(`/api/stores/${storeId}/woo-attributes`)
+        .then(r => r.ok ? r.json() : [])
+        .then(d => setWooAttrOptions((Array.isArray(d) ? d : []).map((a: any) => ({ id: String(a.id), name: a.name }))))
+        .catch(() => {});
+      fetch(`/api/stores/${storeId}/categories`)
+        .then(r => r.ok ? r.json() : [])
+        .then(d => {
+          const cats = Array.isArray(d) ? d : [];
+          setStoreCatOptions(cats.map((c: any) => ({ id: String(c.wooId ?? c.woo_id ?? c.id), name: c.name })));
+        })
+        .catch(() => {});
+      return;
+    }
+
+    // Global rule ("All Stores") -- there's no single store to source
+    // suggestions from. Confirmed via user feedback that arbitrarily
+    // picking one store (e.g. the first) is misleading when different
+    // stores have different category taxonomies -- a suggestion from
+    // Store A's list could be a category that doesn't even exist in
+    // Store B, silently breaking the rule's "If category" match there.
+    // Merges unique names across EVERY connected store instead, so
+    // suggestions reflect the operator's real, full vocabulary rather
+    // than one arbitrary store's subset.
+    const allStores = modalStores ?? [];
+    if (allStores.length === 0) return;
+
+    Promise.all(
+      allStores.map((s: any) =>
+        fetch(`/api/stores/${s.id}/woo-attributes`).then(r => r.ok ? r.json() : []).catch(() => [])
+      )
+    ).then(results => {
+      const seen = new Map<string, { id: string; name: string }>();
+      for (const list of results) {
+        for (const a of (Array.isArray(list) ? list : [])) {
+          const key = (a.name || "").toLowerCase();
+          if (key && !seen.has(key)) seen.set(key, { id: String(a.id), name: a.name });
+        }
+      }
+      setWooAttrOptions(Array.from(seen.values()));
+    });
+
+    Promise.all(
+      allStores.map((s: any) =>
+        fetch(`/api/stores/${s.id}/categories`).then(r => r.ok ? r.json() : []).catch(() => [])
+      )
+    ).then(results => {
+      const seen = new Map<string, { id: string; name: string }>();
+      for (const list of results) {
+        for (const c of (Array.isArray(list) ? list : [])) {
+          const key = (c.name || "").toLowerCase();
+          if (key && !seen.has(key)) seen.set(key, { id: String(c.wooId ?? c.woo_id ?? c.id), name: c.name });
+        }
+      }
+      setStoreCatOptions(Array.from(seen.values()));
+    });
+  }, [storeId, modalStores]);
 
   const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
 
@@ -2814,15 +2851,22 @@ function AttrMappingModal({
               ))}
             </div>
             {form.condition_type === "if_category" && (
-              <SearchableCombobox
-                value={form.condition_value ?? ""}
-                onChange={v => set("condition_value", v)}
-                options={storeCatOptions.map(c => ({ id: c.id, label: c.name }))}
-                placeholder="Category name, e.g. Waterproof Cases"
-                emptyHint={storeCatOptions.length === 0
-                  ? "No categories synced yet — type the name freely."
-                  : "No matches — you can still type a category name freely."}
-              />
+              <>
+                <SearchableCombobox
+                  value={form.condition_value ?? ""}
+                  onChange={v => set("condition_value", v)}
+                  options={storeCatOptions.map(c => ({ id: c.id, label: c.name }))}
+                  placeholder="Category name, e.g. Waterproof Cases"
+                  emptyHint={storeCatOptions.length === 0
+                    ? "No categories synced yet — type the name freely."
+                    : "No matches — you can still type a category name freely."}
+                />
+                {!storeId && storeCatOptions.length > 0 && (
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    This is a global rule — suggestions are merged from all your stores. A name may not exist in every store's category list.
+                  </p>
+                )}
+              </>
             )}
           </div>
         </div>
