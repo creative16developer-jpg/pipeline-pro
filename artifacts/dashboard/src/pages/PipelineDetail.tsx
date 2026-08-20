@@ -619,7 +619,7 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const [data, setData]         = useState<any>(null);
   const [loading, setLoading]   = useState(true);
   const [saving, setSaving]     = useState(false);
-  const [tab, setTab]           = useState<"all"|"attention"|"ready">("all");
+  const [tab, setTab]           = useState<"all"|"attention"|"ready"|"excluded">("all");
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -872,8 +872,18 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
     const active = allProducts.filter(p => !excluded.has(p.id));
     if (tab === "attention") return active.filter(p => p.needs_attention);
     if (tab === "ready")     return active.filter(p => !p.needs_attention);
+    if (tab === "excluded")  return allProducts.filter(p => excluded.has(p.id));
     return active;
   }, [allProducts, tab, excluded]);
+
+  const handleRestoreProduct = (pid: number) => {
+    setExcluded(prev => { const s = new Set(prev); s.delete(pid); return s; });
+  };
+
+  const handleRestoreAll = () => {
+    setExcluded(new Set());
+    toast({ title: "All excluded products restored" });
+  };
 
   const handleUploadAll = async () => {
     // Confirmed live: typing a value into any of these fields looks
@@ -969,12 +979,15 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
           <div className="text-[13px] font-semibold text-emerald-400">Substep B — Review generated content</div>
           <div className="ml-auto">
             <div className="flex gap-1 bg-muted/50 rounded-lg p-1">
-              {(["all","attention","ready"] as const).map(t => (
+              {(["all","attention","ready","excluded"] as const).map(t => (
                 <button key={t} onClick={() => setTab(t)}
                   className={cn("px-3 py-1 rounded-md text-[13px] font-medium transition-colors",
                     tab === t ? "bg-muted text-violet-400 shadow-sm" : "text-muted-foreground hover:text-foreground"
                   )}>
-                  {t === "all" ? `All (${allProducts.length})` : t === "attention" ? `Needs attention (${needsAttention.length})` : `Ready (${ready.length})`}
+                  {t === "all" ? `All (${allProducts.length})`
+                    : t === "attention" ? `Needs attention (${needsAttention.length})`
+                    : t === "ready" ? `Ready (${ready.length})`
+                    : `Excluded (${excluded.size})`}
                 </button>
               ))}
             </div>
@@ -1002,6 +1015,15 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
           <span className="text-[12px] text-muted-foreground">
             {selected.size > 0 ? `${selected.size} selected` : "Select all visible"}
           </span>
+          {excluded.size > 0 && (
+            <button
+              onClick={handleRestoreAll}
+              className="ml-auto text-[12px] text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+              title="Bring all excluded products back into the upload"
+            >
+              Restore all {excluded.size} excluded
+            </button>
+          )}
         </div>
         <div className="space-y-2 mb-4">
           {displayed.slice(0, 50).map((p: any) => {
@@ -1346,10 +1368,17 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                       </div>
                     </div>
                     <div className="mt-3 pt-3 border-t border-border flex gap-2">
-                      <button onClick={() => setExcluded(prev => { const s = new Set(prev); s.add(p.id); return s; })}
-                        className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">
-                        Exclude from upload
-                      </button>
+                      {excluded.has(p.id) ? (
+                        <button onClick={() => handleRestoreProduct(p.id)}
+                          className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20">
+                          Restore to upload
+                        </button>
+                      ) : (
+                        <button onClick={() => setExcluded(prev => { const s = new Set(prev); s.add(p.id); return s; })}
+                          className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background">
+                          Exclude from upload
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
