@@ -424,19 +424,31 @@ _TAG_STOPWORDS = {
     "original", "genuine", "hot", "sale", "1pc", "2pcs", "3pcs", "set",
 }
 
-# Values that look like a raw measurement/quantity rather than a real,
-# taggable product attribute (weight, dimensions, package counts) --
-# these show up constantly in Sunsky's spec tables and are meaningless
-# as tags on their own.
-_TAG_MEASUREMENT_RE = re.compile(
-    r"^\s*[\d.]+\s*(kgs?|g|lbs?|oz|cm|mm|inch(es)?|pcs?|pieces?)\s*$", re.IGNORECASE
-)
-# Spec keys worth preferring, in priority order, over an arbitrary first
-# value. Includes common synonyms (mirrors _get_brand's own key list above)
-# so e.g. "Compatible Brand" is recognized just as reliably as "Brand".
+# Client feedback item #2 (Tags) confirmed live: excluding Color from the
+# specs-based lookup wasn't enough on its own -- a trailing "(Silver)"/
+# "(Black)" etc. in the product NAME itself (an extremely common Sunsky
+# naming pattern) was still reaching tags via the first/last-word
+# name-extraction fallback. Filtered out of the word list itself so
+# neither path can surface a color.
+_TAG_COLOR_WORDS = {
+    "black", "white", "silver", "gold", "blue", "red", "green", "yellow",
+    "pink", "purple", "orange", "grey", "gray", "brown", "beige", "clear",
+    "transparent", "rose", "navy", "khaki", "camo", "multicolor",
+}
+
+# Client feedback item #2 (Tags): "some are wrong – exclude from the
+# logic to use color/pattern, include in the logic the use brand,
+# model, type of the product." Color/Colour was previously the TOP
+# priority tag source; now removed entirely. Brand was already
+# included; Model and product Type are new. Deliberately a pure
+# allowlist now (previously also had a fallback to "any non-measurement
+# spec value" when none of the preferred keys matched -- exactly how
+# Color/Pattern could sneak in as a tag even without being explicitly
+# requested) -- safer by construction, not just excluded by name.
 _TAG_PREFERRED_SPEC_KEYS = (
-    "color", "colour", "brand", "compatible brand", "manufacturer",
-    "material", "style",
+    "brand", "compatible brand", "manufacturer",
+    "model", "model number", "model no",
+    "type", "product type",
 )
 
 
@@ -449,11 +461,20 @@ def _clean_tag_word(w: str) -> str:
 
 
 def _tag_case(w: str) -> str:
-    """Title Case, except genuine all-caps brand/model codes (FMFXTR,
-    ZTTO, etc.) -- common in Sunsky product titles -- which .title()
-    would otherwise mangle into "Fmfxtr", damaging the actual brand name.
+    """Title Case, except:
+    - genuine all-caps brand/model codes (FMFXTR, ZTTO, etc.), which
+      .title() would otherwise mangle into "Fmfxtr", damaging the brand
+    - genuine mixed-case brand names (GoPro, iPhone) that already carry
+      meaningful internal capitalization -- confirmed live .title() was
+      flattening "GoPro" into "Gopro", same class of problem.
     """
     if len(w) >= 3 and w.isupper():
+        return w
+    # Has an uppercase letter somewhere after the first character ->
+    # deliberate internal capitalization (GoPro, iPhone), not just
+    # "the source text happened to be capitalized". Leave it exactly
+    # as given rather than re-casing.
+    if any(c.isupper() for c in w[1:]):
         return w
     return w.title()
 
@@ -468,38 +489,39 @@ def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
     # characters instead of treated as separating two distinct words.
     raw_words = re.split(r"[\s()\[\]]+", name)
     words = [_clean_tag_word(w) for w in raw_words]
-    words = [w for w in words if w and w.lower() not in _TAG_STOPWORDS]
+    words = [w for w in words if w and w.lower() not in _TAG_STOPWORDS and w.lower() not in _TAG_COLOR_WORDS]
 
     tags: list[str] = []
-    cat = product.get("category", "")
-    if cat:
-        tags.append(_tag_case(cat.strip()))
-    elif words:
-        tags.append(_tag_case(words[0]))
 
-    if len(words) > 1:
-        last = _tag_case(words[-1])
-        if last not in tags:
-            tags.append(last)
-
-    # Prefer a known-useful spec key (Color/Brand/Material/Style) over an
-    # arbitrary first value in raw HTML table order, which could just as
-    # easily be a package weight or dimension -- confirmed live picking up
-    # "0.08Kgs" as a "tag" this way.
-    spec_tag = None
+    # Brand / Model / Type -- in that priority order, only from these
+    # specific spec keys. No fallback to "whatever spec value looks
+    # reasonable" anymore, which is what let Color/Pattern in before.
     specs_lower = {k.strip().lower(): v for k, v in specs.items()}
     for key in _TAG_PREFERRED_SPEC_KEYS:
         v = specs_lower.get(key)
         if isinstance(v, str) and v.strip():
-            spec_tag = _tag_case(v.strip())
-            break
-    if not spec_tag:
-        for v in specs.values():
-            if isinstance(v, str) and 2 < len(v) < 30 and not _TAG_MEASUREMENT_RE.match(v):
-                spec_tag = _tag_case(v.strip())
-                break
-    if spec_tag and spec_tag not in tags:
-        tags.append(spec_tag)
+            tag = _tag_case(v.strip())
+            if tag not in tags:
+                tags.append(tag)
+
+    # Product "type" fallback when there's no explicit Type/Product Type
+    # spec field: a meaningful word from the product's own category/name
+    # still communicates what kind of product this is, just less
+    # precisely than a real Type spec would.
+    cat = product.get("category", "")
+    if cat:
+        cat_tag = _tag_case(cat.strip())
+        if cat_tag not in tags:
+            tags.append(cat_tag)
+    elif words:
+        first_tag = _tag_case(words[0])
+        if first_tag not in tags:
+            tags.append(first_tag)
+
+    if len(words) > 1:
+        last_tag = _tag_case(words[-1])
+        if last_tag not in tags:
+            tags.append(last_tag)
 
     max_tags = int(options.get("max_tags", 3))
     return ", ".join(tags[:max_tags])
