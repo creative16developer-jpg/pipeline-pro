@@ -363,6 +363,29 @@ _EN_BG_WORDS: dict[str, str] = {
     "phone": "телефон", "tablet": "таблет", "laptop": "лаптоп",
     "screen": "екран", "camera": "камера", "lens": "обектив",
     "with": "с", "for": "за", "and": "и",
+    # Client feedback confirmed live: a real test product (Insta360
+    # action camera housing) exposed that the original word list was
+    # heavily biased toward phone-case vocabulary and had zero coverage
+    # for camera/action-camera/drone accessories, a large share of
+    # Sunsky's actual catalog. Housing/Diving/etc. stayed untranslated
+    # not because the mechanism failed, but because none of these
+    # words existed in the glossary at all.
+    "housing": "корпус", "diving": "гмуркане", "underwater": "подводен",
+    "filter": "филтър", "gimbal": "джимбал", "stabilizer": "стабилизатор",
+    "tripod": "статив", "monopod": "монопод", "selfie": "селфи",
+    "remote": "дистанционно", "controller": "контролер",
+    "drone": "дрон", "propeller": "перка", "motor": "мотор",
+    "memory": "памет", "storage": "съхранение", "card": "карта",
+    "action": "екшън", "sport": "спортен", "outdoor": "външен",
+    "waterproof": "водоустойчив", "shockproof": "удароустойчив",
+    "adjustable": "регулируем", "rotatable": "въртящ се",
+    "rechargeable": "презареждаем", "lightweight": "лек",
+    "quick": "бърз", "fast": "бърз", "smart": "умен",
+    "digital": "цифров", "wired": "кабелен", "magnetic": "магнитен",
+    "clip": "щипка", "hook": "кука", "ring": "пръстен",
+    "grip": "захват", "handle": "дръжка", "cap": "капачка",
+    "tray": "поставка", "dock": "док", "station": "станция",
+    "power": "захранване", "bank": "банка", "hub": "хъб",
 }
 
 
@@ -740,6 +763,22 @@ def _derive_focus_keyword(product: dict, options: dict, resolved: dict) -> str:
 
     words = [w for w in re.split(r"\s+", title.strip()) if w]
     kept = [w for w in words if w.lower() not in _FOCUS_KEYWORD_STOPWORDS]
+    # Client feedback confirmed live: a title that DID translate
+    # correctly for Target Language=Bulgarian ("...водоустойчив...
+    # калъф" appearing later in the string) still produced an ALL-
+    # ENGLISH Focus Keyword, because the plain "first 5 words by
+    # position" selection let measurement/spec tokens (50m, 4K, 5G,
+    # 196ft) and the brand name (already prepended separately, so
+    # redundant here) fill the entire 5-word budget before ever
+    # reaching a real, translatable descriptive word. Skips both so
+    # genuine vocabulary gets a real chance to appear regardless of
+    # where it sits in the title.
+    brand_lower = brand.lower() if brand else None
+    kept = [
+        w for w in kept
+        if not re.match(r"^\d+[a-zA-Z]*$", w)  # 50m, 4K, 5G, 196ft, 2024
+        and (not brand_lower or w.lower() != brand_lower)
+    ]
     phrase_words = (([brand] if brand else []) + kept)[:5]
     phrase = " ".join(dict.fromkeys(phrase_words))  # de-dupe, preserve order
 
