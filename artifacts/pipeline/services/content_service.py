@@ -583,6 +583,27 @@ def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
     return ", ".join(tags[:max_tags])
 
 
+# Client feedback confirmed live via screenshot: Description's
+# "features" bullet list was dumping raw shipping/logistics metadata
+# verbatim -- "Package Weight", "Carton Weight", "Carton Size",
+# "Loading Container: 20GP: 290 cartons * 120 pcs = 34800 pcs". This is
+# internal supplier warehouse/shipping data, never meant for customer-
+# facing content, and leaked regardless of Lock Specs Table (a
+# completely separate, already-working mechanism) since the features
+# list took the first 8 raw spec entries with zero relevance filtering
+# at all. Matched by substring since Sunsky's exact key phrasing varies
+# ("Package Weight" vs "One Package Weight" vs "Carton Weight" etc.).
+_SPEC_KEY_EXCLUDE_SUBSTRINGS = (
+    "package", "carton", "container", "loading", "moq", "lead time",
+    "warehouse", "shipping", "freight", "pallet",
+)
+
+
+def _is_logistics_spec_key(key: str) -> bool:
+    key_lower = key.strip().lower()
+    return any(sub in key_lower for sub in _SPEC_KEY_EXCLUDE_SUBSTRINGS)
+
+
 def _logic_description(product: dict, options: dict, resolved: dict) -> str:
     name = product.get("name", "Product")
     raw = _get_raw(product)
@@ -612,11 +633,13 @@ def _logic_description(product: dict, options: dict, resolved: dict) -> str:
         parts.append(f"<p>{intro_text}</p>")
 
     if "features" in structure and specs:
+        customer_specs = {k: v for k, v in specs.items() if not _is_logistics_spec_key(k)}
         items = "".join(
             f"<li><strong>{k}:</strong> {v}</li>"
-            for k, v in list(specs.items())[:8]
+            for k, v in list(customer_specs.items())[:8]
         )
-        parts.append(f"<ul>{items}</ul>")
+        if items:
+            parts.append(f"<ul>{items}</ul>")
 
     if "benefits" in structure:
         benefits_text = (
