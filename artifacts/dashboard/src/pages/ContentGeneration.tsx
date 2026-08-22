@@ -1131,7 +1131,23 @@ export default function ContentGeneration() {
                     const handleToggleEnabled = (e: React.MouseEvent) => {
                       e.stopPropagation();
                       const newEnabled = { ...(config.globalSettings.ai_providers_enabled ?? {}), [id]: !isEnabled };
-                      patchGlobal({ ai_providers_enabled: newEnabled });
+                      const patch: any = { ai_providers_enabled: newEnabled };
+                      // Client feedback confirmed live: toggling a
+                      // provider's "enabled" switch on did NOT make it
+                      // the active provider -- a separate "Use this"
+                      // click was required, which is easy to miss.
+                      // Result: Gemini was toggled on, but generation
+                      // silently kept using OpenAI (still the active
+                      // provider), which had exhausted its quota --
+                      // every AI call failed and fell back to Logic
+                      // mode with no clear indication of why. Turning a
+                      // provider on now also selects it as active,
+                      // matching what a user naturally expects.
+                      if (!isEnabled) {
+                        patch.ai_provider = id;
+                        patch.ai_model = "";
+                      }
+                      patchGlobal(patch);
                     };
 
                     return (
