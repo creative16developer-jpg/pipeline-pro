@@ -117,10 +117,16 @@ async def upload_image_to_wordpress(
     store: Store,
     file_path: str,
     filename: Optional[str] = None,
-) -> Optional[str]:
+) -> tuple[Optional[str], Optional[int]]:
     """
     Upload a local image file to the WordPress media library.
-    Returns the public URL of the uploaded attachment, or None on failure.
+    Returns (url, media_id) -- both None on failure. media_id is the
+    WordPress attachment post ID; callers should persist it (see
+    Image.woo_image_id / wp_media_url) so a later run can detect this
+    exact file was already uploaded and reuse it directly, instead of
+    re-uploading and creating a genuine duplicate attachment -- this
+    was previously unimplemented (Review 3, item #4: "photos uploaded
+    twice").
 
     Requires wp_username + wp_app_password on the Store (WordPress Application
     Password — NOT the WooCommerce consumer key/secret, which only work with
@@ -135,12 +141,12 @@ async def upload_image_to_wordpress(
             "wp_username / wp_app_password not set on store. "
             "Add them in the Stores page to enable image upload."
         )
-        return None
+        return None, None
 
     path = Path(file_path)
     if not path.exists():
         print(f"[woo_client] File not found: {file_path}")
-        return None
+        return None, None
 
     fname = filename or path.name
     mime_type, _ = mimetypes.guess_type(fname)
@@ -174,16 +180,17 @@ async def upload_image_to_wordpress(
                     data.get("guid", {}).get("rendered")
                     if isinstance(data.get("guid"), dict) else None
                 )
-                return url
+                media_id = data.get("id")
+                return url, media_id
             else:
                 print(
                     f"[woo_client] WP media upload failed {resp.status_code}: "
                     f"{resp.text[:400]}"
                 )
-                return None
+                return None, None
     except Exception as e:
         print(f"[woo_client] WP media upload error for {file_path}: {e}")
-        return None
+        return None, None
 
 
 async def create_product(store: Store, product_data: dict) -> dict:

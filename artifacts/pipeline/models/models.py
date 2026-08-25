@@ -228,6 +228,12 @@ class Image(Base):
     local_path = Column(String, nullable=True)
     processed_path = Column(String, nullable=True)
     woo_image_id = Column(Integer, nullable=True)
+    # Review 3, item #4: "photos uploaded twice." woo_image_id existed
+    # but was never read or written anywhere -- every re-upload blindly
+    # re-uploaded every image file to WP media fresh, creating real
+    # physical duplicate attachments. Stores the resolved URL alongside
+    # the ID so a later run can reuse it directly, no extra API call.
+    wp_media_url = Column(String, nullable=True)
     position = Column(Integer, nullable=False, default=0)
     status = Column(SAEnum(ImageStatus, name="image_status"), nullable=False, default=ImageStatus.pending)
     is_main = Column(Boolean, nullable=False, default=False)

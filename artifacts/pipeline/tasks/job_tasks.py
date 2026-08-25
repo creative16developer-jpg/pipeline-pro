@@ -690,16 +690,53 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
             await _log(db, job.id, LogLevel.info,
                        f"  {product.sku}: uploading {len(processed_images)} image(s) to WP media…")
             urls: list[str] = []
+            base_slug = product.slug
+            if not base_slug:
+                from services.content_service import _slugify as _cs_slugify
+                base_slug = _cs_slugify(product.name or product.sku or "product")
             for img in processed_images:
-                wp_url = await wc.upload_image_to_wordpress(store, img.processed_path)
+                # Review 3, item #4: "photos uploaded twice." Confirmed
+                # root cause: woo_image_id existed on this model but was
+                # never read or written anywhere -- every re-upload/
+                # re-sync blindly re-uploaded every image file to WP
+                # media fresh, creating genuine new physical duplicate
+                # attachments each time a product was uploaded more than
+                # once (a very normal operation -- re-running Upload
+                # after Content Review edits, Sync after Upload, retries
+                # after a transient failure). Reuse the already-stored
+                # URL when this exact Image row was already uploaded in
+                # a previous run, instead of uploading it again.
+                if img.wp_media_url and img.woo_image_id:
+                    urls.append(img.wp_media_url)
+                    await _log(db, job.id, LogLevel.debug,
+                               f"    pos={img.position} → reusing existing WP media #{img.woo_image_id} (already uploaded)")
+                    continue
+                # Review 3, item #4 second part: "wrong image file name
+                # format." Confirmed root cause: no filename was ever
+                # explicitly passed here, so the upload silently used the
+                # LOCAL processed file's own name -- SKU-based
+                # (e.g. "PU1087T_0.webp", from image_processor.py's
+                # f"{safe_sku}_{position}.{ext}") -- completely bypassing
+                # the SEO-friendly name shown in Content Review's own
+                # "Image File Names" field. Built directly from
+                # product.slug (the authoritative field) with correct
+                # per-position numbering, independent of image_names'
+                # stored single-string preview value (which only ever
+                # represented what image #1 would look like).
+                ext = Path(img.processed_path).suffix or ".webp"
+                wp_filename = f"{base_slug}-{img.position + 1}{ext}"
+                wp_url, wp_media_id = await wc.upload_image_to_wordpress(store, img.processed_path, filename=wp_filename)
                 if wp_url:
                     urls.append(wp_url)
+                    img.wp_media_url = wp_url
+                    img.woo_image_id = wp_media_id
                     await _log(db, job.id, LogLevel.debug,
-                               f"    pos={img.position} → {wp_url}")
+                               f"    pos={img.position} → {wp_filename} → {wp_url}")
                 else:
                     await _log(db, job.id, LogLevel.warn,
                                f"    pos={img.position} WP upload failed — {img.processed_path}")
             if urls:
+                await db.commit()
                 return urls
 
         if has_base_url:
