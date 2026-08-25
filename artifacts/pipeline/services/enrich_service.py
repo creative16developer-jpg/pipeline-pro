@@ -183,6 +183,7 @@ async def _load_mapping_rules(db: Optional["AsyncSession"], store_id: Optional[i
 
 def _rule_matches_product(rule: dict, sunsky_category: str, resolved_woo_category: str = "") -> bool:
     if rule["condition_type"] == "always":
+        print(f"[enrich_service] rule {rule.get('woo_attr_name')!r} matched via condition_type='always'")
         return True
     if rule["condition_type"] == "if_category":
         cond = (rule.get("condition_value") or "").strip().lower()
@@ -207,7 +208,20 @@ def _rule_matches_product(rule: dict, sunsky_category: str, resolved_woo_categor
         # vocabulary work correctly.
         sunsky_lower = (sunsky_category or "").strip().lower()
         woo_lower = (resolved_woo_category or "").strip().lower()
-        return cond == sunsky_lower or (bool(woo_lower) and cond == woo_lower)
+        matched = cond == sunsky_lower or (bool(woo_lower) and cond == woo_lower)
+        # Client feedback confirmed live (twice, both directions): a
+        # rule scoped to "If category" still matched products it
+        # shouldn't have (Активност on unrelated GoPro cases even after
+        # being correctly scoped and saved), and separately still failed
+        # to match products it should (Характеристики "not found" on
+        # genuine waterproof housings), even with patch 75's resolved-
+        # category fix confirmed deployed. Rather than guess further,
+        # this logs exactly what's being compared on every check so a
+        # real test run shows the actual values involved.
+        print(f"[enrich_service] if_category check: rule condition_value={cond!r} "
+              f"vs sunsky_category={sunsky_lower!r} vs resolved_woo_category={woo_lower!r} "
+              f"→ {'MATCH' if matched else 'no match'}")
+        return matched
     # Any other condition_type isn't in the current schema (only "always" /
     # "if_category" are supported by the Attribute Mapping UI) — treat as
     # no-match rather than silently applying a rule outside its configured scope.
