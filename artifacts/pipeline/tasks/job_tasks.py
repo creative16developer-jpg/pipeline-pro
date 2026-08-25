@@ -924,12 +924,14 @@ async def _run_upload(db, job):
 
             # ── Resolve category mapping for this product ─────────────────
             woo_cat_ids: list[int] = []
+            primary_woo_cat_id: Optional[int] = None
             try:
                 # Manual product-level override takes absolute priority over batch rules
                 if getattr(product, "cat_source", None) == "manual" and product.manual_woo_cats_json:
                     import json as _json_manual
                     _manual = _json_manual.loads(product.manual_woo_cats_json)
                     woo_cat_ids = [c["id"] for c in _manual if c.get("id")]
+                    primary_woo_cat_id = product.manual_primary_woo_cat_id
                 else:
                     from models.models import SunskyCategoryMapping
                     raw_for_cat = product.raw_data or {}
@@ -960,6 +962,7 @@ async def _run_upload(db, job):
                                 woo_cat_ids = [c["id"] for c in _woo_cats if c.get("id")]
                             elif mapping.woo_cat_id:
                                 woo_cat_ids = [mapping.woo_cat_id]
+                            primary_woo_cat_id = mapping.primary_woo_cat_id
                             if woo_cat_ids:
                                 await _log(db, job.id, LogLevel.info,
                                            f"  {product.sku}: category mapping {sunsky_cat!r} → woo ids {woo_cat_ids}")
@@ -969,6 +972,25 @@ async def _run_upload(db, job):
             except Exception as _cat_err:
                 await _log(db, job.id, LogLevel.warn,
                            f"  {product.sku}: category lookup error — {_cat_err}")
+
+            # Client feedback: "If choose categories manual none of them
+            # can't be really selected as primary." Confirmed root cause:
+            # primary_woo_cat_id/manual_primary_woo_cat_id were saved to
+            # the database by the Content Review category picker (patch
+            # 59) but NEVER read anywhere in this payload construction --
+            # "Set primary" updated a field nothing downstream consumed,
+            # so it had zero real effect on the actual WooCommerce
+            # upload regardless of what the operator picked. Reorders
+            # the designated primary to the front of the list (the
+            # convention most themes/plugins use for "the main
+            # category"), and separately sets Yoast's own primary-
+            # category meta field below (woo_client.py) -- confirmed via
+            # the client's own WordPress screenshots that Yoast SEO is
+            # the SEO plugin in use, and Yoast's "primary category"
+            # feature is driven by its own meta field, not just array
+            # order in the categories list.
+            if primary_woo_cat_id and primary_woo_cat_id in woo_cat_ids:
+                woo_cat_ids = [primary_woo_cat_id] + [cid for cid in woo_cat_ids if cid != primary_woo_cat_id]
 
             payload = {
                 "name":              product.name,
@@ -1000,6 +1022,8 @@ async def _run_upload(db, job):
                 payload["sale_price"] = product.sale_price
             if woo_cat_ids:
                 payload["categories"] = [{"id": cid} for cid in woo_cat_ids]
+            if primary_woo_cat_id:
+                payload["primary_category_id"] = primary_woo_cat_id
 
             # Inventory Mapping: weight/dimensions from Sunsky raw data,
             # converted to the store's configured units, with null-handling

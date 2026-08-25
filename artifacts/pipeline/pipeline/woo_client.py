@@ -265,6 +265,16 @@ async def create_product(store: Store, product_data: dict) -> dict:
             {"key": "_yoast_wpseo_focuskw", "value": focus_kw},
             {"key": "rank_math_focus_keyword", "value": focus_kw},
         ]
+    # Client feedback: "If choose categories manual none of them can't
+    # be really selected as primary." Yoast's own "primary category"
+    # feature (shown in the client's WordPress screenshots) is driven
+    # by this specific meta key, not just categories array order --
+    # confirmed job_tasks.py now reorders the array too, but Yoast
+    # specifically needs this meta field set to actually recognize a
+    # category as "the" primary one for breadcrumbs/canonical URLs.
+    primary_cat_id = product_data.get("primary_category_id")
+    if primary_cat_id:
+        meta_entries.append({"key": "_yoast_wpseo_primary_category", "value": str(primary_cat_id)})
     if meta_entries:
         payload["meta_data"] = meta_entries
 
@@ -389,6 +399,16 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
             {"key": "_yoast_wpseo_focuskw", "value": focus_kw},
             {"key": "rank_math_focus_keyword", "value": focus_kw},
         ]
+    # Client feedback: "If choose categories manual none of them can't
+    # be really selected as primary." Yoast's own "primary category"
+    # feature (shown in the client's WordPress screenshots) is driven
+    # by this specific meta key, not just categories array order --
+    # confirmed job_tasks.py now reorders the array too, but Yoast
+    # specifically needs this meta field set to actually recognize a
+    # category as "the" primary one for breadcrumbs/canonical URLs.
+    primary_cat_id = product_data.get("primary_category_id")
+    if primary_cat_id:
+        meta_entries.append({"key": "_yoast_wpseo_primary_category", "value": str(primary_cat_id)})
     if meta_entries:
         payload["meta_data"] = meta_entries
 
