@@ -361,6 +361,7 @@ _EN_BG_WORDS: dict[str, str] = {
     "replacement": "резервен", "spare": "резервен",
     "set": "комплект", "kit": "комплект", "pack": "пакет",
     "phone": "телефон", "tablet": "таблет", "laptop": "лаптоп",
+    "wallet": "портфейл",
     "screen": "екран", "camera": "камера", "lens": "обектив",
     "with": "с", "for": "за", "and": "и",
     # Client feedback confirmed live: a real test product (Insta360
@@ -413,6 +414,65 @@ def _translate_title_bg(text: str) -> str:
     return result
 
 
+def _get_model(specs: dict) -> str:
+    return (
+        specs.get("Model Number")
+        or specs.get("Model")
+        or specs.get("Model No")
+        or specs.get("Model No.")
+        or ""
+    )
+
+
+def _get_brand_and_model_phrase(brand: str, model: str, name: str) -> str:
+    """The combined Brand+Model chunk to place in the middle of a
+    reordered title. If an explicit Model spec exists, just brand+model.
+    Otherwise, real Sunsky product names almost always place the model/
+    product-line immediately after the brand in the free text itself
+    ("Samsung Galaxy S26 5G...", "GoPro Hero 12...") rather than as a
+    separate spec field -- confirmed live this is the common case, not
+    the exception, for phone/electronics accessories.
+
+    Captures words immediately following the brand, but stops the
+    moment it hits a word already recognized as a descriptive term
+    (glossary word, stopword, or color) -- confirmed live the naive
+    "always grab up to 3 words" version incorrectly absorbed real
+    descriptive words like "Waterproof" and "Electroplated" into the
+    model phrase just because they happened to sit near the brand.
+    Only genuinely unrecognized words (numbers, product-line names like
+    "Galaxy"/"Hero"/"ROSSINI") get absorbed now.
+    """
+    if not brand:
+        return model
+    if model:
+        return f"{brand} {model}"
+    m = re.search(r"\b" + re.escape(brand) + r"\b", name, flags=re.IGNORECASE)
+    if not m:
+        return brand
+    rest_words = re.findall(r"[A-Za-z0-9]+", name[m.end():])
+    model_words: list[str] = []
+    for w in rest_words[:3]:
+        w_lower = w.lower()
+        if w_lower in _EN_BG_WORDS or w_lower in _TAG_STOPWORDS or w_lower in _TAG_COLOR_WORDS:
+            break
+        model_words.append(w)
+    return (brand + " " + " ".join(model_words)).strip() if model_words else brand
+
+
+def _get_variant(specs: dict, name: str) -> str:
+    """Color/size variant, for the Title reorder formula. Prefers the
+    Color spec field (most reliable); falls back to detecting a known
+    color word in the name itself (reusing _TAG_COLOR_WORDS, same set
+    already used for Tags' color exclusion)."""
+    color = specs.get("Color") or specs.get("Colour") or ""
+    if color:
+        return color
+    for w in re.findall(r"[A-Za-z]+", name):
+        if w.lower() in _TAG_COLOR_WORDS:
+            return w
+    return ""
+
+
 def _logic_title(product: dict, options: dict, resolved: dict) -> str:
     csv_title = (product.get("csv_title") or "").strip()
     if csv_title:
@@ -423,11 +483,51 @@ def _logic_title(product: dict, options: dict, resolved: dict) -> str:
         name = name[0].upper() + name[1:]
 
     lang = options.get("target_language", "bg")
-    if lang == "bg" and name:
-        name = _translate_title_bg(name)
+
+    # Client feedback item (Title word order): "[Product Type] +
+    # [Brand] + [Model] + [Key Technical Specification] + [Variant]."
+    # First confirmed and fixed for AI mode (patch 74) -- AI mode's
+    # prompt was leading with Brand+Model because that's what my own
+    # hardcoded example showed it. Client then explicitly asked for the
+    # same fix in Logic mode too. Logic mode has no prompt to fix, so
+    # this deterministically extracts Brand/Model/Variant from specs
+    # (reusing the same helpers as Tags and other Logic-mode fields)
+    # and removes their exact word matches from the raw name, leaving
+    # everything else (Type + Key Spec, kept together since reliably
+    # telling them apart from pure text isn't possible without AI) as
+    # the leading chunk -- then reassembles in the requested order.
+    raw = _get_raw(product)
+    specs = _parse_params_table(raw.get("paramsTable", ""))
+    brand = _get_brand(specs)
+    model = _get_model(specs)
+    variant = _get_variant(specs, name)
+    brand_model_phrase = _get_brand_and_model_phrase(brand, model, name)
+
+    remainder = name
+    for token in (brand_model_phrase, brand, variant):
+        if token:
+            remainder = re.sub(r"\b" + re.escape(token) + r"\b", "", remainder, flags=re.IGNORECASE)
+    remainder = re.sub(r"\(\s*\)", "", remainder)  # empty parens left behind after variant removal
+    remainder = re.sub(r"[\s\-,]+", " ", remainder).strip(" -,")
+    # Strip a leading stopword left dangling at the start ("For Honor..."
+    # -> brand phrase removed from later in the string -> "For" alone
+    # remains at the front, which reads badly as a title's first word).
+    remainder_words = remainder.split(" ")
+    if remainder_words and remainder_words[0].lower() in _TAG_STOPWORDS:
+        remainder = " ".join(remainder_words[1:])
+
+    if lang == "bg" and remainder:
+        remainder = _translate_title_bg(remainder)
+
+    parts = [p for p in [remainder, brand_model_phrase] if p]
+    title = " ".join(parts)
+    if variant:
+        title = f"{title} - {variant}" if title else variant
+    if not title:
+        title = name  # nothing extracted at all -- fall back to the raw name rather than an empty title
 
     max_chars = int(options.get("max_chars", 120))
-    return _truncate_no_mid_word(name, max_chars)
+    return _truncate_no_mid_word(title, max_chars)
 
 
 # Client feedback item #3 (doc): "The logic option at the moment works
