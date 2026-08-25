@@ -756,14 +756,29 @@ async def get_attribute_terms(store: Store, attribute_woo_id: int) -> list[dict]
     return results
 
 
-async def set_product_categories(store: Store, woo_id: int, category_woo_ids: list[int]) -> dict:
-    """Update the categories on an existing WooCommerce product."""
-    cats = [{"id": cid} for cid in category_woo_ids if cid]
+async def set_product_categories(
+    store: Store, woo_id: int, category_woo_ids: list[int], primary_woo_cat_id: Optional[int] = None,
+) -> dict:
+    """Update the categories on an existing WooCommerce product.
+    primary_woo_cat_id, when given, is moved to the front of the list
+    (the convention most themes/plugins use for "the main category")
+    and also sets Yoast's own _yoast_wpseo_primary_category meta field --
+    same fix as create_product/update_product (patch 77), needed here
+    too since Sync has its own separate category-assignment call that
+    was never updated for it.
+    """
+    ids = list(category_woo_ids)
+    if primary_woo_cat_id and primary_woo_cat_id in ids:
+        ids = [primary_woo_cat_id] + [cid for cid in ids if cid != primary_woo_cat_id]
+    cats = [{"id": cid} for cid in ids if cid]
+    payload: dict = {"categories": cats}
+    if primary_woo_cat_id:
+        payload["meta_data"] = [{"key": "_yoast_wpseo_primary_category", "value": str(primary_woo_cat_id)}]
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
         resp = await client.put(
             f"{_base_url(store)}/products/{woo_id}",
             headers=_auth_header(store),
-            json={"categories": cats},
+            json=payload,
         )
         if not resp.is_success:
             raise httpx.HTTPStatusError(

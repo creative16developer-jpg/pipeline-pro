@@ -1404,10 +1404,30 @@ async def _run_upload(db, job):
 
             cat_woo_ids: list[int] = []
             cat_names:   list[str] = []
+            p2_primary_woo_cat_id: Optional[int] = None
+
+            # ── Priority 0 (highest): manual per-product override ──────────
+            # Same gap as Sync's own category-assignment block: this
+            # "Phase 2" hierarchy step had no awareness of manual overrides
+            # at all, and its own comment below explicitly warns it can
+            # overwrite whatever category Phase 1 (the initial create/
+            # update payload) already set -- meaning a manual override
+            # could get silently replaced even within a single Upload
+            # run, not just on a later Sync.
+            if getattr(prod, "cat_source", None) == "manual" and prod.manual_woo_cats_json:
+                try:
+                    import json as _p2_manual_json
+                    _p2_manual = _p2_manual_json.loads(prod.manual_woo_cats_json)
+                    cat_woo_ids = [c["id"] for c in _p2_manual if c.get("id")]
+                    cat_names = [c.get("name", "") for c in _p2_manual if c.get("id")]
+                    p2_primary_woo_cat_id = prod.manual_primary_woo_cat_id
+                except Exception as _p2_manual_e:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  {prod.sku}: manual override lookup failed — {_p2_manual_e}")
 
             # ── Priority 1: SunskyCategoryMapping (user's explicit manual mapping) ──
             # This always wins — checked before any automatic Sunsky tree lookup.
-            if job.store_id:
+            if job.store_id and not cat_woo_ids:
                 try:
                     from models.models import SunskyCategoryMapping as _SCM2
                     from sqlalchemy import select as _sel_scm
@@ -1460,6 +1480,7 @@ async def _run_upload(db, job):
                         elif _mapping2.woo_cat_id:
                             cat_woo_ids = [_mapping2.woo_cat_id]
                             cat_names   = [_mapping2.woo_cat_name or _matched_key or ""]
+                        p2_primary_woo_cat_id = _mapping2.primary_woo_cat_id
                         if cat_woo_ids:
                             await _log(db, job.id, LogLevel.info,
                                        f"  {prod.sku}: SunskyCategoryMapping "
@@ -1496,7 +1517,7 @@ async def _run_upload(db, job):
             if cat_woo_ids:
                 try:
                     await woo_client.set_product_categories(
-                        store, prod.woo_product_id, cat_woo_ids
+                        store, prod.woo_product_id, cat_woo_ids, p2_primary_woo_cat_id
                     )
                     p2_cat_ok += 1
                     path_str = " → ".join(cat_names) or str(cat_woo_ids)
@@ -2197,10 +2218,36 @@ async def _run_sync(db, job):
                 raw_p = prod.raw_data or {}
                 sunsky_cat_id = _get_sunsky_cat_id(prod)
 
-                # Priority 1: SunskyCategoryMapping — user's explicit mapping always wins
+                # Priority 0 (highest): manual per-product override.
+                # Confirmed live this was the actual root cause behind
+                # "in product categories its showing which one was
+                # before the review change" -- Sync had its own,
+                # completely separate category-resolution logic (this
+                # loop) with NO awareness of manual_woo_cats_json at
+                # all, only ever checking the store-wide
+                # SunskyCategoryMapping table below. A manual override
+                # set correctly during Upload would get silently
+                # reverted back to the batch mapping the moment Sync ran
+                # afterward, since Sync had no idea the override existed.
+                # Matches the exact same priority Upload's own category
+                # resolution already uses (job_tasks.py, ~line 928).
                 woo_cat_ids: list[int] = []
+                primary_woo_cat_id: Optional[int] = None
                 woo_cat_source = ""
-                if store_id:
+                if getattr(prod, "cat_source", None) == "manual" and prod.manual_woo_cats_json:
+                    try:
+                        import json as _sync_manual_json
+                        _sync_manual = _sync_manual_json.loads(prod.manual_woo_cats_json)
+                        woo_cat_ids = [c["id"] for c in _sync_manual if c.get("id")]
+                        primary_woo_cat_id = prod.manual_primary_woo_cat_id
+                        if woo_cat_ids:
+                            woo_cat_source = "manual override"
+                    except Exception as _sync_manual_e:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  {prod.sku}: manual override lookup failed — {_sync_manual_e}")
+
+                # Priority 1: SunskyCategoryMapping — user's explicit mapping always wins
+                if store_id and not woo_cat_ids:
                     try:
                         from models.models import SunskyCategoryMapping as _SSCM
                         from sqlalchemy import select as _ssel_scm
@@ -2240,6 +2287,7 @@ async def _run_sync(db, job):
                                 woo_cat_ids = [c["id"] for c in _sm_cats if c.get("id")]
                             elif _smapping.woo_cat_id:
                                 woo_cat_ids = [_smapping.woo_cat_id]
+                            primary_woo_cat_id = _smapping.primary_woo_cat_id
                             if woo_cat_ids:
                                 woo_cat_source = f"SunskyCategoryMapping ({_skey!r})"
                     except Exception as _sme:
@@ -2254,7 +2302,7 @@ async def _run_sync(db, job):
                 if woo_cat_ids:
                     try:
                         await woo_client.set_product_categories(
-                            store, prod.woo_product_id, woo_cat_ids
+                            store, prod.woo_product_id, woo_cat_ids, primary_woo_cat_id
                         )
                         products_updated += 1
                         cat_ok += 1
