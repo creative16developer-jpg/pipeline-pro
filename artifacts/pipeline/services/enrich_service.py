@@ -181,12 +181,33 @@ async def _load_mapping_rules(db: Optional["AsyncSession"], store_id: Optional[i
         return []
 
 
-def _rule_matches_product(rule: dict, sunsky_category: str) -> bool:
+def _rule_matches_product(rule: dict, sunsky_category: str, resolved_woo_category: str = "") -> bool:
     if rule["condition_type"] == "always":
         return True
     if rule["condition_type"] == "if_category":
         cond = (rule.get("condition_value") or "").strip().lower()
-        return bool(cond) and cond == (sunsky_category or "").strip().lower()
+        if not cond:
+            return False
+        # Client feedback confirmed live via screenshot: a real
+        # "Waterproof and Protective Cases" rule never matched a product
+        # whose Sunsky breadcrumb was actually "Protection & Cases" --
+        # traced to a fundamental vocabulary mismatch. The Attribute
+        # Mapping condition dropdown (patches 39/59/68/69) sources
+        # suggestions from this store's WooCommerce category names, but
+        # this check only ever compared against the raw Sunsky category
+        # string. These are two genuinely different vocabularies (the
+        # client's own store category structure vs. Sunsky's internal
+        # taxonomy) that don't match string-for-string even when they're
+        # conceptually the same category -- meaning every "If category"
+        # rule created via that dropdown may have silently never matched
+        # anything. Now checks against EITHER the raw Sunsky category OR
+        # the resolved WooCommerce category name (via the same
+        # SunskyCategoryMapping table already used for Content Review's
+        # own category display), so rules typed against either
+        # vocabulary work correctly.
+        sunsky_lower = (sunsky_category or "").strip().lower()
+        woo_lower = (resolved_woo_category or "").strip().lower()
+        return cond == sunsky_lower or (bool(woo_lower) and cond == woo_lower)
     # Any other condition_type isn't in the current schema (only "always" /
     # "if_category" are supported by the Attribute Mapping UI) — treat as
     # no-match rather than silently applying a rule outside its configured scope.
@@ -229,7 +250,7 @@ def _find_sunsky_value(product: dict, source_field: Optional[str]) -> str:
 
 
 def apply_mapping_rules(
-    product: dict, rules: list[dict], sunsky_category: str
+    product: dict, rules: list[dict], sunsky_category: str, resolved_woo_category: str = ""
 ) -> tuple[list[AttrResult], list[dict]]:
     """
     Evaluate AttributeMappingRule rows against one product.
@@ -252,7 +273,7 @@ def apply_mapping_rules(
         attr_key = rule["woo_attr_name"].strip().lower()
         if attr_key in seen_attrs:
             continue
-        if not _rule_matches_product(rule, sunsky_category):
+        if not _rule_matches_product(rule, sunsky_category, resolved_woo_category):
             continue
 
         if rule["rule_type"] == "fixed_value":
@@ -412,8 +433,11 @@ async def extract_attributes(
     """
     rules = await _load_rules(db)
     mapping_rules = await _load_mapping_rules(db, store_id)
+    resolved_woo_category = await _resolve_woo_category_name(db, store_id, sunsky_category or "")
 
-    resolved, ai_extract_from_mapping = apply_mapping_rules(product, mapping_rules, sunsky_category or "")
+    resolved, ai_extract_from_mapping = apply_mapping_rules(
+        product, mapping_rules, sunsky_category or "", resolved_woo_category
+    )
     resolved_lower = {r["attribute"].strip().lower() for r in resolved}
 
     # Attribute Mapping's ai_extract rows override an Extraction Rules entry
@@ -626,6 +650,33 @@ async def get_effective_category_name_map(db: Optional["AsyncSession"]) -> dict[
     # Starred names win on overlap — they're operator-confirmed and instant,
     # vs. the tree walk which may be stale/partial.
     return {**tree_map, **starred_map}
+
+
+async def _resolve_woo_category_name(
+    db: Optional["AsyncSession"], store_id: Optional[int], sunsky_category: str
+) -> str:
+    """Resolve a raw Sunsky category name to its mapped WooCommerce
+    category name for this store, via the same SunskyCategoryMapping
+    table Content Review's own category display already uses. Returns
+    "" if there's no saved mapping -- the caller falls back to matching
+    against the raw Sunsky category only, same as before this existed.
+    """
+    if db is None or not store_id or not sunsky_category:
+        return ""
+    try:
+        from sqlalchemy import select
+        from models.models import SunskyCategoryMapping
+        mapping = (
+            await db.execute(
+                select(SunskyCategoryMapping).where(
+                    SunskyCategoryMapping.store_id == store_id,
+                    SunskyCategoryMapping.sunsky_cat == sunsky_category,
+                )
+            )
+        ).scalar_one_or_none()
+        return (mapping.woo_cat_name or "") if mapping else ""
+    except Exception:
+        return ""
 
 
 async def load_profile_attrs_for_category(
