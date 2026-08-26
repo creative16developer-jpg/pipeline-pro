@@ -1104,8 +1104,12 @@ async def _run_upload(db, job):
             # Client feedback item #8: "sales and regular prices" both
             # need to be editable (Baselinker reference); regular price
             # already flowed through correctly, sale_price never existed.
+            print(f"[upload payload] {product.sku}: product.price={product.price!r} "
+                  f"product.sale_price={product.sale_price!r}")
             if product.sale_price:
                 payload["sale_price"] = product.sale_price
+            print(f"[upload payload] {product.sku}: payload sale_price="
+                  f"{payload.get('sale_price')!r} regular price={payload.get('price')!r}")
             if woo_cat_ids:
                 payload["categories"] = [{"id": cid} for cid in woo_cat_ids]
             if primary_woo_cat_id:

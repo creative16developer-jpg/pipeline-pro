@@ -319,6 +319,8 @@ async def create_product(store: Store, product_data: dict) -> dict:
         payload["dimensions"] = {k: str(v) for k, v in dimensions.items() if v is not None and v != ""}
 
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        print(f"[woo_client.create_product] regular_price={payload.get('regular_price')!r} "
+              f"sale_price={payload.get('sale_price')!r} (full payload keys: {list(payload.keys())})")
         resp = await client.post(
             f"{_base_url(store)}/products",
             headers=_auth_header(store),
@@ -330,7 +332,10 @@ async def create_product(store: Store, product_data: dict) -> dict:
                 request=resp.request,
                 response=resp,
             )
-        return resp.json()
+        result = resp.json()
+        print(f"[woo_client.create_product] WooCommerce response: regular_price={result.get('regular_price')!r} "
+              f"sale_price={result.get('sale_price')!r}")
+        return result
 
 
 async def get_product_by_sku(store: Store, sku: str) -> Optional[dict]:
@@ -471,6 +476,8 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
         payload["dimensions"] = {k: str(v) for k, v in dimensions.items() if v is not None and v != ""}
 
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        print(f"[woo_client.update_product] regular_price={payload.get('regular_price')!r} "
+              f"sale_price={payload.get('sale_price')!r} (full payload keys: {list(payload.keys())})")
         resp = await client.put(
             f"{_base_url(store)}/products/{woo_id}",
             headers=_auth_header(store),
@@ -482,7 +489,10 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
                 request=resp.request,
                 response=resp,
             )
-        return resp.json()
+        result = resp.json()
+        print(f"[woo_client.update_product] WooCommerce response: regular_price={result.get('regular_price')!r} "
+              f"sale_price={result.get('sale_price')!r}")
+        return result
 
 
 async def update_product_stock(store: Store, woo_id: int, price: str, stock_qty: int) -> dict:
