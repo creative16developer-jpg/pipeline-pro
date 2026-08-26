@@ -713,10 +713,14 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                 uploaded_cache: dict = _img_cache_json.loads(product.uploaded_images_json or "{}")
             except Exception:
                 uploaded_cache = {}
+            print(f"[_resolve_product_images] {product.sku}: product-level cache has {len(uploaded_cache)} "
+                  f"entries: {list(uploaded_cache.keys())}")
 
             for img in processed_images:
                 cache_key = img.original_url or ""
                 cached = uploaded_cache.get(cache_key) if cache_key else None
+                print(f"[_resolve_product_images] {product.sku} pos={img.position}: "
+                      f"original_url={cache_key!r} → {'CACHE HIT' if cached else 'cache miss'}")
 
                 if cached and cached.get("wp_url"):
                     urls.append(cached["wp_url"])
@@ -767,6 +771,8 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
             if urls:
                 product.uploaded_images_json = _img_cache_json.dumps(uploaded_cache)
                 await db.commit()
+                print(f"[_resolve_product_images] {product.sku}: saved cache with {len(uploaded_cache)} "
+                      f"entries to product.uploaded_images_json")
                 return urls
 
         if has_base_url:
