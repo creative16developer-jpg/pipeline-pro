@@ -654,9 +654,13 @@ async def _run_process(db, job):
 # IMAGE RESOLUTION HELPER
 # ---------------------------------------------------------------------------
 
-async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> list[str]:
+async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> list:
     """
-    For a product, return a list of image URLs to send to WooCommerce.
+    For a product, return a list of image entries to send to WooCommerce
+    -- either {"id": wp_media_id, "src": url} dicts (preferred, when the
+    WordPress attachment ID is already known -- references the EXISTING
+    attachment directly, no re-download/re-sideload) or plain URL
+    strings (fallback paths with no WP media ID concept at all).
 
     Priority order:
       1. Upload processed WebP files to WordPress media library
@@ -689,7 +693,16 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
         if has_wp_creds:
             await _log(db, job.id, LogLevel.info,
                        f"  {product.sku}: uploading {len(processed_images)} image(s) to WP media…")
-            urls: list[str] = []
+            # Real duplicate-image root cause (found live via patch 83's
+            # diagnostics): WooCommerce sideloads/re-downloads ANY "src"
+            # URL as a brand-new attachment, even one already hosted on
+            # this same site -- it never recognizes "this URL is already
+            # an existing attachment" on its own. Returns {"id": ...}
+            # objects (not bare URL strings) whenever the WordPress media
+            # ID is known, so woo_client.py can reference the EXISTING
+            # attachment directly instead of triggering a new sideload
+            # every single time this product gets uploaded/synced again.
+            images: list[dict] = []
             base_slug = product.slug
             if not base_slug:
                 from services.content_service import _slugify as _cs_slugify
@@ -723,7 +736,7 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                       f"original_url={cache_key!r} → {'CACHE HIT' if cached else 'cache miss'}")
 
                 if cached and cached.get("wp_url"):
-                    urls.append(cached["wp_url"])
+                    images.append({"id": cached.get("woo_image_id"), "src": cached["wp_url"]})
                     img.wp_media_url = cached["wp_url"]
                     img.woo_image_id = cached.get("woo_image_id")
                     await _log(db, job.id, LogLevel.debug,
@@ -736,7 +749,7 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                 # is the primary, durable check; this covers the case
                 # where the row itself already has the info too.
                 if img.wp_media_url and img.woo_image_id:
-                    urls.append(img.wp_media_url)
+                    images.append({"id": img.woo_image_id, "src": img.wp_media_url})
                     if cache_key:
                         uploaded_cache[cache_key] = {"wp_url": img.wp_media_url, "woo_image_id": img.woo_image_id}
                     await _log(db, job.id, LogLevel.debug,
@@ -758,7 +771,7 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                 wp_filename = f"{base_slug}-{img.position + 1}{ext}"
                 wp_url, wp_media_id = await wc.upload_image_to_wordpress(store, img.processed_path, filename=wp_filename)
                 if wp_url:
-                    urls.append(wp_url)
+                    images.append({"id": wp_media_id, "src": wp_url})
                     img.wp_media_url = wp_url
                     img.woo_image_id = wp_media_id
                     if cache_key:
@@ -768,12 +781,12 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                 else:
                     await _log(db, job.id, LogLevel.warn,
                                f"    pos={img.position} WP upload failed — {img.processed_path}")
-            if urls:
+            if images:
                 product.uploaded_images_json = _img_cache_json.dumps(uploaded_cache)
                 await db.commit()
                 print(f"[_resolve_product_images] {product.sku}: saved cache with {len(uploaded_cache)} "
                       f"entries to product.uploaded_images_json")
-                return urls
+                return images
 
         if has_base_url:
             await _log(db, job.id, LogLevel.info,
@@ -1104,8 +1117,8 @@ async def _run_upload(db, job):
             payload.update(_apply_inventory_mapping(raw, inventory_config))
 
             if not skip_images:
-                image_urls = await _resolve_product_images(db, job, product, raw, wc, store)
-                if image_urls:
+                image_entries = await _resolve_product_images(db, job, product, raw, wc, store)
+                if image_entries:
                     # Client feedback: "duplicate/non-unique alt text across
                     # images" -- previously every photo in the gallery got
                     # the exact same alt string. The main (first) image
@@ -1115,10 +1128,20 @@ async def _run_upload(db, job):
                     # descriptive (not a bare "image 2" with no product
                     # context) while being distinct from the others.
                     base_alt = product.image_alt or product.name or ""
-                    payload["images"] = [
-                        {"src": url, "alt": (base_alt if i == 0 else f"{base_alt} - {i + 1}") if base_alt else ""}
-                        for i, url in enumerate(image_urls)
-                    ]
+                    payload["images"] = []
+                    for i, entry in enumerate(image_entries):
+                        alt = (base_alt if i == 0 else f"{base_alt} - {i + 1}") if base_alt else ""
+                        if isinstance(entry, dict):
+                            # {"id": wp_media_id, "src": url} from the
+                            # WP-upload path -- keep both, woo_client.py
+                            # prefers "id" (references the existing
+                            # attachment directly, no re-sideload).
+                            payload["images"].append({**entry, "alt": alt})
+                        else:
+                            # Plain URL string from a fallback path with
+                            # no WP media ID concept (static server URL /
+                            # raw Sunsky CDN URL).
+                            payload["images"].append({"src": entry, "alt": alt})
 
             # ── Check if SKU already exists in WooCommerce (prevents duplicates)
             existing_woo = await wc.get_product_by_sku(store, product.sku)

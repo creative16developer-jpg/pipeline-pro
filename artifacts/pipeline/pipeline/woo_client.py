@@ -199,10 +199,29 @@ async def create_product(store: Store, product_data: dict) -> dict:
     product_data keys: name, sku, regular_price, description, status,
                        images (list of URLs), categories, stock_quantity, manage_stock
     """
+    # Real duplicate-image root cause, found live via diagnostic logging
+    # (patches 78/82/83): WooCommerce's REST API treats a "src" URL as
+    # "go download this and create a NEW media attachment", regardless
+    # of whether that URL already points to something on this SAME
+    # site's own uploads folder -- it does NOT recognize "this URL is
+    # already an existing attachment" automatically. Every fix so far
+    # correctly prevented US from re-uploading the same file to WP media
+    # more than once, but the resulting URL was still sent via "src" on
+    # every single product update -- so WooCommerce itself re-sideloaded
+    # it as a brand-new attachment every time, completely independent of
+    # whatever caching we did on our own side. Now prefers {"id": ...}
+    # (a direct, existing-attachment reference -- no download, no new
+    # attachment) whenever we already know the WordPress media ID;
+    # falls back to {"src": url} only when we don't (e.g. raw Sunsky CDN
+    # URLs or static server URLs, neither of which have a WP media ID).
     raw_images = product_data.get("images", [])
     images = []
     for img in raw_images:
         if isinstance(img, dict):
+            media_id = img.get("id")
+            if media_id:
+                images.append({"id": media_id})
+                continue
             src = img.get("src") or img.get("url", "")
             if src.startswith("http"):
                 obj: dict = {"src": src}
@@ -339,10 +358,29 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
     """
     Update an existing WooCommerce product (full payload).
     """
+    # Real duplicate-image root cause, found live via diagnostic logging
+    # (patches 78/82/83): WooCommerce's REST API treats a "src" URL as
+    # "go download this and create a NEW media attachment", regardless
+    # of whether that URL already points to something on this SAME
+    # site's own uploads folder -- it does NOT recognize "this URL is
+    # already an existing attachment" automatically. Every fix so far
+    # correctly prevented US from re-uploading the same file to WP media
+    # more than once, but the resulting URL was still sent via "src" on
+    # every single product update -- so WooCommerce itself re-sideloaded
+    # it as a brand-new attachment every time, completely independent of
+    # whatever caching we did on our own side. Now prefers {"id": ...}
+    # (a direct, existing-attachment reference -- no download, no new
+    # attachment) whenever we already know the WordPress media ID;
+    # falls back to {"src": url} only when we don't (e.g. raw Sunsky CDN
+    # URLs or static server URLs, neither of which have a WP media ID).
     raw_images = product_data.get("images", [])
     images = []
     for img in raw_images:
         if isinstance(img, dict):
+            media_id = img.get("id")
+            if media_id:
+                images.append({"id": media_id})
+                continue
             src = img.get("src") or img.get("url", "")
             if src.startswith("http"):
                 obj: dict = {"src": src}
