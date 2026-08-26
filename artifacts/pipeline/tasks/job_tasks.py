@@ -694,20 +694,47 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
             if not base_slug:
                 from services.content_service import _slugify as _cs_slugify
                 base_slug = _cs_slugify(product.name or product.sku or "product")
+
+            # Product-level, source-URL-keyed dedup cache. Confirmed
+            # live that patch 78's Image-row-level dedup alone wasn't
+            # enough: a full pipeline re-run (Fetch->Process->...->
+            # Upload) for a product already uploaded before still
+            # created genuine duplicate WP media attachments, because
+            # Process deletes and recreates every Image row for that
+            # product each time it runs (patch 42's correct, separate
+            # behavior) -- wiping the Image-row-level memory along with
+            # it. This is a MORE DURABLE layer at the product level,
+            # keyed by each image's ORIGINAL SOURCE URL (stable across
+            # Process re-runs, unlike the Image row's own id), so dedup
+            # survives a full pipeline re-run, not just a plain
+            # re-upload/re-sync on the same existing Image rows.
+            import json as _img_cache_json
+            try:
+                uploaded_cache: dict = _img_cache_json.loads(product.uploaded_images_json or "{}")
+            except Exception:
+                uploaded_cache = {}
+
             for img in processed_images:
-                # Review 3, item #4: "photos uploaded twice." Confirmed
-                # root cause: woo_image_id existed on this model but was
-                # never read or written anywhere -- every re-upload/
-                # re-sync blindly re-uploaded every image file to WP
-                # media fresh, creating genuine new physical duplicate
-                # attachments each time a product was uploaded more than
-                # once (a very normal operation -- re-running Upload
-                # after Content Review edits, Sync after Upload, retries
-                # after a transient failure). Reuse the already-stored
-                # URL when this exact Image row was already uploaded in
-                # a previous run, instead of uploading it again.
+                cache_key = img.original_url or ""
+                cached = uploaded_cache.get(cache_key) if cache_key else None
+
+                if cached and cached.get("wp_url"):
+                    urls.append(cached["wp_url"])
+                    img.wp_media_url = cached["wp_url"]
+                    img.woo_image_id = cached.get("woo_image_id")
+                    await _log(db, job.id, LogLevel.debug,
+                               f"    pos={img.position} → reusing WP media from product cache (already uploaded in a previous run)")
+                    continue
+
+                # Review 3, item #4: "photos uploaded twice." Fast-path
+                # for the same-Image-row case (re-upload/re-sync without
+                # re-running Process) -- the product-level cache above
+                # is the primary, durable check; this covers the case
+                # where the row itself already has the info too.
                 if img.wp_media_url and img.woo_image_id:
                     urls.append(img.wp_media_url)
+                    if cache_key:
+                        uploaded_cache[cache_key] = {"wp_url": img.wp_media_url, "woo_image_id": img.woo_image_id}
                     await _log(db, job.id, LogLevel.debug,
                                f"    pos={img.position} → reusing existing WP media #{img.woo_image_id} (already uploaded)")
                     continue
@@ -730,12 +757,15 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                     urls.append(wp_url)
                     img.wp_media_url = wp_url
                     img.woo_image_id = wp_media_id
+                    if cache_key:
+                        uploaded_cache[cache_key] = {"wp_url": wp_url, "woo_image_id": wp_media_id}
                     await _log(db, job.id, LogLevel.debug,
                                f"    pos={img.position} → {wp_filename} → {wp_url}")
                 else:
                     await _log(db, job.id, LogLevel.warn,
                                f"    pos={img.position} WP upload failed — {img.processed_path}")
             if urls:
+                product.uploaded_images_json = _img_cache_json.dumps(uploaded_cache)
                 await db.commit()
                 return urls
 

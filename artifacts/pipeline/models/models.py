@@ -119,6 +119,15 @@ class Product(Base):
 
     # Manual product-level WooCommerce category override (never overwritten by batch rules)
     manual_woo_cats_json      = Column(Text, nullable=True)   # JSON: [{id, name}, ...]
+    # Real duplicate-image gap found live: patch 78's dedup tracking
+    # lived on the Image row itself, which gets wiped and recreated
+    # every time Process runs again for the same product (patch 42's
+    # correct, separate behavior) -- a full pipeline re-run had no
+    # memory of images already uploaded to WordPress. This is a more
+    # durable tracking layer, keyed by each image's ORIGINAL SOURCE URL
+    # (stable across Process re-runs, unlike an Image row's own id):
+    # JSON: {source_url: {"wp_url": ..., "woo_image_id": ...}, ...}
+    uploaded_images_json      = Column(Text, nullable=True)
     manual_primary_woo_cat_id = Column(Integer, nullable=True)
     cat_source                = Column(String(20), nullable=False, default="auto")  # 'auto' | 'manual'
 
