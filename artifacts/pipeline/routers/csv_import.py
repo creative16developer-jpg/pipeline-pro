@@ -13,7 +13,12 @@ CSV Columns (required, case-sensitive):
                   backward-compat lookup during the pipeline generate step
 
 CSV Columns (optional):
-  Price — see above
+  Price      — see above (WooCommerce regular_price)
+  Sale Price — client feedback: "I noticed that in the CSV there is only
+               one price - need to have sale and regular price." Maps to
+               Product.sale_price (already existed as a field, wired into
+               the WooCommerce upload payload -- just never had a CSV
+               import column for it until now).
   QTY   — real numeric stock quantity, saved to Product.stock_quantity and
           sent as-is to WooCommerce. If left blank, the background Sunsky
           enrichment fills it in from Sunsky's real stock number when
@@ -128,7 +133,7 @@ async def _enrich_csv_products_from_sunsky(job_id: int, skus: list[str]) -> None
 # know the required and optional fields").
 # ---------------------------------------------------------------------------
 
-OPTIONAL_COLUMNS = ["Price", "QTY"]
+OPTIONAL_COLUMNS = ["Price", "Sale Price", "QTY"]
 
 @router.get("/template")
 async def download_csv_template():
@@ -142,10 +147,13 @@ async def download_csv_template():
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(header)
-    # One real example row and one showing the optional columns left blank,
-    # so it's clear at a glance that Price/QTY are genuinely optional.
-    writer.writerow(["TBD0557780301", "BIKE-CUSHION-001", "Wheel Up Mountain Bike Cushion Cover", "19.99", "37"])
-    writer.writerow(["TBD0602299302", "BIKE-SEATPOST-001", "FMFXTR Mountain Bike Seat Post", "", ""])
+    # Client feedback: "I noticed that in the CSV there is only one price -
+    # need to have sale and regular price." One example row shows both
+    # prices filled in (a real discount scenario); the other shows every
+    # optional column left blank, so it's clear at a glance that Price/
+    # Sale Price/QTY are all genuinely optional.
+    writer.writerow(["TBD0557780301", "BIKE-CUSHION-001", "Wheel Up Mountain Bike Cushion Cover", "19.99", "15.99", "37"])
+    writer.writerow(["TBD0602299302", "BIKE-SEATPOST-001", "FMFXTR Mountain Bike Seat Post", "", "", ""])
     buf.seek(0)
 
     return StreamingResponse(
@@ -202,7 +210,8 @@ async def upload_csv(
         sunsky_sku = (row.get("Sunsky SKU") or "").strip()
         site_sku   = (row.get("Site SKU") or "").strip()
         csv_title  = (row.get("Product Title") or "").strip()
-        price_raw  = (row.get("Price") or "").strip()
+        price_raw       = (row.get("Price") or "").strip()
+        sale_price_raw  = (row.get("Sale Price") or "").strip()
         qty_raw    = (row.get("QTY") or "").strip()
 
         if not sunsky_sku:
@@ -217,6 +226,16 @@ async def upload_csv(
             except ValueError:
                 errors.append(f"Row {i + 2}: invalid price '{price_raw}' — price ignored")
 
+        # Client feedback: "I noticed that in the CSV there is only one
+        # price - need to have sale and regular price." Validated the
+        # same way as Price above.
+        sale_price: str | None = None
+        if sale_price_raw:
+            try:
+                sale_price = str(round(float(sale_price_raw.replace(",", ".")), 2))
+            except ValueError:
+                errors.append(f"Row {i + 2}: invalid sale price '{sale_price_raw}' — sale price ignored")
+
         # Validate QTY if provided (optional column)
         qty: int | None = None
         if qty_raw:
@@ -227,7 +246,7 @@ async def upload_csv(
 
         rows.append({
             "sunsky_sku": sunsky_sku, "site_sku": site_sku, "csv_title": csv_title,
-            "price": price, "qty": qty,
+            "price": price, "sale_price": sale_price, "qty": qty,
         })
 
     if not rows:
@@ -288,6 +307,8 @@ async def upload_csv(
             existing.error_message = None
             if r["price"] is not None:
                 existing.price = r["price"]
+            if r["sale_price"] is not None:
+                existing.sale_price = r["sale_price"]
             if r["qty"] is not None:
                 existing.stock_quantity = r["qty"]
             continue
@@ -303,6 +324,8 @@ async def upload_csv(
         )
         if r["price"] is not None:
             values["price"] = r["price"]
+        if r["sale_price"] is not None:
+            values["sale_price"] = r["sale_price"]
         if r["qty"] is not None:
             values["stock_quantity"] = r["qty"]
 
@@ -316,6 +339,8 @@ async def upload_csv(
         }
         if r["price"] is not None:
             conflict_set["price"] = r["price"]
+        if r["sale_price"] is not None:
+            conflict_set["sale_price"] = r["sale_price"]
         if r["qty"] is not None:
             conflict_set["stock_quantity"] = r["qty"]
 

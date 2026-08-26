@@ -881,6 +881,7 @@ export default function Pipeline() {
                       { col: "Site SKU",      desc: "Your WooCommerce SKU",       required: true },
                       { col: "Product Title", desc: "Name for the product",       required: true },
                       { col: "Price",         desc: "WooCommerce regular_price",  required: false },
+                      { col: "Sale Price",    desc: "WooCommerce sale_price",     required: false },
                       { col: "QTY",           desc: "Stock quantity (0 is valid)", required: false },
                     ].map(({ col, desc, required }) => (
                       <div key={col} className="bg-background/60 rounded-lg p-2 flex items-start justify-between gap-1">
