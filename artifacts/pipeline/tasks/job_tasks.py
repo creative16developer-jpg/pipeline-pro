@@ -1148,7 +1148,19 @@ async def _run_upload(db, job):
                             payload["images"].append({"src": entry, "alt": alt})
 
             # ── Check if SKU already exists in WooCommerce (prevents duplicates)
-            existing_woo = await wc.get_product_by_sku(store, product.sku)
+            # Real bug found live: the product is created with site_sku as
+            # its WooCommerce SKU (payload["sku"] = product.site_sku or
+            # product.sku, above), but this lookup was searching using
+            # product.sku alone -- the Sunsky SKU, a DIFFERENT value
+            # whenever site_sku is set (the normal case, since it's a
+            # required CSV column). The lookup never matched, so every
+            # re-upload of an already-existing product silently created a
+            # brand-new DUPLICATE product in WooCommerce instead of
+            # updating the real one -- confirmed this is exactly why a
+            # sale price update on a force rerun appeared to do nothing:
+            # it was actually being applied correctly, just to a new,
+            # separate duplicate product the operator hadn't noticed yet.
+            existing_woo = await wc.get_product_by_sku(store, product.site_sku or product.sku)
 
             if existing_woo:
                 woo_id = existing_woo["id"]
@@ -1185,7 +1197,7 @@ async def _run_upload(db, job):
                 except Exception as create_err:
                     err_text = str(create_err)
                     if "woocommerce_rest_product_not_created" in err_text and "already present in the lookup table" in err_text:
-                        existing_woo = await wc.get_product_by_sku(store, product.sku)
+                        existing_woo = await wc.get_product_by_sku(store, product.site_sku or product.sku)
                         if existing_woo:
                             woo_id = existing_woo["id"]
                             await wc.update_product(store, woo_id, payload)

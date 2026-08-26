@@ -355,7 +355,13 @@ async def get_product_by_sku(store: Store, sku: str) -> Optional[dict]:
             if isinstance(results, list) and results:
                 return results[0]
             return None
-    except Exception:
+    except Exception as e:
+        # A genuine failure here (timeout, auth error, rate limit) looks
+        # identical to "product doesn't exist" to every caller -- which
+        # would incorrectly trigger a duplicate create instead of an
+        # update. Printed so a real failure is visible in pm2 logs
+        # rather than completely silent.
+        print(f"[woo_client.get_product_by_sku] lookup failed for sku={sku!r}: {e}")
         return None
 
 
