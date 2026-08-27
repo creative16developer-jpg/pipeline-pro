@@ -127,16 +127,34 @@ async def lifespan(app: FastAPI):
     # first thing that triggers this fetch. Disk-persisted cache (see
     # pipeline/sunsky_client.py) means this is a no-op if already warm and
     # fresh; only actually refetches when genuinely stale/missing.
-    async def _prewarm_category_cache():
-        try:
-            from pipeline.sunsky_client import get_category_name_map
-            m = await get_category_name_map()
-            print(f"[main] Category name cache pre-warmed: {len(m)} categories.")
-        except Exception as exc:
-            print(f"[main] Category name cache pre-warm failed (non-fatal): {exc}")
+    #
+    # Client feedback confirmed live: a pipeline run hit the full 20s
+    # timeout mid-testing-session even though the server hadn't just
+    # restarted -- traced to the cache file being 9+ hours old at test
+    # time, well past the 6-hour TTL (pipeline/sunsky_client.py). This
+    # only ran ONCE at startup, with no mechanism to refresh it again
+    # while the server kept running for hours -- it handled "just
+    # restarted, cache might be cold on disk" but not "server has been
+    # running for a while, cache naturally expired mid-session". Now a
+    # recurring loop, refreshing periodically (safely below the TTL) so
+    # it never has the chance to go stale while the server is up,
+    # instead of only ever warming once right after a restart.
+    async def _prewarm_category_cache_loop():
+        from pipeline.sunsky_client import get_category_name_map, _CATEGORY_CACHE_TTL_SECONDS
+        # Refresh well before the TTL expires, not right at the edge --
+        # gives headroom for a slow walk (rate-limit pacing/retries) to
+        # still finish before the cache would otherwise go stale.
+        interval = max(3600, _CATEGORY_CACHE_TTL_SECONDS - 3600)
+        while True:
+            try:
+                m = await get_category_name_map()
+                print(f"[main] Category name cache pre-warmed: {len(m)} categories.")
+            except Exception as exc:
+                print(f"[main] Category name cache pre-warm failed (non-fatal): {exc}")
+            await asyncio.sleep(interval)
 
-    import asyncio as _asyncio
-    _asyncio.create_task(_prewarm_category_cache())
+    import asyncio
+    asyncio.create_task(_prewarm_category_cache_loop())
 
     yield
 
