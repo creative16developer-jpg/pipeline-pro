@@ -492,6 +492,13 @@ export default function Pipeline() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail || `Upload failed (${res.status})`);
       toast({ title: "CSV imported", description: `${data.imported} products loaded.` });
+      if (data.encoding_warning) {
+        toast({
+          title: "Possible text corruption detected",
+          description: data.encoding_warning,
+          variant: "destructive",
+        });
+      }
       setCsvUploadDone(true);
       setShowNewCsvUpload(false);
       setCsvFile(null);

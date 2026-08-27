@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -203,6 +204,17 @@ async def upload_csv(
 
     rows: list[dict] = []
     errors: list[str] = []
+    # Client feedback confirmed live via screenshot: Cyrillic product
+    # titles imported as "???? ?? Xiaomi Watch 5" -- directly simulated
+    # and confirmed this exact pattern is produced by Excel's plain
+    # "CSV (Comma delimited)" export (Windows-1252), which cannot
+    # represent Cyrillic characters at all and silently replaces them
+    # with "?" BEFORE the file ever reaches this backend -- not a
+    # decoding bug here, since utf-8-sig would have decoded a genuinely
+    # UTF-8 file correctly. Warns the operator immediately (rather than
+    # letting corrupted titles flow silently through the whole pipeline)
+    # so they can re-save using "CSV UTF-8" instead and re-upload.
+    suspicious_title_rows: list[int] = []
 
     for i, row in enumerate(reader):
         if i >= MAX_ROWS:
@@ -210,6 +222,8 @@ async def upload_csv(
         sunsky_sku = (row.get("Sunsky SKU") or "").strip()
         site_sku   = (row.get("Site SKU") or "").strip()
         csv_title  = (row.get("Product Title") or "").strip()
+        if re.search(r"\?{2,}", csv_title):
+            suspicious_title_rows.append(i + 2)
         price_raw       = (row.get("Price") or "").strip()
         sale_price_raw  = (row.get("Sale Price") or "").strip()
         qty_raw    = (row.get("QTY") or "").strip()
@@ -375,12 +389,23 @@ async def upload_csv(
     # takes a while in the background rather than blocking the upload).
     asyncio.create_task(_enrich_csv_products_from_sunsky(job.id, [r["sunsky_sku"] for r in rows]))
 
-    return {
+    response: dict = {
         "imported": len(rows),
         "job_id": job.id,
         "errors": errors[:20],
         "preview": rows[:5],
     }
+    if suspicious_title_rows:
+        response["encoding_warning"] = (
+            f"Row(s) {', '.join(str(r) for r in suspicious_title_rows[:10])} have product "
+            f"titles containing multiple '?' characters in a row -- this is the exact "
+            f"signature of non-English text (e.g. Cyrillic) getting corrupted by Excel's "
+            f"plain 'CSV (Comma delimited)' export, which cannot represent those "
+            f"characters. Re-save the file using 'CSV UTF-8 (Comma delimited)' instead "
+            f"and re-upload, or these product titles will be imported as literal "
+            f"question marks."
+        )
+    return response
 
 
 # ---------------------------------------------------------------------------
