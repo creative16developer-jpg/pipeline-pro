@@ -423,9 +423,27 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
           <div className="text-[12px] text-muted-foreground">High-confidence extractions auto-confirm on next run if the same raw value is seen again</div>
           <div className="flex items-center gap-2">
             {/* Client feedback: full back-navigation for Fetch/Process/
-                Enrich. Process has no review screen of its own, so this
-                re-runs it directly and flows forward through Enrich
-                again the normal way once it's done. */}
+                Enrich. Neither Fetch nor Process have a review screen
+                of their own, so these re-run directly and flow forward
+                through Enrich again the normal way once done. */}
+            <button
+              onClick={async () => {
+                if (!confirm("Go back to Fetch? This refreshes price/stock/description for this pipeline's existing products from Sunsky, then continues forward through Enrich again.")) return;
+                try {
+                  const r = await fetch(`/api/pipelines/${pl.id}/back-to-fetch`, { method: "POST" });
+                  if (!r.ok) throw new Error(await r.text());
+                  toast({ title: "Back to Fetch" });
+                  onDone();
+                } catch (e: any) {
+                  toast({ title: "Failed to go back", description: e.message, variant: "destructive" });
+                }
+              }}
+              title="Go back to Fetch to refresh price/stock/description from Sunsky"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background"
+            >
+              <RotateCcw className="w-3 h-3" />
+              Back to Fetch
+            </button>
             <button
               onClick={async () => {
                 if (!confirm("Go back to Process? This re-runs image processing for this pipeline's products, then continues forward through Enrich again.")) return;
@@ -692,6 +710,24 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
         >
           <RotateCcw className="w-3 h-3" />
           Back to Enrich
+        </button>
+        <button
+          onClick={async () => {
+            if (!confirm("Go back to Fetch? This refreshes price/stock/description for this pipeline's existing products from Sunsky, then continues forward through the pipeline again.")) return;
+            try {
+              const r = await fetch(`/api/pipelines/${pl.id}/back-to-fetch`, { method: "POST" });
+              if (!r.ok) throw new Error(await r.text());
+              toast({ title: "Back to Fetch" });
+              onDone();
+            } catch (e: any) {
+              toast({ title: "Failed to go back", description: e.message, variant: "destructive" });
+            }
+          }}
+          title="Go back to Fetch to refresh price/stock/description from Sunsky"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background"
+        >
+          <RotateCcw className="w-3 h-3" />
+          Back to Fetch
         </button>
         <button
           onClick={async () => {
@@ -1148,6 +1184,25 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
       const r = await fetch(`/api/pipelines/${pl.id}/back-to-process`, { method: "POST" });
       if (!r.ok) throw new Error(await r.text());
       toast({ title: "Back to Process" });
+      onDone();
+    } catch (e: any) {
+      toast({ title: "Failed to go back", description: e.message, variant: "destructive" });
+    } finally { setGoingBack(false); }
+  };
+
+  // Client feedback: full back-navigation for Fetch/Process/Enrich --
+  // last of the three. Client explicitly confirmed scope: "If I want
+  // different products I will start new pipeline" -- this only
+  // refreshes price/stock/description for products already in this
+  // pipeline, then flows forward through the rest of the pipeline the
+  // normal way once done, same principle as Process above.
+  const handleBackToFetch = async () => {
+    if (!confirm("Go back to Fetch? This refreshes price/stock/description for this pipeline's existing products from Sunsky, then continues forward through the pipeline again.")) return;
+    setGoingBack(true);
+    try {
+      const r = await fetch(`/api/pipelines/${pl.id}/back-to-fetch`, { method: "POST" });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Back to Fetch" });
       onDone();
     } catch (e: any) {
       toast({ title: "Failed to go back", description: e.message, variant: "destructive" });
@@ -1669,6 +1724,15 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
             >
               {goingBack ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
               Back to Process
+            </button>
+            <button
+              onClick={handleBackToFetch}
+              disabled={goingBack}
+              title="Go back to Fetch to refresh price/stock/description from Sunsky"
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {goingBack ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+              Back to Fetch
             </button>
           </div>
           <button onClick={handleUploadAll} disabled={saving}

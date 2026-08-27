@@ -742,6 +742,73 @@ async def _enrich_resume_pipeline(pipeline_job_id: int):
 # Continue execution from a specific step (cancelled/failed pipeline)
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def _refresh_fetch_and_continue(pipeline_job_id: int):
+    """Go back to (refresh) Fetch: re-pull price/stock/description for
+    every product already in this pipeline from Sunsky, then continue
+    forward through the rest of the pipeline exactly as Process/Enrich/
+    Generate/Cat.Review would run on a first pass. Client feedback:
+    full back-navigation for Fetch/Process/Enrich -- last of three, per
+    the agreed rollout order. Client explicitly confirmed Fetch's scope
+    when asked: "If I want different products I will start new
+    pipeline" -- this refreshes the SAME products' data, it does not
+    search Sunsky again or let the operator change category/page/limit
+    (that would effectively be starting a new pipeline, a different,
+    bigger feature this explicitly does not attempt).
+
+    Does NOT touch product.name -- the client's own wording was
+    specifically "price, stock, description", and overwriting a name
+    the operator or downstream generation may have already worked with
+    would be a much more disruptive change than what was asked for.
+    """
+    from database import make_session_factory
+    from models.models import PipelineJob, Product
+    from pipeline import sunsky_client
+    from sqlalchemy import select
+
+    CelerySession, celery_engine = make_session_factory()
+    try:
+        async with CelerySession() as db:
+            pl = await db.get(PipelineJob, pipeline_job_id)
+            if not pl or pl.status != "running":
+                return
+
+            products = (
+                await db.execute(select(Product).where(Product.fetch_job_id == pl.fetch_job_id))
+            ).scalars().all()
+
+            await _plog(db, pl.id, "fetch", "info",
+                        f"{_make_pl_id(pl.id)} refreshing {len(products)} product(s) from Sunsky…")
+
+            refreshed = failed = 0
+            for product in products:
+                try:
+                    fresh = await sunsky_client.get_product_detail(product.sku)
+                    if not fresh:
+                        failed += 1
+                        await _plog(db, pl.id, "fetch", "warn",
+                                    f"  {product.sku}: Sunsky returned nothing — kept existing data")
+                        continue
+                    product.price = fresh.get("price", product.price)
+                    product.stock_status = fresh.get("stock_status", product.stock_status)
+                    if fresh.get("stock_quantity") is not None:
+                        product.stock_quantity = fresh["stock_quantity"]
+                    if fresh.get("description"):
+                        product.description = fresh["description"]
+                    product.raw_data = fresh
+                    refreshed += 1
+                except Exception as exc:
+                    failed += 1
+                    await _plog(db, pl.id, "fetch", "warn", f"  {product.sku}: refresh failed — {exc}")
+
+            await db.commit()
+            await _plog(db, pl.id, "fetch", "info",
+                        f"Refresh complete — {refreshed} updated, {failed} failed. Continuing to Process…")
+    finally:
+        await celery_engine.dispose()
+
+    await _continue_pipeline(pipeline_job_id, "process")
+
+
 async def _continue_pipeline(pipeline_job_id: int, from_step: str):
     """Re-execute a cancelled/failed pipeline in-place from a specific step."""
     from database import make_session_factory

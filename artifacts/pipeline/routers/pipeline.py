@@ -570,31 +570,25 @@ async def back_to_process(pl_id: int, db: AsyncSession = Depends(get_db)):
     return _pl_dict(pl)
 
 
-@router.post("/{pl_id}/back-to-process")
-async def back_to_process(pl_id: int, db: AsyncSession = Depends(get_db)):
-    """Go back to (re-run) Process from a later stage, e.g. after
-    changing Image Settings and wanting this pipeline's products to
-    use the new compression/size settings, without restarting the
-    whole pipeline. Client feedback: full back-navigation for Fetch/
-    Process/Enrich, confirmed as significant new backend work (not
-    just UI wiring) via a build plan the client reviewed and approved
-    -- second of three, per the agreed rollout order (Enrich, Process,
-    Fetch).
+@router.post("/{pl_id}/back-to-fetch")
+async def back_to_fetch(pl_id: int, db: AsyncSession = Depends(get_db)):
+    """Go back to (refresh) Fetch from a later stage -- re-pulls price/
+    stock/description for every product already in this pipeline from
+    Sunsky, then continues forward through Process/Enrich/Generate/
+    Cat.Review exactly as a first run would. Client feedback: full
+    back-navigation for Fetch/Process/Enrich -- last of three, per the
+    agreed rollout order (Enrich, Process, Fetch).
 
-    Unlike Enrich/Cat.Review, Process has no review/pause screen of
-    its own -- it's a fully automatic step. Reuses _continue_pipeline
-    (already built and tested for "Cancel + Continue" resuming a
-    cancelled/failed pipeline from a specific step) rather than
-    duplicating that logic: re-runs Process, then flows forward through
-    Enrich/Generate/Cat.Review exactly as it would on a first run,
-    pausing at each stage's own existing review point the normal way.
+    Client explicitly confirmed Fetch's scope when asked: "If I want
+    different products I will start new pipeline" -- this does NOT
+    search Sunsky again or let the operator change category/page/
+    limit; it only refreshes the SAME products already in this
+    pipeline. A true "fetch more/different products" capability would
+    effectively be starting a new pipeline, a different, bigger
+    feature not attempted here.
 
-    Same pure-navigation principle as the other back-* endpoints where
-    applicable: nothing is deleted upfront. Client confirmed (Option A)
-    that any already-generated content/manual edits further down the
-    pipeline are not automatically cleared -- they simply get
-    overwritten naturally as the pipeline re-runs forward through each
-    step it reaches again, same as a normal first run would.
+    Allowed from the same three later stages as back-to-process, since
+    Fetch comes before all of them.
     """
     pl = await db.get(PipelineJob, pl_id)
     if not pl:
@@ -602,25 +596,25 @@ async def back_to_process(pl_id: int, db: AsyncSession = Depends(get_db)):
     if pl.status not in ("enrich_review", "review", "content_review"):
         raise HTTPException(
             400,
-            f"Can only go back to Process from Enrich Review, Category Review, "
+            f"Can only go back to Fetch from Enrich Review, Category Review, "
             f"or Content Review (current status: {pl.status})",
         )
 
     pl.status = "running"
-    pl.current_step = "process"
+    pl.current_step = "fetch"
     pl.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
     from models.models import PipelineLog
     db.add(PipelineLog(
-        pipeline_job_id=pl_id, level="info", step="process",
-        message="Operator went back to Process",
+        pipeline_job_id=pl_id, level="info", step="fetch",
+        message="Operator went back to Fetch (refreshing existing products)",
         created_at=datetime.now(timezone.utc),
     ))
     await db.commit()
 
-    from tasks.pipeline_tasks import _continue_pipeline
-    asyncio.create_task(_continue_pipeline(pl_id, "process"))
+    from tasks.pipeline_tasks import _refresh_fetch_and_continue
+    asyncio.create_task(_refresh_fetch_and_continue(pl_id))
 
     return _pl_dict(pl)
 
