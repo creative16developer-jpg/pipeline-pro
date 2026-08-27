@@ -446,9 +446,23 @@ def _get_brand_and_model_phrase(brand: str, model: str, name: str) -> str:
         return model
     if model:
         return f"{brand} {model}"
-    m = re.search(r"\b" + re.escape(brand) + r"\b", name, flags=re.IGNORECASE)
+    # Client feedback confirmed live: Sunsky's Brand spec value often
+    # has no space before trailing digits ("Insta360"), but the actual
+    # product name/title frequently does ("Insta 360 X6") -- an exact
+    # string match silently failed here, causing this to fall back to
+    # just the bare brand with zero model words captured at all.
+    # Builds a regex tolerant of optional whitespace between the
+    # brand's letters and any trailing digits, instead of a literal
+    # re.escape(brand) match.
+    brand_letters_match = re.match(r"^([A-Za-z]+)(\d+)$", brand)
+    if brand_letters_match:
+        brand_pattern = re.escape(brand_letters_match.group(1)) + r"\s*" + re.escape(brand_letters_match.group(2))
+    else:
+        brand_pattern = re.escape(brand)
+    m = re.search(r"\b" + brand_pattern, name, flags=re.IGNORECASE)
     if not m:
         return brand
+    matched_brand_text = m.group(0)
     rest_words = re.findall(r"[A-Za-z0-9]+", name[m.end():])
     model_words: list[str] = []
     for w in rest_words[:3]:
@@ -456,7 +470,7 @@ def _get_brand_and_model_phrase(brand: str, model: str, name: str) -> str:
         if w_lower in _EN_BG_WORDS or w_lower in _TAG_STOPWORDS or w_lower in _TAG_COLOR_WORDS:
             break
         model_words.append(w)
-    return (brand + " " + " ".join(model_words)).strip() if model_words else brand
+    return (matched_brand_text + " " + " ".join(model_words)).strip() if model_words else matched_brand_text
 
 
 def _get_variant(specs: dict, name: str) -> str:
@@ -882,28 +896,40 @@ def _derive_focus_keyword(product: dict, options: dict, resolved: dict) -> str:
     raw = _get_raw(product)
     specs = _parse_params_table(raw.get("paramsTable", ""))
     brand = _get_brand(specs)
+    model = _get_model(specs)
     max_chars = int(options.get("max_chars", 60))
+
+    # Client feedback confirmed live: "Insta 360 X6" (a genuine 3-word
+    # brand+model unit) lost its last two words ("360", "X6") entirely
+    # from the Focus Keyword -- traced to the OLD flat "first 5 words"
+    # selection treating every word as an independent competitor for
+    # the same 5-word budget, so by the time "Insta" (word 5) was
+    # reached, there was no room left for the REST of that same model
+    # name. Reuses _get_brand_and_model_phrase (patch 76's Title
+    # reordering logic) to capture the whole brand+model as ONE
+    # cohesive unit first ("Insta 360 X6"), guaranteeing it survives
+    # intact -- then fills any remaining budget with real descriptive
+    # words from elsewhere in the title, rather than the old approach
+    # where a multi-word model name could get arbitrarily cut off
+    # mid-way depending on how many descriptive words preceded it.
+    brand_model_phrase = _get_brand_and_model_phrase(brand, model, title)
 
     words = [w for w in re.split(r"\s+", title.strip()) if w]
     kept = [w for w in words if w.lower() not in _FOCUS_KEYWORD_STOPWORDS]
-    # Client feedback confirmed live: a title that DID translate
-    # correctly for Target Language=Bulgarian ("...водоустойчив...
-    # калъф" appearing later in the string) still produced an ALL-
-    # ENGLISH Focus Keyword, because the plain "first 5 words by
-    # position" selection let measurement/spec tokens (50m, 4K, 5G,
-    # 196ft) and the brand name (already prepended separately, so
-    # redundant here) fill the entire 5-word budget before ever
-    # reaching a real, translatable descriptive word. Skips both so
-    # genuine vocabulary gets a real chance to appear regardless of
-    # where it sits in the title.
-    brand_lower = brand.lower() if brand else None
-    kept = [
-        w for w in kept
-        if not re.match(r"^\d+[a-zA-Z]*$", w)  # 50m, 4K, 5G, 196ft, 2024
-        and (not brand_lower or w.lower() != brand_lower)
+    if brand_model_phrase:
+        remainder = re.sub(r"\b" + re.escape(brand_model_phrase) + r"\b", "", " ".join(kept), flags=re.IGNORECASE)
+    else:
+        remainder = " ".join(kept)
+    remainder_words = [w for w in re.split(r"\s+", remainder.strip()) if w]
+    remainder_words = [
+        w for w in remainder_words
+        if not re.match(r"^\d+[a-zA-Z]+$", w)  # 50m, 4K, 5G, 196ft -- NOT bare numbers like 360, 2024
     ]
-    phrase_words = (([brand] if brand else []) + kept)[:5]
-    phrase = " ".join(dict.fromkeys(phrase_words))  # de-dupe, preserve order
+
+    brand_model_word_count = len(brand_model_phrase.split()) if brand_model_phrase else 0
+    remaining_budget = max(2, 5 - brand_model_word_count)  # always leave room for at least 2 descriptive words
+    kept = ([brand_model_phrase] if brand_model_phrase else []) + remainder_words[:remaining_budget]
+    phrase = " ".join(dict.fromkeys(kept))  # de-dupe, preserve order
 
     if not phrase:
         phrase = _truncate_no_mid_word(title, max_chars)
