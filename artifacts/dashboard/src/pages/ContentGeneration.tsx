@@ -147,16 +147,28 @@ const AI_PROVIDERS: Record<string, { label: string; models: string[]; defaultMod
   },
   gemini: {
     label: "Google Gemini",
+    // Client feedback: "Please update the models here, some are out
+    // of date." Verified directly against Google's own official docs
+    // (ai.google.dev/gemini-api/docs/models, last updated 2026-08-26):
+    // gemini-2.0-flash and gemini-2.0-flash-lite are BOTH explicitly
+    // marked "(Shut down)" there -- and gemini-2.0-flash-lite was the
+    // client's currently-active model, meaning every Gemini call was
+    // silently failing (404) the whole time. The entire gemini-1.5
+    // series is also confirmed completely shut down (all requests
+    // return 404, per Google's Firebase AI Logic docs). Replaced with
+    // the current stable + preview lineup.
     models: [
-      "gemini-2.5-flash",
+      "gemini-3.7-flash",
+      "gemini-3.6-flash",
+      "gemini-3.5-flash",
+      "gemini-3.5-flash-lite",
+      "gemini-3.1-pro-preview",
+      "gemini-3.1-flash-lite",
       "gemini-2.5-pro",
-      "gemini-2.0-flash",
-      "gemini-2.0-flash-lite",
-      "gemini-1.5-pro",
-      "gemini-1.5-flash",
-      "gemini-1.5-flash-8b",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
     ],
-    defaultModel: "gemini-2.5-flash",
+    defaultModel: "gemini-3.7-flash",
   },
 };
 

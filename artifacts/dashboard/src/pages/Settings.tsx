@@ -29,20 +29,26 @@ const PROVIDERS: Record<string, {
 }> = {
   gemini: {
     label: "Google Gemini",
-    description: "gemini-2.0-flash, gemini-1.5-pro and other Google models",
+    description: "gemini-3.7-flash, gemini-3.1-pro-preview and other Google models",
     envVar: "GEMINI_API_KEY",
     docsUrl: "https://aistudio.google.com/apikey",
     docsLabel: "Google AI Studio",
     color: "text-sky-400",
     bgColor: "bg-sky-500/10 border-sky-500/20",
+    // Client feedback: "Please update the models here, some are out
+    // of date." Verified against Google's own official docs -- kept
+    // in sync with the same list in ContentGeneration.tsx and
+    // ai_generator.py's get_provider_status().
     models: [
-      "gemini-2.5-flash",
+      "gemini-3.7-flash",
+      "gemini-3.6-flash",
+      "gemini-3.5-flash",
+      "gemini-3.5-flash-lite",
+      "gemini-3.1-pro-preview",
+      "gemini-3.1-flash-lite",
       "gemini-2.5-pro",
-      "gemini-2.0-flash",
-      "gemini-2.0-flash-lite",
-      "gemini-1.5-pro",
-      "gemini-1.5-flash",
-      "gemini-1.5-flash-8b",
+      "gemini-2.5-flash",
+      "gemini-2.5-flash-lite",
     ],
   },
   openai: {
