@@ -630,27 +630,30 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   // value -- so the UI shows what the operator typed even before saving.
   const [drafts, setDrafts] = useState<Record<number, Record<string, any>>>({});
   const [savingProduct, setSavingProduct] = useState<number | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
 
   const getField = (p: any, field: string) => drafts[p.id]?.[field] ?? p[field] ?? "";
   const setDraftField = (pid: number, field: string, value: any) =>
     setDrafts(prev => ({ ...prev, [pid]: { ...prev[pid], [field]: value } }));
   const hasDraft = (pid: number) => !!drafts[pid] && Object.keys(drafts[pid]).length > 0;
 
+  const _buildSaveBody = (changes: Record<string, any>) => {
+    const body: any = { ...changes };
+    if ("stock_quantity" in body) {
+      body.stock_quantity = body.stock_quantity === "" ? null : Number(body.stock_quantity);
+    }
+    return body;
+  };
+
   const handleSaveProduct = async (pid: number) => {
     const changes = drafts[pid];
     if (!changes) return;
     setSavingProduct(pid);
     try {
-      // stock_quantity must be a number (or null), not the raw string
-      // the input naturally produces.
-      const body: any = { ...changes };
-      if ("stock_quantity" in body) {
-        body.stock_quantity = body.stock_quantity === "" ? null : Number(body.stock_quantity);
-      }
       const r = await fetch(`/api/products/${pid}/fields`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(_buildSaveBody(changes)),
       });
       if (!r.ok) throw new Error(await r.text());
       // Merge saved values into local product list so the UI reflects
@@ -665,6 +668,70 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
       toast({ title: "Save failed", description: e.message, variant: "destructive" });
     } finally {
       setSavingProduct(null);
+    }
+  };
+
+  // Client feedback: "If we have hundreds of products and need some
+  // manual changes need to click save changes hundred of times, no
+  // sense in this. Need just one main save changes button which can
+  // save all changes." Saves every product with a pending draft in
+  // parallel (Promise.allSettled, not Promise.all, so one product's
+  // failure doesn't block the rest from saving), then reports a clear
+  // summary of how many succeeded vs. failed rather than a single
+  // pass/fail for the whole batch.
+  const handleSaveAllProducts = async () => {
+    const pendingIds = Object.keys(drafts)
+      .map(Number)
+      .filter(pid => hasDraft(pid));
+    if (pendingIds.length === 0) return;
+    setSavingAll(true);
+    try {
+      const results = await Promise.allSettled(
+        pendingIds.map(async pid => {
+          const changes = drafts[pid];
+          const r = await fetch(`/api/products/${pid}/fields`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(_buildSaveBody(changes)),
+          });
+          if (!r.ok) throw new Error(await r.text());
+          return { pid, changes };
+        })
+      );
+
+      const succeeded: { pid: number; changes: Record<string, any> }[] = [];
+      let failedCount = 0;
+      for (const res of results) {
+        if (res.status === "fulfilled") succeeded.push(res.value);
+        else failedCount++;
+      }
+
+      if (succeeded.length > 0) {
+        const savedById = new Map(succeeded.map(s => [s.pid, s.changes]));
+        setData((prev: any) => ({
+          ...prev,
+          products: (prev?.products ?? []).map((p: any) =>
+            savedById.has(p.id) ? { ...p, ...savedById.get(p.id) } : p
+          ),
+        }));
+        setDrafts(prev => {
+          const next = { ...prev };
+          for (const { pid } of succeeded) delete next[pid];
+          return next;
+        });
+      }
+
+      if (failedCount === 0) {
+        toast({ title: `Saved ${succeeded.length} product${succeeded.length === 1 ? "" : "s"}` });
+      } else {
+        toast({
+          title: `Saved ${succeeded.length}, ${failedCount} failed`,
+          description: "Failed products still show as unsaved — try Save All again or save them individually.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setSavingAll(false);
     }
   };
   const [goingBack, setGoingBack] = useState(false);
@@ -905,7 +972,7 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
       const proceed = confirm(
         `${draftCount} product${draftCount !== 1 ? "s have" : " has"} unsaved edits. ` +
         `These will NOT be included in the upload unless you save them first.\n\n` +
-        `Click Cancel to go back and save, or OK to upload anyway using the current saved values.`
+        `Click Cancel to go back and use "Save all changes", or OK to upload anyway using the current saved values.`
       );
       if (!proceed) return;
     }
@@ -1399,6 +1466,20 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
         {/* Footer actions */}
         <div className="flex items-center justify-between pt-3 border-t border-border flex-wrap gap-3">
           <div className="flex gap-2 flex-wrap">
+            {(() => {
+              const pendingCount = Object.keys(drafts).filter(pid => hasDraft(Number(pid))).length;
+              return pendingCount > 0 && (
+                <button
+                  onClick={handleSaveAllProducts}
+                  disabled={savingAll}
+                  title="Save every product's pending edits in one action, instead of saving each one individually"
+                  className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-violet-500 hover:bg-violet-600 text-white disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {savingAll ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                  Save all changes ({pendingCount})
+                </button>
+              );
+            })()}
             <button
               onClick={handleExcludeSelected}
               className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background flex items-center gap-1.5"
