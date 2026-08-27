@@ -496,6 +496,52 @@ class ContentConfirmRequest(_BaseModel):
     excluded_product_ids: list[int] = []
 
 
+@router.post("/{pl_id}/back-to-enrich-review")
+async def back_to_enrich_review(pl_id: int, db: AsyncSession = Depends(get_db)):
+    """Go back to Enrich Review from a later stage (Category Review or
+    Content Review), e.g. to re-check/edit extracted attributes after
+    fixing an Attribute Mapping rule, without restarting the whole
+    pipeline. Client feedback: "Can't go back on previous steps if want
+    to change something" -- same request as back-to-category-review,
+    now extended to Enrich, the earliest of the three stages the
+    client specifically asked for (Fetch/Process/Enrich).
+
+    Same pure-navigation pattern as back-to-category-review: deletes
+    nothing. Confirmed with the client this is the wanted approach
+    (their answer: "Second option" -- no automatic downstream clearing
+    of generated content/manual edits when going back). Extracted
+    attributes (ProductEnrichAttr) are already saved independently in
+    the DB from the first run; going back just changes which screen
+    renders. Confirming Enrich Review again afterward (the existing
+    enrich-confirm endpoint, unchanged) naturally resumes forward
+    through Generate -> Cat.Review -> Content Review again, same as the
+    first time through.
+    """
+    pl = await db.get(PipelineJob, pl_id)
+    if not pl:
+        raise HTTPException(404, f"Pipeline #{pl_id} not found")
+    if pl.status not in ("review", "content_review"):
+        raise HTTPException(
+            400,
+            f"Can only go back to Enrich Review from Category Review or Content Review (current status: {pl.status})",
+        )
+
+    pl.status = "enrich_review"
+    pl.current_step = "enrich"
+    pl.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    from models.models import PipelineLog
+    db.add(PipelineLog(
+        pipeline_job_id=pl_id, level="info", step="enrich",
+        message="Operator went back to Enrich Review",
+        created_at=datetime.now(timezone.utc),
+    ))
+    await db.commit()
+
+    return _pl_dict(pl)
+
+
 @router.post("/{pl_id}/back-to-category-review")
 async def back_to_category_review(pl_id: int, db: AsyncSession = Depends(get_db)):
     """Go back from Content Review to Category Review, e.g. to fix a

@@ -644,7 +644,31 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
       )}
 
       {/* Confirm button */}
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {/* Client feedback: "Can't go back on previous steps if want to
+            change something" -- extended to Enrich, following the same
+            pure-navigation pattern already used for Cat.Review/Generate.
+            Self-contained here since CategoryReviewSection is a separate
+            child component with its own local state, not sharing scope
+            with the parent's handleAssignCategory/handleBackToEnrich. */}
+        <button
+          onClick={async () => {
+            if (!confirm("Go back to Enrich Review? Your generated content won't be lost — you'll continue forward again after re-confirming attributes.")) return;
+            try {
+              const r = await fetch(`/api/pipelines/${pl.id}/back-to-enrich-review`, { method: "POST" });
+              if (!r.ok) throw new Error(await r.text());
+              toast({ title: "Back to Enrich Review" });
+              onDone();
+            } catch (e: any) {
+              toast({ title: "Failed to go back", description: e.message, variant: "destructive" });
+            }
+          }}
+          title="Go back to Enrich Review to fix an extracted attribute"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background"
+        >
+          <RotateCcw className="w-3 h-3" />
+          Back to Enrich
+        </button>
         <button onClick={handleConfirm} disabled={saving}
           className="inline-flex items-center gap-2 px-7 py-3 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-[13px] font-medium transition-colors disabled:opacity-50">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
@@ -1047,6 +1071,24 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
       const r = await fetch(`/api/pipelines/${pl.id}/back-to-category-review`, { method: "POST" });
       if (!r.ok) throw new Error(await r.text());
       toast({ title: "Back to Category Review" });
+      onDone();
+    } catch (e: any) {
+      toast({ title: "Failed to go back", description: e.message, variant: "destructive" });
+    } finally { setGoingBack(false); }
+  };
+
+  // Client feedback: "Can't go back on previous steps if want to change
+  // something" -- extended to Enrich, following the same pure-navigation
+  // pattern as handleAssignCategory above (nothing gets deleted; already-
+  // extracted attributes are saved independently and just get re-shown
+  // for editing/re-confirming).
+  const handleBackToEnrich = async () => {
+    if (!confirm("Go back to Enrich Review? Your generated content won't be lost — you'll continue forward again after re-confirming attributes.")) return;
+    setGoingBack(true);
+    try {
+      const r = await fetch(`/api/pipelines/${pl.id}/back-to-enrich-review`, { method: "POST" });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: "Back to Enrich Review" });
       onDone();
     } catch (e: any) {
       toast({ title: "Failed to go back", description: e.message, variant: "destructive" });
@@ -1550,6 +1592,15 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
             >
               {goingBack ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
               Assign category
+            </button>
+            <button
+              onClick={handleBackToEnrich}
+              disabled={goingBack}
+              title="Go back to Enrich Review to fix an extracted attribute"
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {goingBack ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+              Back to Enrich
             </button>
           </div>
           <button onClick={handleUploadAll} disabled={saving}
