@@ -56,6 +56,24 @@ interface PipelineLog {
 // Stage Trail  (matches prototype: Fetch→Process→Enrich→Generate→Cat.Review→Review→Upload→Sync)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Client feedback: "Can't go back and review previous steps." Maps
+// each frontend stage key to the actual backend log "step" string(s)
+// used for it -- confirmed via code search these don't always match
+// 1:1. "cat_review" never appears as a logged step name at all; its
+// confirmation message is logged under "review", the same string the
+// LATER Content Review stage also uses -- an existing ambiguity in the
+// backend's own step naming, not something this frontend change can
+// cleanly resolve without backend changes. Accepted as an approximation
+// (Cat.Review's click will show a superset that may include later-stage
+// entries too) rather than leaving the button completely non-functional.
+const STAGE_LOG_STEP_MAP: Record<string, string> = {
+  cat_review: "review",
+};
+
+function _stageLogStep(stageKey: string): string {
+  return STAGE_LOG_STEP_MAP[stageKey] ?? stageKey;
+}
+
 const STAGES = [
   { key: "fetch",      label: "Fetch" },
   { key: "process",    label: "Process" },
@@ -80,7 +98,7 @@ function getActiveStageIndex(pl: Pipeline): number {
   return stepMap[pl.current_step ?? "process"] ?? 1;
 }
 
-function StageTrail({ pl }: { pl: Pipeline }) {
+function StageTrail({ pl, onStageClick, selectedStage }: { pl: Pipeline; onStageClick?: (key: string) => void; selectedStage?: string | null }) {
   const activeIdx = getActiveStageIndex(pl);
   const isPaused  = ["enrich_review","review","content_review"].includes(pl.status);
   const isFailed  = ["failed","cancelled"].includes(pl.status);
@@ -91,22 +109,35 @@ function StageTrail({ pl }: { pl: Pipeline }) {
         const isDone   = activeIdx >= 0 && i < activeIdx;
         const isActive = activeIdx >= 0 && i === activeIdx && !isFailed;
         const isFail   = isFailed && i === activeIdx;
+        // Client feedback: "Can't go back and review previous steps."
+        // Only completed/active stages are clickable -- nothing to show
+        // yet for a future/pending stage that hasn't run at all.
+        const isClickable = (isDone || isActive || isFail) && !!onStageClick;
 
         return (
           <div key={stage.key} className="flex items-center">
-            <span className={cn(
-              "inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border whitespace-nowrap",
-              isDone   && "bg-emerald-500/15 border-emerald-500/30 text-emerald-400",
-              isActive && isPaused  && "bg-amber-500/15 border-amber-500/40 text-amber-300 font-semibold",
-              isActive && !isPaused && "bg-violet-500/15 border-violet-500/40 text-violet-300 font-semibold",
-              isFail   && "bg-red-500/15 border-red-500/30 text-red-400",
-              !isDone && !isActive && !isFail && "border-border/40 text-muted-foreground/60 bg-background",
-            )}>
+            <button
+              type="button"
+              disabled={!isClickable}
+              onClick={() => isClickable && onStageClick!(stage.key)}
+              title={isClickable ? `View ${stage.label}'s log entries` : undefined}
+              className={cn(
+                "inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border whitespace-nowrap",
+                isClickable && "cursor-pointer hover:brightness-125 transition-[filter]",
+                !isClickable && "cursor-default",
+                selectedStage === stage.key && "ring-2 ring-violet-400 ring-offset-1 ring-offset-background",
+                isDone   && "bg-emerald-500/15 border-emerald-500/30 text-emerald-400",
+                isActive && isPaused  && "bg-amber-500/15 border-amber-500/40 text-amber-300 font-semibold",
+                isActive && !isPaused && "bg-violet-500/15 border-violet-500/40 text-violet-300 font-semibold",
+                isFail   && "bg-red-500/15 border-red-500/30 text-red-400",
+                !isDone && !isActive && !isFail && "border-border/40 text-muted-foreground/60 bg-background",
+              )}
+            >
               {isDone   && "✓ "}
               {isActive && isPaused  && "⏸ "}
               {isActive && !isPaused && "▶ "}
               {stage.label}
-            </span>
+            </button>
             {i < STAGES.length - 1 && (
               <span className="text-muted-foreground/30 mx-1 text-xs">→</span>
             )}
@@ -129,7 +160,7 @@ const LOG_STYLE: Record<string, string> = {
   debug: "text-muted-foreground",
 };
 
-function LogPanel({ plId, isLive }: { plId: number; isLive: boolean }) {
+function LogPanel({ plId, isLive, stepFilter, stepLabel, onClearFilter }: { plId: number; isLive: boolean; stepFilter?: string | null; stepLabel?: string | null; onClearFilter?: () => void }) {
   const [logs, setLogs]   = useState<PipelineLog[]>([]);
   const [loading, setLoading] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -151,12 +182,26 @@ function LogPanel({ plId, isLive }: { plId: number; isLive: boolean }) {
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [logs.length]);
 
+  // Client feedback: "Can't go back and review previous steps."
+  // Clicking a completed stage in the trail above sets this filter,
+  // reusing the step field already stored on every log row.
+  const displayedLogs = stepFilter ? logs.filter(l => l.step === stepFilter) : logs;
+
   if (loading) return <div className="p-4 text-sm text-muted-foreground flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading logs…</div>;
   if (logs.length === 0) return <div className="p-4 text-sm text-muted-foreground italic">No log entries yet.</div>;
 
   return (
     <div className="max-h-[150px] overflow-y-auto bg-background font-mono text-[12px] p-3 space-y-0.5">
-      {logs.map(log => (
+      {stepFilter && (
+        <div className="flex items-center gap-2 pb-2 mb-1 border-b border-border/40 font-sans">
+          <span className="text-violet-400">Showing only: {stepLabel ?? stepFilter}</span>
+          <button onClick={onClearFilter} className="text-muted-foreground hover:text-foreground underline">Show all</button>
+        </div>
+      )}
+      {displayedLogs.length === 0 && (
+        <div className="text-muted-foreground italic font-sans">No log entries for this step.</div>
+      )}
+      {displayedLogs.map(log => (
         <div key={log.id} className="flex gap-2">
           <span className="text-muted-foreground/60 shrink-0">{log.created_at ? format(new Date(log.created_at), "HH:mm:ss") : ""}</span>
           {log.level === "ok"   && <span className="text-emerald-400 shrink-0">✓</span>}
@@ -1715,6 +1760,10 @@ export default function PipelineDetail() {
   const pollRef               = useRef<ReturnType<typeof setInterval> | null>(null);
   const [logOpen, setLogOpen] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  // Client feedback: "Can't go back and review previous steps." Tracks
+  // which completed stage's log entries are currently being filtered
+  // to, when the operator clicks a stage in the trail above.
+  const [selectedStage, setSelectedStage] = useState<string | null>(null);
 
   const storeMap = Object.fromEntries((stores ?? []).map(s => [s.id, s.name]));
 
@@ -1819,7 +1868,14 @@ export default function PipelineDetail() {
       {/* Stage Trail */}
       <div className="bg-card border border-border rounded-[10px] p-4">
         <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-[0.6px] mb-3">Pipeline Stages</div>
-        <StageTrail pl={pl} />
+        <StageTrail
+          pl={pl}
+          selectedStage={selectedStage}
+          onStageClick={(key) => {
+            setSelectedStage(key);
+            setLogOpen(true);
+          }}
+        />
       </div>
 
       {/* State-specific content */}
@@ -1854,7 +1910,15 @@ export default function PipelineDetail() {
           {isLive && <span className="flex items-center gap-1 text-[12px] text-violet-400 ml-2"><span className="w-1.5 h-1.5 bg-violet-400 rounded-full animate-pulse inline-block" /> Live</span>}
           <span className="ml-auto text-muted-foreground/60 text-[12px]">{logOpen ? "▲" : "▼"}</span>
         </button>
-        {logOpen && <LogPanel plId={plId} isLive={isLive} />}
+        {logOpen && (
+          <LogPanel
+            plId={plId}
+            isLive={isLive}
+            stepFilter={selectedStage ? _stageLogStep(selectedStage) : null}
+            stepLabel={selectedStage ? (STAGES.find(s => s.key === selectedStage)?.label ?? selectedStage) : null}
+            onClearFilter={() => setSelectedStage(null)}
+          />
+        )}
       </div>
     </div>
   );
