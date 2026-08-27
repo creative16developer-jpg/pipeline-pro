@@ -392,6 +392,32 @@ export default function Pipeline() {
   const [automaticReviewPause, setAutomaticReviewPause] = useState(true);
   const [showAdvanced,    setShowAdvanced]    = useState(false);
 
+  // Client feedback confirmed live: a CSV-imported pipeline completed
+  // "successfully" with every content field (Description, Slug, Focus
+  // Keyword, Meta Title, Meta Description) completely empty. Root
+  // cause: includeEnrich/includeGenerate above were hardcoded to
+  // false, completely disconnected from the "Pipeline Defaults"
+  // setting (Settings -> Pipeline Defaults), which the server's own
+  // DEFAULT_PIPELINE_DEFAULTS already correctly defaults to
+  // include_enrich=true/include_generate=true -- but this screen never
+  // fetched that endpoint at all, so it always started both off
+  // regardless of what was actually configured (or even the server's
+  // own sensible defaults). If the operator didn't manually toggle
+  // these on every single time, Enrich and Generate silently got
+  // skipped entirely while the pipeline still reported success.
+  useEffect(() => {
+    fetch("/api/settings/pipeline-defaults")
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        if (typeof d.include_enrich === "boolean") setIncludeEnrich(d.include_enrich);
+        if (typeof d.include_generate === "boolean") setIncludeGenerate(d.include_generate);
+        if (typeof d.force_rerun === "boolean") setForceRerun(d.force_rerun);
+        if (typeof d.auto_review_pause === "boolean") setAutomaticReviewPause(d.auto_review_pause);
+      })
+      .catch(() => {});
+  }, []);
+
   // ── Advanced step config ───────────────────────────────────────────────────
   const [processLimit, setProcessLimit]       = useState("200");
   const [uploadLimit, setUploadLimit]         = useState("200");
