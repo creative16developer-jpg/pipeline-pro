@@ -496,6 +496,135 @@ class ContentConfirmRequest(_BaseModel):
     excluded_product_ids: list[int] = []
 
 
+@router.post("/{pl_id}/back-to-process")
+async def back_to_process(pl_id: int, db: AsyncSession = Depends(get_db)):
+    """Go back to Process from a later, paused-for-review stage (Enrich
+    Review, Category Review, or Content Review), e.g. after changing
+    Image Settings and wanting to re-download/re-compress this
+    pipeline's images with the new settings, without restarting the
+    whole pipeline. Client feedback: full back-navigation for Fetch/
+    Process/Enrich, confirmed as significant new work via a build plan
+    sent for review first (client confirmed: Fetch only refreshes
+    existing products, no automatic downstream clearing when going
+    back). Process second in the agreed rollout order, after Enrich.
+
+    Unlike back-to-enrich-review/back-to-category-review (pure status-
+    flip navigation -- Enrich/Cat.Review both have their own pause
+    screen to just re-show), Process has no review screen of its own;
+    it's a fully automatic step. Going back here actually RE-RUNS
+    Process's real work (a genuinely new Job row, same as a first run),
+    then proceeds forward through Enrich/Generate/Cat.Review exactly as
+    a first run would -- pausing at each stage's own existing review
+    point (Enrich Review, Content Review) the normal way, not skipping
+    them. Reuses the exact same _continue_pipeline("process") mechanism
+    and active-pipeline-conflict check already used by the existing
+    /continue endpoint (for failed/cancelled pipelines) -- if another
+    pipeline for this store is already actively running, this one
+    queues instead of starting immediately, same safety behavior.
+    """
+    pl = await db.get(PipelineJob, pl_id)
+    if not pl:
+        raise HTTPException(404, f"Pipeline #{pl_id} not found")
+    if pl.status not in ("review", "enrich_review", "content_review"):
+        raise HTTPException(
+            400,
+            f"Can only go back to Process from Enrich Review, Category Review, "
+            f"or Content Review (current status: {pl.status})",
+        )
+
+    pl.current_step = "process"
+    pl.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    from models.models import PipelineLog
+    db.add(PipelineLog(
+        pipeline_job_id=pl_id, level="info", step="process",
+        message="Operator went back to Process — re-running image processing",
+        created_at=datetime.now(timezone.utc),
+    ))
+    await db.commit()
+
+    active = (
+        await db.execute(
+            select(PipelineJob)
+            .where(
+                PipelineJob.store_id == pl.store_id,
+                PipelineJob.id != pl.id,
+                cast(PipelineJob.status, String).in_(list(ACTIVE_STATUSES)),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    if active:
+        pl.status = "queued"
+    else:
+        pl.status = "running"
+    pl.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    if pl.status == "running":
+        from tasks.pipeline_tasks import _continue_pipeline
+        asyncio.create_task(_continue_pipeline(pl.id, "process"))
+
+    return _pl_dict(pl)
+
+
+@router.post("/{pl_id}/back-to-process")
+async def back_to_process(pl_id: int, db: AsyncSession = Depends(get_db)):
+    """Go back to (re-run) Process from a later stage, e.g. after
+    changing Image Settings and wanting this pipeline's products to
+    use the new compression/size settings, without restarting the
+    whole pipeline. Client feedback: full back-navigation for Fetch/
+    Process/Enrich, confirmed as significant new backend work (not
+    just UI wiring) via a build plan the client reviewed and approved
+    -- second of three, per the agreed rollout order (Enrich, Process,
+    Fetch).
+
+    Unlike Enrich/Cat.Review, Process has no review/pause screen of
+    its own -- it's a fully automatic step. Reuses _continue_pipeline
+    (already built and tested for "Cancel + Continue" resuming a
+    cancelled/failed pipeline from a specific step) rather than
+    duplicating that logic: re-runs Process, then flows forward through
+    Enrich/Generate/Cat.Review exactly as it would on a first run,
+    pausing at each stage's own existing review point the normal way.
+
+    Same pure-navigation principle as the other back-* endpoints where
+    applicable: nothing is deleted upfront. Client confirmed (Option A)
+    that any already-generated content/manual edits further down the
+    pipeline are not automatically cleared -- they simply get
+    overwritten naturally as the pipeline re-runs forward through each
+    step it reaches again, same as a normal first run would.
+    """
+    pl = await db.get(PipelineJob, pl_id)
+    if not pl:
+        raise HTTPException(404, f"Pipeline #{pl_id} not found")
+    if pl.status not in ("enrich_review", "review", "content_review"):
+        raise HTTPException(
+            400,
+            f"Can only go back to Process from Enrich Review, Category Review, "
+            f"or Content Review (current status: {pl.status})",
+        )
+
+    pl.status = "running"
+    pl.current_step = "process"
+    pl.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    from models.models import PipelineLog
+    db.add(PipelineLog(
+        pipeline_job_id=pl_id, level="info", step="process",
+        message="Operator went back to Process",
+        created_at=datetime.now(timezone.utc),
+    ))
+    await db.commit()
+
+    from tasks.pipeline_tasks import _continue_pipeline
+    asyncio.create_task(_continue_pipeline(pl_id, "process"))
+
+    return _pl_dict(pl)
+
+
 @router.post("/{pl_id}/back-to-enrich-review")
 async def back_to_enrich_review(pl_id: int, db: AsyncSession = Depends(get_db)):
     """Go back to Enrich Review from a later stage (Category Review or
