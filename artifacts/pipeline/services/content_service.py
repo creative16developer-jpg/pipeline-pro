@@ -1225,13 +1225,29 @@ async def run_field(
 
 async def generate_product(product: dict, template: dict) -> dict:
     """
-    Generate all enabled fields using DAG-ordered execution.
+    Generate all enabled fields using DEPENDENCY-DEPTH-ordered execution.
 
-    Phases:
-      1. logic  (parallel) — title, tags, any field set to logic
-      2. ai     (parallel, retry+backoff) — description, any field set to ai
-      3. derive (sequential, dep-ordered) — slug, image_alt, meta_title,
-                 image_names, short_description, meta_description
+    Client feedback confirmed live via screenshot: Title set to "ai"
+    mode, but Slug/Focus Keyword/Meta Description set to "logic" mode
+    all produced garbage derived from the raw, untranslated product
+    name instead of the actual resolved (translated) title. Root cause:
+    the OLD implementation ran ALL "logic"-mode fields first, THEN all
+    "ai"-mode fields, THEN "derive"-mode fields -- a rigid MODE-based
+    phase order, not a true DEPENDENCY-based one. Since Title was
+    "ai" (phase 2) but its dependents (Slug/Focus Keyword/Meta
+    Description) were "logic" (phase 1), those dependents ran and
+    fell back to raw product data BEFORE Title had even been generated
+    yet, regardless of what FIELD_DEPS actually said they depended on.
+
+    Fields now run in "waves" based on their actual position in the
+    dependency graph (FIELD_DEPS) -- a field only runs once every field
+    it depends on has already resolved, REGARDLESS of whether it's set
+    to logic/ai/derive itself. Within each wave, fields are still
+    grouped and executed by mode (logic fields in parallel via
+    asyncio.gather, then ai fields in parallel, then derive fields
+    sequentially) -- identical concurrency/retry/error-handling
+    behavior to before, just correctly ordered by real dependency
+    instead of by an unrelated mode grouping.
 
     Returns: {field: FieldResult} for all enabled fields.
     """
@@ -1247,43 +1263,62 @@ async def generate_product(product: dict, template: dict) -> dict:
     resolved: dict[str, str] = {}
     results: dict[str, dict] = {}
 
-    logic_phase = [f for f in enabled if _mode(f) == "logic"]
-    if logic_phase:
-        phase_results = await asyncio.gather(
-            *[run_field(f, product, template, resolved) for f in logic_phase],
-            return_exceptions=True,
-        )
-        for f, r in zip(logic_phase, phase_results):
-            if isinstance(r, Exception):
-                results[f] = {"field": f, "value": "", "source": "logic",
-                               "status": "failed", "error": str(r)}
-                resolved[f] = ""
-            else:
-                results[f] = r
-                resolved[f] = r.get("value", "")
+    # Depth 0 = no dependencies among enabled fields (title, tags).
+    # Depth N = depends only on fields at depth < N. image_names is
+    # depth 2 (depends on slug, which is depth 1, which depends on
+    # title, which is depth 0) -- a genuine multi-level chain, not
+    # just a single title->everything fan-out.
+    def _depth(f: str, _chain: frozenset = frozenset()) -> int:
+        if f in _chain:
+            return 0  # defensive cycle guard; FIELD_DEPS has none today
+        deps = [d for d in FIELD_DEPS.get(f, []) if d in enabled]
+        if not deps:
+            return 0
+        return 1 + max(_depth(d, _chain | {f}) for d in deps)
 
-    ai_phase = [f for f in enabled if _mode(f) == "ai"]
-    if ai_phase:
-        phase_results = await asyncio.gather(
-            *[run_field(f, product, template, resolved) for f in ai_phase],
-            return_exceptions=True,
-        )
-        for f, r in zip(ai_phase, phase_results):
-            if isinstance(r, Exception):
-                results[f] = {"field": f, "value": "", "source": "ai",
-                               "status": "failed", "error": str(r)}
-                resolved[f] = ""
-            else:
-                results[f] = r
-                resolved[f] = r.get("value", "")
+    depths = {f: _depth(f) for f in enabled}
+    max_depth = max(depths.values()) if depths else 0
 
-    derive_phase = [f for f in FIELD_LIST if f in enabled and _mode(f) == "derive"]
-    for f in derive_phase:
-        for dep in FIELD_DEPS.get(f, []):
-            if dep not in resolved:
-                resolved[dep] = results.get(dep, {}).get("value", "")
-        r = await run_field(f, product, template, resolved)
-        results[f] = r
-        resolved[f] = r.get("value", "")
+    for wave in range(max_depth + 1):
+        wave_fields = [f for f in enabled if depths[f] == wave]
+        if not wave_fields:
+            continue
+
+        logic_group = [f for f in wave_fields if _mode(f) == "logic"]
+        ai_group = [f for f in wave_fields if _mode(f) == "ai"]
+        derive_group = [f for f in wave_fields if _mode(f) not in ("logic", "ai")]
+
+        if logic_group:
+            phase_results = await asyncio.gather(
+                *[run_field(f, product, template, resolved) for f in logic_group],
+                return_exceptions=True,
+            )
+            for f, r in zip(logic_group, phase_results):
+                if isinstance(r, Exception):
+                    results[f] = {"field": f, "value": "", "source": "logic",
+                                   "status": "failed", "error": str(r)}
+                    resolved[f] = ""
+                else:
+                    results[f] = r
+                    resolved[f] = r.get("value", "")
+
+        if ai_group:
+            phase_results = await asyncio.gather(
+                *[run_field(f, product, template, resolved) for f in ai_group],
+                return_exceptions=True,
+            )
+            for f, r in zip(ai_group, phase_results):
+                if isinstance(r, Exception):
+                    results[f] = {"field": f, "value": "", "source": "ai",
+                                   "status": "failed", "error": str(r)}
+                    resolved[f] = ""
+                else:
+                    results[f] = r
+                    resolved[f] = r.get("value", "")
+
+        for f in derive_group:
+            r = await run_field(f, product, template, resolved)
+            results[f] = r
+            resolved[f] = r.get("value", "")
 
     return results
