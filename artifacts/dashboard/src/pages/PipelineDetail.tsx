@@ -98,7 +98,7 @@ function getActiveStageIndex(pl: Pipeline): number {
   return stepMap[pl.current_step ?? "process"] ?? 1;
 }
 
-function StageTrail({ pl, onStageClick, selectedStage }: { pl: Pipeline; onStageClick?: (key: string) => void; selectedStage?: string | null }) {
+function StageTrail({ pl, onStageClick, selectedStage, actionableStages }: { pl: Pipeline; onStageClick?: (key: string) => void; selectedStage?: string | null; actionableStages?: Set<string> }) {
   const activeIdx = getActiveStageIndex(pl);
   const isPaused  = ["enrich_review","review","content_review"].includes(pl.status);
   const isFailed  = ["failed","cancelled"].includes(pl.status);
@@ -109,10 +109,15 @@ function StageTrail({ pl, onStageClick, selectedStage }: { pl: Pipeline; onStage
         const isDone   = activeIdx >= 0 && i < activeIdx;
         const isActive = activeIdx >= 0 && i === activeIdx && !isFailed;
         const isFail   = isFailed && i === activeIdx;
-        // Client feedback: "Can't go back and review previous steps."
-        // Only completed/active stages are clickable -- nothing to show
-        // yet for a future/pending stage that hasn't run at all.
-        const isClickable = (isDone || isActive || isFail) && !!onStageClick;
+        // Client feedback: "Can't go back and review previous steps,"
+        // extended to "click on at top as well, so it works same like
+        // the button." Only stages with an ACTUAL corresponding action
+        // are clickable -- e.g. "Review" (Content Review) is often the
+        // active stage but has no "go back to Review" action of its
+        // own, so it correctly stays non-interactive rather than
+        // looking clickable and silently doing nothing when clicked.
+        const hasAction = !actionableStages || actionableStages.has(stage.key);
+        const isClickable = (isDone || isActive || isFail) && !!onStageClick && hasAction;
 
         return (
           <div key={stage.key} className="flex items-center">
@@ -120,15 +125,16 @@ function StageTrail({ pl, onStageClick, selectedStage }: { pl: Pipeline; onStage
               type="button"
               disabled={!isClickable}
               onClick={() => isClickable && onStageClick!(stage.key)}
-              title={isClickable ? `View ${stage.label}'s log entries` : undefined}
+              title={isClickable ? `Click to go back to ${stage.label}` : undefined}
               className={cn(
-                "inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium border whitespace-nowrap",
-                isClickable && "cursor-pointer hover:brightness-125 transition-[filter]",
-                !isClickable && "cursor-default",
+                "inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-semibold border whitespace-nowrap transition-all",
+                isClickable && "cursor-pointer shadow-sm hover:shadow-md hover:scale-[1.04] active:scale-[0.97]",
+                !isClickable && "cursor-default opacity-70",
                 selectedStage === stage.key && "ring-2 ring-violet-400 ring-offset-1 ring-offset-background",
-                isDone   && "bg-emerald-500/15 border-emerald-500/30 text-emerald-400",
-                isActive && isPaused  && "bg-amber-500/15 border-amber-500/40 text-amber-300 font-semibold",
-                isActive && !isPaused && "bg-violet-500/15 border-violet-500/40 text-violet-300 font-semibold",
+                isDone   && isClickable && "bg-emerald-500/25 border-emerald-400/50 text-emerald-300 hover:bg-emerald-500/35 hover:border-emerald-400/70",
+                isDone   && !isClickable && "bg-emerald-500/15 border-emerald-500/30 text-emerald-400",
+                isActive && isPaused  && "bg-amber-500/25 border-amber-400/60 text-amber-200 hover:bg-amber-500/35",
+                isActive && !isPaused && "bg-violet-500/25 border-violet-400/60 text-violet-200 hover:bg-violet-500/35",
                 isFail   && "bg-red-500/15 border-red-500/30 text-red-400",
                 !isDone && !isActive && !isFail && "border-border/40 text-muted-foreground/60 bg-background",
               )}
@@ -137,6 +143,7 @@ function StageTrail({ pl, onStageClick, selectedStage }: { pl: Pipeline; onStage
               {isActive && isPaused  && "⏸ "}
               {isActive && !isPaused && "▶ "}
               {stage.label}
+              {isClickable && <RotateCcw className="w-3 h-3 opacity-70" />}
             </button>
             {i < STAGES.length - 1 && (
               <span className="text-muted-foreground/30 mx-1 text-xs">→</span>
@@ -2054,9 +2061,35 @@ export default function PipelineDetail() {
         <StageTrail
           pl={pl}
           selectedStage={selectedStage}
-          onStageClick={(key) => {
-            setSelectedStage(key);
-            setLogOpen(true);
+          actionableStages={new Set(["fetch", "process", "enrich", "generate", "cat_review"])}
+          onStageClick={async (key) => {
+            // Client feedback: "client want that user can click on at
+            // top as well, so it works same like the button." Calls
+            // the SAME backend endpoints the corresponding "Back to X"
+            // buttons already use -- self-contained here (rather than
+            // reusing those buttons' own handler functions directly)
+            // because those are defined inside ContentReviewSection, a
+            // separate child component whose local scope isn't
+            // reachable from here, the same reason CategoryReviewSection
+            // needed its own self-contained versions earlier.
+            const stageEndpoints: Record<string, { url: string; confirmMsg: string; label: string }> = {
+              fetch:      { url: "back-to-fetch",          confirmMsg: "Go back to Fetch? This refreshes price/stock/description for this pipeline's existing products from Sunsky, then continues forward through the pipeline again.", label: "Back to Fetch" },
+              process:    { url: "back-to-process",         confirmMsg: "Go back to Process? This re-runs image processing for this pipeline's products, then continues forward through the pipeline again.", label: "Back to Process" },
+              enrich:     { url: "back-to-enrich-review",   confirmMsg: "Go back to Enrich Review? Your generated content won't be lost — you'll continue forward again after re-confirming attributes.", label: "Back to Enrich Review" },
+              cat_review: { url: "back-to-category-review", confirmMsg: "Go back to Category Review? Your generated content won't be lost — you'll return here after re-confirming categories.", label: "Back to Category Review" },
+              generate:   { url: "regenerate-content",      confirmMsg: "Re-generate content for this pipeline's products? This runs content generation again and will overwrite the current generated fields.", label: "Re-generating content" },
+            };
+            const entry = stageEndpoints[key];
+            if (!entry) return;
+            if (!confirm(entry.confirmMsg)) return;
+            try {
+              const r = await fetch(`/api/pipelines/${plId}/${entry.url}`, { method: "POST" });
+              if (!r.ok) throw new Error(await r.text());
+              toast({ title: entry.label });
+              fetchPipeline();
+            } catch (e: any) {
+              toast({ title: "Failed to go back", description: e.message, variant: "destructive" });
+            }
           }}
         />
       </div>
