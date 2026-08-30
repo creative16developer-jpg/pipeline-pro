@@ -311,7 +311,7 @@ async def create_product(store: Store, product_data: dict) -> dict:
     # category as "the" primary one for breadcrumbs/canonical URLs.
     primary_cat_id = product_data.get("primary_category_id")
     if primary_cat_id:
-        meta_entries.append({"key": "_yoast_wpseo_primary_category", "value": str(primary_cat_id)})
+        meta_entries.append({"key": "_yoast_wpseo_primary_product_cat", "value": str(primary_cat_id)})
     if meta_entries:
         payload["meta_data"] = meta_entries
 
@@ -334,7 +334,7 @@ async def create_product(store: Store, product_data: dict) -> dict:
               f"sale_price={payload.get('sale_price')!r} (full payload keys: {list(payload.keys())})")
         # Client feedback confirmed live via a browser Find-on-page
         # search on the actual WordPress edit screen ("0/0" matches for
-        # "_yoast_wpseo_primary_category"): this meta key was never
+        # "_yoast_wpseo_primary_product_cat"): this meta key was never
         # actually persisted, despite the pipeline reporting success.
         # Printed here to directly confirm what's actually being SENT,
         # and printed again after the response to confirm what
@@ -484,7 +484,7 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
     # category as "the" primary one for breadcrumbs/canonical URLs.
     primary_cat_id = product_data.get("primary_category_id")
     if primary_cat_id:
-        meta_entries.append({"key": "_yoast_wpseo_primary_category", "value": str(primary_cat_id)})
+        meta_entries.append({"key": "_yoast_wpseo_primary_product_cat", "value": str(primary_cat_id)})
     if meta_entries:
         payload["meta_data"] = meta_entries
 
@@ -838,7 +838,7 @@ async def set_product_categories(
     """Update the categories on an existing WooCommerce product.
     primary_woo_cat_id, when given, is moved to the front of the list
     (the convention most themes/plugins use for "the main category")
-    and also sets Yoast's own _yoast_wpseo_primary_category meta field --
+    and also sets Yoast's own _yoast_wpseo_primary_product_cat meta field --
     same fix as create_product/update_product (patch 77), needed here
     too since Sync has its own separate category-assignment call that
     was never updated for it.
@@ -849,7 +849,7 @@ async def set_product_categories(
     cats = [{"id": cid} for cid in ids if cid]
     payload: dict = {"categories": cats}
     if primary_woo_cat_id:
-        payload["meta_data"] = [{"key": "_yoast_wpseo_primary_category", "value": str(primary_woo_cat_id)}]
+        payload["meta_data"] = [{"key": "_yoast_wpseo_primary_product_cat", "value": str(primary_woo_cat_id)}]
     print(f"[woo_client.set_product_categories] woo_id={woo_id} primary_woo_cat_id={primary_woo_cat_id!r} "
           f"meta_data being sent: {payload.get('meta_data')!r}")
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
