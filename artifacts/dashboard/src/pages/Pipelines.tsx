@@ -1529,27 +1529,27 @@ function PipelineRow({
           <div className="flex items-center gap-1 justify-end">
             {/* View detail page */}
             <Link href={`/pipelines/${pl.id}`}>
-              <button className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors">
-                <Eye className="w-3 h-3" /> View
+              <button title="View" className="flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors">
+                <Eye className="w-3.5 h-3.5" />
               </button>
             </Link>
             {/* Logs toggle */}
             <button
               onClick={onToggleLogs}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+              title={logsOpen ? "Hide Logs" : "Logs"}
+              className="flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
             >
-              {logsOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              Logs
+              {logsOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
             </button>
 
             {/* Enrich review panel toggle */}
             {pl.status === "enrich_review" && (
               <button
                 onClick={() => setEnrichPanelOpen((x) => !x)}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/20 transition-colors"
+                title={enrichPanelOpen ? "Hide Review" : "Review Attrs"}
+                className="flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium bg-orange-500/10 hover:bg-orange-500/20 text-orange-400 border border-orange-500/20 transition-colors"
               >
-                <Layers className="w-3 h-3" />
-                {enrichPanelOpen ? "Hide Review" : "Review Attrs"}
+                <Layers className="w-3.5 h-3.5" />
               </button>
             )}
 
@@ -1558,16 +1558,17 @@ function PipelineRow({
               <>
                 <button
                   onClick={() => setMapPanelOpen((x) => !x)}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors"
+                  title={mapPanelOpen ? "Hide Map" : "Map Categories"}
+                  className="flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors"
                 >
-                  <Tag className="w-3 h-3" />
-                  {mapPanelOpen ? "Hide Map" : "Map Categories"}
+                  <Tag className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => onAction("resume", pl.id)}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                  title="Skip &amp; Resume"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  <Play className="w-3 h-3 fill-current" /> Skip &amp; Resume
+                  <Play className="w-3.5 h-3.5 fill-current" />
                 </button>
               </>
             )}
@@ -1576,9 +1577,10 @@ function PipelineRow({
             {["running", "queued", "review", "enrich_review"].includes(pl.status) && (
               <button
                 onClick={() => onAction("cancel", pl.id)}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
+                title="Cancel"
+                className="flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
               >
-                <Square className="w-3 h-3 fill-current" /> Cancel
+                <Square className="w-3.5 h-3.5 fill-current" />
               </button>
             )}
 
@@ -1588,23 +1590,20 @@ function PipelineRow({
                 <button
                   onClick={() => onAction("continue", pl.id)}
                   title={
-                    pl.current_step === "review" ? "Return to Category Mapping review" :
-                    pl.current_step === "enrich" ? "Return to Attribute review" :
-                    `Resume from ${pl.current_step ?? "last"} step — keeps same pipeline ID`
+                    pl.current_step === "review" ? "Back to Review — Return to Category Mapping review" :
+                    pl.current_step === "enrich" ? "Back to Review — Return to Attribute review" :
+                    `Continue — Resume from ${pl.current_step ?? "last"} step, keeps same pipeline ID`
                   }
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-colors"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-colors"
                 >
-                  <Play className="w-3 h-3 fill-current" />
-                  {pl.current_step === "review" ? "Back to Review" :
-                   pl.current_step === "enrich"  ? "Back to Review" :
-                   "Continue"}
+                  <Play className="w-3.5 h-3.5 fill-current" />
                 </button>
                 <button
                   onClick={() => onAction("retry", pl.id)}
-                  title="Start a brand-new pipeline from the beginning"
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                  title="Retry — Start a brand-new pipeline from the beginning"
+                  className="flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
                 >
-                  <RotateCcw className="w-3 h-3" /> Retry
+                  <RotateCcw className="w-3.5 h-3.5" />
                 </button>
               </>
             )}
@@ -1613,10 +1612,10 @@ function PipelineRow({
             {["completed", "failed", "cancelled"].includes(pl.status) && (
               <button
                 onClick={() => onAction("delete", pl.id)}
-                title="Delete pipeline and all its logs"
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
+                title="Delete — Delete pipeline and all its logs"
+                className="flex items-center justify-center w-7 h-7 rounded-lg text-xs font-medium bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors"
               >
-                <Trash2 className="w-3 h-3" /> Delete
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
