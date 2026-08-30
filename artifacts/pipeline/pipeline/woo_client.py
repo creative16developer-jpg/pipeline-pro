@@ -332,6 +332,14 @@ async def create_product(store: Store, product_data: dict) -> dict:
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
         print(f"[woo_client.create_product] regular_price={payload.get('regular_price')!r} "
               f"sale_price={payload.get('sale_price')!r} (full payload keys: {list(payload.keys())})")
+        # Client feedback confirmed live via a browser Find-on-page
+        # search on the actual WordPress edit screen ("0/0" matches for
+        # "_yoast_wpseo_primary_category"): this meta key was never
+        # actually persisted, despite the pipeline reporting success.
+        # Printed here to directly confirm what's actually being SENT,
+        # and printed again after the response to confirm what
+        # WooCommerce's own API echoes back for this same key.
+        print(f"[woo_client.create_product] meta_data being sent: {payload.get('meta_data')!r}")
         resp = await client.post(
             f"{_base_url(store)}/products",
             headers=_auth_header(store),
@@ -346,6 +354,7 @@ async def create_product(store: Store, product_data: dict) -> dict:
         result = resp.json()
         print(f"[woo_client.create_product] WooCommerce response: regular_price={result.get('regular_price')!r} "
               f"sale_price={result.get('sale_price')!r}")
+        print(f"[woo_client.create_product] WooCommerce response meta_data: {result.get('meta_data')!r}")
         return result
 
 
@@ -495,6 +504,7 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
         print(f"[woo_client.update_product] regular_price={payload.get('regular_price')!r} "
               f"sale_price={payload.get('sale_price')!r} (full payload keys: {list(payload.keys())})")
+        print(f"[woo_client.update_product] meta_data being sent: {payload.get('meta_data')!r}")
         resp = await client.put(
             f"{_base_url(store)}/products/{woo_id}",
             headers=_auth_header(store),
@@ -509,6 +519,7 @@ async def update_product(store: Store, woo_id: int, product_data: dict) -> dict:
         result = resp.json()
         print(f"[woo_client.update_product] WooCommerce response: regular_price={result.get('regular_price')!r} "
               f"sale_price={result.get('sale_price')!r}")
+        print(f"[woo_client.update_product] WooCommerce response meta_data: {result.get('meta_data')!r}")
         return result
 
 
@@ -839,6 +850,8 @@ async def set_product_categories(
     payload: dict = {"categories": cats}
     if primary_woo_cat_id:
         payload["meta_data"] = [{"key": "_yoast_wpseo_primary_category", "value": str(primary_woo_cat_id)}]
+    print(f"[woo_client.set_product_categories] woo_id={woo_id} primary_woo_cat_id={primary_woo_cat_id!r} "
+          f"meta_data being sent: {payload.get('meta_data')!r}")
     async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
         resp = await client.put(
             f"{_base_url(store)}/products/{woo_id}",
@@ -851,4 +864,6 @@ async def set_product_categories(
                 request=resp.request,
                 response=resp,
             )
-        return resp.json()
+        result = resp.json()
+        print(f"[woo_client.set_product_categories] woo_id={woo_id} WooCommerce response meta_data: {result.get('meta_data')!r}")
+        return result
