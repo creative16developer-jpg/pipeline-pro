@@ -1285,7 +1285,7 @@ async def _run_upload(db, job):
 
         # ── Pre-load WooCommerce categories ──────────────────────────────
         try:
-            woo_cats = await woo_client.get_all_woo_categories(store)
+            woo_cats = await wc.get_all_woo_categories(store)
         except Exception as _e:
             woo_cats = []
             await _log(db, job.id, LogLevel.warn,
@@ -1335,7 +1335,7 @@ async def _run_upload(db, job):
 
         # ── Pre-load WooCommerce global attributes ────────────────────────
         try:
-            woo_global_attrs = await woo_client.get_all_woo_attributes(store)
+            woo_global_attrs = await wc.get_all_woo_attributes(store)
         except Exception as _e:
             woo_global_attrs = []
             await _log(db, job.id, LogLevel.warn,
@@ -1400,7 +1400,7 @@ async def _run_upload(db, job):
             )
             if not woo_id:
                 try:
-                    resp = await woo_client.create_woo_category(store, name, woo_parent)
+                    resp = await wc.create_woo_category(store, name, woo_parent)
                     woo_id = resp["id"]
                     p2_cat_by_key[(name.lower(), woo_parent)] = woo_id
                     p2_cat_by_name[name.lower()] = woo_id
@@ -1457,7 +1457,7 @@ async def _run_upload(db, job):
             if key in p2_attr_lookup:
                 return p2_attr_lookup[key]
             try:
-                created = await woo_client.create_woo_attribute(store, name)
+                created = await wc.create_woo_attribute(store, name)
                 p2_attr_lookup[key] = created
                 return created
             except Exception as _ae:
@@ -1469,7 +1469,7 @@ async def _run_upload(db, job):
         async def _p2_get_or_create_term(attr_id: int, term_name: str) -> Optional[int]:
             if attr_id not in p2_term_cache:
                 try:
-                    existing = await woo_client.get_attribute_terms(store, attr_id)
+                    existing = await wc.get_attribute_terms(store, attr_id)
                     p2_term_cache[attr_id] = {t["name"].lower(): t["id"] for t in existing}
                 except Exception:
                     p2_term_cache[attr_id] = {}
@@ -1477,7 +1477,7 @@ async def _run_upload(db, job):
             if key in p2_term_cache[attr_id]:
                 return p2_term_cache[attr_id][key]
             try:
-                created = await woo_client.create_attribute_term(store, attr_id, term_name)
+                created = await wc.create_attribute_term(store, attr_id, term_name)
                 p2_term_cache[attr_id][key] = created["id"]
                 return created["id"]
             except Exception:
@@ -1604,7 +1604,7 @@ async def _run_upload(db, job):
                 woo_cat_id = p2_cat_by_name.get(cat_name_direct.lower())
                 if not woo_cat_id:
                     try:
-                        resp = await woo_client.create_woo_category(store, cat_name_direct, 0)
+                        resp = await wc.create_woo_category(store, cat_name_direct, 0)
                         woo_cat_id = resp["id"]
                         p2_cat_by_name[cat_name_direct.lower()] = woo_cat_id
                     except Exception:
@@ -1618,7 +1618,7 @@ async def _run_upload(db, job):
             # category that Phase 1 already set in the create/update payload.
             if cat_woo_ids:
                 try:
-                    await woo_client.set_product_categories(
+                    await wc.set_product_categories(
                         store, prod.woo_product_id, cat_woo_ids, p2_primary_woo_cat_id
                     )
                     p2_cat_ok += 1
@@ -1798,7 +1798,7 @@ async def _run_upload(db, job):
 
             if woo_attrs:
                 try:
-                    await woo_client.set_product_attributes(
+                    await wc.set_product_attributes(
                         store, prod.woo_product_id, woo_attrs
                     )
                     p2_attr_ok += 1
