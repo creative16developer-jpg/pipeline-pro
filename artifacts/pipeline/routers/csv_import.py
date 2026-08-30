@@ -214,7 +214,20 @@ async def upload_csv(
     # UTF-8 file correctly. Warns the operator immediately (rather than
     # letting corrupted titles flow silently through the whole pipeline)
     # so they can re-save using "CSV UTF-8" instead and re-upload.
+    #
+    # Second, different pattern confirmed live via a later client
+    # screenshot: garbled "mojibake" text like "ÁиÁÂ" -- visible even in
+    # the CLIENT'S OWN spreadsheet software, independent of this app
+    # entirely, confirming the source file was already corrupted before
+    # it ever reached this backend (a different specific mistake than
+    # the "?" case, but the same category of problem). Detects a
+    # concentration of uppercase Latin-1 Supplement diacritics
+    # (U+00C0-U+00DC: ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜ) -- rare in
+    # legitimate product titles even for European brand names, but a
+    # hallmark signature of Cyrillic bytes decoded with the wrong
+    # character set.
     suspicious_title_rows: list[int] = []
+    mojibake_title_rows: list[int] = []
 
     for i, row in enumerate(reader):
         if i >= MAX_ROWS:
@@ -224,6 +237,8 @@ async def upload_csv(
         csv_title  = (row.get("Product Title") or "").strip()
         if re.search(r"\?{2,}", csv_title):
             suspicious_title_rows.append(i + 2)
+        elif len(re.findall(r"[\u00C0-\u00DC]", csv_title)) >= 2:
+            mojibake_title_rows.append(i + 2)
         price_raw       = (row.get("Price") or "").strip()
         sale_price_raw  = (row.get("Sale Price") or "").strip()
         qty_raw    = (row.get("QTY") or "").strip()
@@ -404,6 +419,16 @@ async def upload_csv(
             f"characters. Re-save the file using 'CSV UTF-8 (Comma delimited)' instead "
             f"and re-upload, or these product titles will be imported as literal "
             f"question marks."
+        )
+    if mojibake_title_rows:
+        response["encoding_warning"] = (
+            (response.get("encoding_warning", "") + " ") if response.get("encoding_warning") else ""
+        ) + (
+            f"Row(s) {', '.join(str(r) for r in mojibake_title_rows[:10])} have product "
+            f"titles that look like garbled/corrupted text (e.g. 'ÁиÁÂ' instead of real "
+            f"words) -- this happens when the file was saved with a mismatched character "
+            f"encoding for non-English text (e.g. Cyrillic). Re-save the file explicitly "
+            f"as UTF-8 and re-upload, or these product titles will be imported broken."
         )
     return response
 
