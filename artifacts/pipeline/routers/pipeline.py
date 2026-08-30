@@ -1040,25 +1040,68 @@ async def get_pipeline_logs(
     if not pl:
         raise HTTPException(404, f"Pipeline #{pl_id} not found")
 
-    logs = (
+    plogs = (
         await db.execute(
             select(PipelineLog)
             .where(PipelineLog.pipeline_job_id == pl_id)
             .order_by(PipelineLog.created_at.asc())
-            .limit(limit)
         )
     ).scalars().all()
+
+    # Client feedback confirmed live: detailed, per-step logging (the
+    # "Starting sync -> store: ... | categories=... | attributes=..."
+    # line, and the per-product "-> category [...] via manual override"
+    # line) was completely invisible in this panel -- it was correctly
+    # written the whole time via _log(db, job.id, ...) (job_logs table,
+    # keyed by the underlying Job's own id), but this endpoint only ever
+    # queried pipeline_logs (a DIFFERENT table, written via a separate
+    # _plog(db, pipeline_job_id, ...) helper). Now also pulls JobLog
+    # entries for every Job belonging to this pipeline (Job.pipeline_
+    # job_id), so the actual diagnostic detail becomes visible here too,
+    # not just the higher-level summary lines pipeline_tasks.py itself
+    # writes directly.
+    from models.models import JobLog, Job as JobModel
+    jlogs_rows = (
+        await db.execute(
+            select(JobLog, JobModel.type)
+            .join(JobModel, JobLog.job_id == JobModel.id)
+            .where(JobModel.pipeline_job_id == pl_id)
+            .order_by(JobLog.created_at.asc())
+        )
+    ).all()
+
+    combined = [
+        {
+            "id": f"p{log.id}",
+            "step": log.step,
+            "level": log.level,
+            "message": log.message,
+            "created_at": log.created_at,
+        }
+        for log in plogs
+    ] + [
+        {
+            "id": f"j{jlog.id}",
+            "step": job_type.value if hasattr(job_type, "value") else str(job_type),
+            "level": jlog.level.value if hasattr(jlog.level, "value") else str(jlog.level),
+            "message": jlog.message,
+            "created_at": jlog.created_at,
+        }
+        for jlog, job_type in jlogs_rows
+    ]
+    combined.sort(key=lambda r: r["created_at"] or datetime.min.replace(tzinfo=timezone.utc))
+    combined = combined[:limit]
 
     return {
         "pipeline_id": pl_id,
         "logs": [
             {
-                "id": log.id,
-                "step": log.step,
-                "level": log.level,
-                "message": log.message,
-                "created_at": log.created_at.isoformat() if log.created_at else None,
+                "id": row["id"],
+                "step": row["step"],
+                "level": row["level"],
+                "message": row["message"],
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
             }
-            for log in logs
+            for row in combined
         ],
     }

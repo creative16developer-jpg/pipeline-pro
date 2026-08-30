@@ -45,7 +45,7 @@ interface Pipeline {
 }
 
 interface PipelineLog {
-  id: number;
+  id: string;
   step: string | null;
   level: string;
   message: string;
