@@ -117,6 +117,7 @@ async def upload_image_to_wordpress(
     store: Store,
     file_path: str,
     filename: Optional[str] = None,
+    alt_text: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[int]]:
     """
     Upload a local image file to the WordPress media library.
@@ -127,6 +128,14 @@ async def upload_image_to_wordpress(
     re-uploading and creating a genuine duplicate attachment -- this
     was previously unimplemented (Review 3, item #4: "photos uploaded
     twice").
+
+    alt_text, when given, sets the WordPress MEDIA LIBRARY attachment's
+    own Alt Text field (_wp_attachment_image_alt) -- confirmed live via
+    a WordPress Media Library screenshot this was always empty, even
+    though the product-level WooCommerce image reference's own "alt"
+    field WAS being set correctly elsewhere. These are two genuinely
+    different WordPress-level fields; setting one does not set the
+    other.
 
     Requires wp_username + wp_app_password on the Store (WordPress Application
     Password — NOT the WooCommerce consumer key/secret, which only work with
@@ -166,12 +175,14 @@ async def upload_image_to_wordpress(
         "Content-Disposition": f'attachment; filename="{fname}"',
         "Content-Type": mime_type,
     }
+    params = {"alt_text": alt_text} if alt_text else None
 
     try:
         async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
             resp = await client.post(
                 f"{_wp_base_url(store)}/media",
                 headers=headers,
+                params=params,
                 content=path.read_bytes(),
             )
             if resp.is_success:

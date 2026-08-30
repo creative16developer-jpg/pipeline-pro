@@ -707,6 +707,18 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
             if not base_slug:
                 from services.content_service import _slugify as _cs_slugify
                 base_slug = _cs_slugify(product.name or product.sku or "product")
+            # Client feedback confirmed live via WordPress Media Library
+            # screenshot: the Alt Text field on the uploaded attachment
+            # was always empty, even though the product-level WooCommerce
+            # image reference's own "alt" field WAS being set correctly
+            # elsewhere (job_tasks.py's payload builder, further down).
+            # These are two genuinely different WordPress-level fields --
+            # setting one never set the other. Computed here (not just
+            # at the payload-builder site) so it can be passed directly
+            # into the actual upload call below, matching the exact same
+            # base value + per-position numbering pattern already used
+            # for the product-level reference, so both stay consistent.
+            base_alt = product.image_alt or product.name or ""
 
             # Product-level, source-URL-keyed dedup cache. Confirmed
             # live that patch 78's Image-row-level dedup alone wasn't
@@ -769,7 +781,10 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                 # represented what image #1 would look like).
                 ext = Path(img.processed_path).suffix or ".webp"
                 wp_filename = f"{base_slug}-{img.position + 1}{ext}"
-                wp_url, wp_media_id = await wc.upload_image_to_wordpress(store, img.processed_path, filename=wp_filename)
+                wp_alt = (base_alt if img.position == 0 else f"{base_alt} - {img.position + 1}") if base_alt else None
+                wp_url, wp_media_id = await wc.upload_image_to_wordpress(
+                    store, img.processed_path, filename=wp_filename, alt_text=wp_alt
+                )
                 if wp_url:
                     images.append({"id": wp_media_id, "src": wp_url})
                     img.wp_media_url = wp_url
