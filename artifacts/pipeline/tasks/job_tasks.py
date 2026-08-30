@@ -1063,7 +1063,19 @@ async def _run_upload(db, job):
                                 woo_cat_ids = [c["id"] for c in _woo_cats if c.get("id")]
                             elif mapping.woo_cat_id:
                                 woo_cat_ids = [mapping.woo_cat_id]
-                            primary_woo_cat_id = mapping.primary_woo_cat_id
+                            # Client feedback confirmed live via WordPress
+                            # admin screenshot: 3 categories checked, none
+                            # marked primary. Root cause: mapping.
+                            # primary_woo_cat_id can be NULL on an EXISTING
+                            # mapping row (e.g. one saved before this
+                            # concept existed, or via a path that never
+                            # set it) -- with no fallback, this silently
+                            # resulted in no primary at all rather than a
+                            # sensible default. Falls back to the deepest/
+                            # most specific category (the last item in a
+                            # hierarchy-ordered woo_cat_ids list) instead
+                            # of leaving it unset.
+                            primary_woo_cat_id = mapping.primary_woo_cat_id or (woo_cat_ids[-1] if woo_cat_ids else None)
                             if woo_cat_ids:
                                 await _log(db, job.id, LogLevel.info,
                                            f"  {product.sku}: category mapping {sunsky_cat!r} → woo ids {woo_cat_ids}")
@@ -1570,7 +1582,7 @@ async def _run_upload(db, job):
                         elif _mapping2.woo_cat_id:
                             cat_woo_ids = [_mapping2.woo_cat_id]
                             cat_names   = [_mapping2.woo_cat_name or _matched_key or ""]
-                        p2_primary_woo_cat_id = _mapping2.primary_woo_cat_id
+                        p2_primary_woo_cat_id = _mapping2.primary_woo_cat_id or (cat_woo_ids[-1] if cat_woo_ids else None)
                         if cat_woo_ids:
                             await _log(db, job.id, LogLevel.info,
                                        f"  {prod.sku}: SunskyCategoryMapping "
@@ -2377,7 +2389,7 @@ async def _run_sync(db, job):
                                 woo_cat_ids = [c["id"] for c in _sm_cats if c.get("id")]
                             elif _smapping.woo_cat_id:
                                 woo_cat_ids = [_smapping.woo_cat_id]
-                            primary_woo_cat_id = _smapping.primary_woo_cat_id
+                            primary_woo_cat_id = _smapping.primary_woo_cat_id or (woo_cat_ids[-1] if woo_cat_ids else None)
                             if woo_cat_ids:
                                 woo_cat_source = f"SunskyCategoryMapping ({_skey!r})"
                     except Exception as _sme:
