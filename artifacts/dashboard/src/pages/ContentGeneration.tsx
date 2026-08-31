@@ -163,18 +163,29 @@ const AI_PROVIDERS: Record<string, { label: string; models: string[]; defaultMod
     // series is also confirmed completely shut down (all requests
     // return 404, per Google's Firebase AI Logic docs). Replaced with
     // the current stable + preview lineup.
+    //
+    // CORRECTION to the original patch 91 default: client sent their
+    // own working system (a separate HTML tool) which defaults to
+    // gemini-2.5-flash specifically, explaining their "I need to test
+    // the free tier of gemini flash 2.5 as in my system works"
+    // feedback. Verified via multiple current sources: the entire
+    // Gemini 3.x series requires paid billing and is NOT available on
+    // the free tier at all, while gemini-2.5-flash remains free and
+    // is not deprecated (unlike 1.5/2.0, which genuinely are). Kept
+    // the 3.x models available in the list for anyone who wants to
+    // pay for them, but reverted the DEFAULT to the free-tier model.
     models: [
+      "gemini-2.5-flash",
+      "gemini-2.5-pro",
+      "gemini-2.5-flash-lite",
       "gemini-3.7-flash",
       "gemini-3.6-flash",
       "gemini-3.5-flash",
       "gemini-3.5-flash-lite",
       "gemini-3.1-pro-preview",
       "gemini-3.1-flash-lite",
-      "gemini-2.5-pro",
-      "gemini-2.5-flash",
-      "gemini-2.5-flash-lite",
     ],
-    defaultModel: "gemini-3.7-flash",
+    defaultModel: "gemini-2.5-flash",
   },
 };
 

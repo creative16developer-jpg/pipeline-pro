@@ -239,16 +239,23 @@ _GEMINI_DEPRECATED: dict[str, str] = {
     # return a 404 error"). This table is what actually kept the
     # client's account working despite selecting a dead model in the
     # UI -- silently redirecting it here rather than the call failing
-    # outright. Expanded to cover the full 1.5 series, not just
-    # gemini-1.5-flash-latest, and the fallback below updated to a
-    # current model.
-    "gemini-1.5-flash-latest": "gemini-3.5-flash",
-    "gemini-1.5-pro":          "gemini-3.1-pro-preview",
-    "gemini-1.5-flash":        "gemini-3.5-flash",
-    "gemini-1.5-flash-8b":     "gemini-3.5-flash-lite",
-    "gemini-2.0-flash":        "gemini-3.6-flash",
-    "gemini-2.0-flash-lite":   "gemini-3.5-flash-lite",
-    "gemini-1.0-pro":          "gemini-3.1-pro-preview",
+    # outright.
+    #
+    # CORRECTION: originally redirected to the newer gemini-3.x series,
+    # but multiple current sources confirm the ENTIRE Gemini 3.x series
+    # requires paid billing and is not available on the free tier at
+    # all -- the client explicitly wants free-tier usage (confirmed via
+    # their own separate working tool, which defaults to
+    # gemini-2.5-flash). Redirecting to gemini-2.5-flash instead avoids
+    # silently moving them from one non-working state (dead model) to
+    # another (a model requiring billing they don't want).
+    "gemini-1.5-flash-latest": "gemini-2.5-flash",
+    "gemini-1.5-pro":          "gemini-2.5-pro",
+    "gemini-1.5-flash":        "gemini-2.5-flash",
+    "gemini-1.5-flash-8b":     "gemini-2.5-flash-lite",
+    "gemini-2.0-flash":        "gemini-2.5-flash",
+    "gemini-2.0-flash-lite":   "gemini-2.5-flash-lite",
+    "gemini-1.0-pro":          "gemini-2.5-pro",
 }
 
 
@@ -261,7 +268,7 @@ async def _generate_gemini(prompt: str, model: Optional[str]) -> str:
     except ImportError:
         raise AIGenerationError("google-generativeai package not installed — run: pip install google-generativeai")
 
-    raw_model = model or "gemini-3.7-flash"
+    raw_model = model or "gemini-2.5-flash"
     # Silently redirect deprecated/removed models to their current equivalent
     resolved_model = _GEMINI_DEPRECATED.get(raw_model, raw_model)
     genai.configure(api_key=api_key)
@@ -326,17 +333,17 @@ def get_provider_status() -> dict:
         "gemini": {
             "configured": bool(_get_api_key("GEMINI_API_KEY", "gemini")),
             "label": "Google Gemini",
-            "default_model": "gemini-3.7-flash",
+            "default_model": "gemini-2.5-flash",
             "models": [
+                "gemini-2.5-flash",
+                "gemini-2.5-pro",
+                "gemini-2.5-flash-lite",
                 "gemini-3.7-flash",
                 "gemini-3.6-flash",
                 "gemini-3.5-flash",
                 "gemini-3.5-flash-lite",
                 "gemini-3.1-pro-preview",
                 "gemini-3.1-flash-lite",
-                "gemini-2.5-pro",
-                "gemini-2.5-flash",
-                "gemini-2.5-flash-lite",
             ],
         },
     }
