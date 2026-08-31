@@ -63,13 +63,17 @@ const PROVIDERS: Record<string, {
   },
   anthropic: {
     label: "Anthropic (Claude)",
-    description: "claude-3-haiku, claude-3.5-sonnet and other Claude models",
+    description: "claude-sonnet-5, claude-opus-5 and other Claude models",
     envVar: "ANTHROPIC_API_KEY",
     docsUrl: "https://console.anthropic.com/",
     docsLabel: "Anthropic Console",
     color: "text-amber-400",
     bgColor: "bg-amber-500/10 border-amber-500/20",
-    models: ["claude-3-haiku-20240307", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
+    // Client feedback: same stale-model-list issue confirmed live for
+    // Gemini earlier (patch 91) also affected Anthropic -- kept in
+    // sync with the same list in ContentGeneration.tsx and
+    // ai_generator.py's get_provider_status().
+    models: ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
   },
 };
 

@@ -175,6 +175,25 @@ async def _generate_openai(prompt: str, model: Optional[str]) -> str:
     return (response.choices[0].message.content or "").strip()
 
 
+_ANTHROPIC_DEPRECATED: dict[str, str] = {
+    # Client feedback: confirmed live via preview panel that Title/
+    # Description generation was falling back to logic mode
+    # ("logic:fallback"), with the Model dropdown defaulted to
+    # claude-3-haiku-20240307 -- a March 2024 model, very likely
+    # deprecated/retired given the extensive Claude model lineup
+    # evolution since then (3 -> 3.5 -> 3.7 -> 4 -> 4.5 -> 4.6 -> 4.7
+    # -> 4.8 -> 5 -> Fable 5). Same safety-net pattern as
+    # _GEMINI_DEPRECATED (patch 91) -- redirects known-old model names
+    # to current equivalents so an existing saved selection keeps
+    # working even before the operator explicitly re-selects a new
+    # model from the refreshed dropdown.
+    "claude-3-haiku-20240307":    "claude-haiku-4-5-20251001",
+    "claude-3-5-sonnet-20241022": "claude-sonnet-5",
+    "claude-3-opus-20240229":     "claude-opus-5",
+    "claude-3-sonnet-20240229":   "claude-sonnet-5",
+}
+
+
 async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
     api_key = _get_api_key("ANTHROPIC_API_KEY", "anthropic")
     if not api_key:
@@ -185,8 +204,10 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
         raise AIGenerationError("anthropic package not installed — run: pip install anthropic")
 
     client = AsyncAnthropic(api_key=api_key)
+    raw_model = model or "claude-sonnet-5"
+    resolved_model = _ANTHROPIC_DEPRECATED.get(raw_model, raw_model)
     message = await client.messages.create(
-        model=model or "claude-3-haiku-20240307",
+        model=resolved_model,
         max_tokens=600,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -279,11 +300,12 @@ def get_provider_status() -> dict:
         "anthropic": {
             "configured": bool(_get_api_key("ANTHROPIC_API_KEY", "anthropic")),
             "label": "Anthropic (Claude)",
-            "default_model": "claude-3-haiku-20240307",
+            "default_model": "claude-sonnet-5",
             "models": [
-                "claude-3-haiku-20240307",
-                "claude-3-5-sonnet-20241022",
-                "claude-3-opus-20240229",
+                "claude-fable-5",
+                "claude-opus-5",
+                "claude-sonnet-5",
+                "claude-haiku-4-5-20251001",
             ],
         },
         "gemini": {

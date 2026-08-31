@@ -142,8 +142,14 @@ const AI_PROVIDERS: Record<string, { label: string; models: string[]; defaultMod
   },
   anthropic: {
     label: "Anthropic (Claude)",
-    models: ["claude-3-haiku-20240307", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229"],
-    defaultModel: "claude-3-haiku-20240307",
+    // Client feedback: confirmed live via preview panel that Title/
+    // Description were falling back to logic mode ("logic:fallback"),
+    // and the Model dropdown was defaulted to claude-3-haiku-20240307
+    // -- a 2024-era model, badly outdated given the current lineup.
+    // Verified current model strings via web search, cross-referenced
+    // against Anthropic's own model overview docs (fetched live).
+    models: ["claude-fable-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
+    defaultModel: "claude-sonnet-5",
   },
   gemini: {
     label: "Google Gemini",
