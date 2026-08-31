@@ -226,7 +226,22 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
         max_tokens=600,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text.strip()
+    # Client feedback confirmed live via Pipeline Log: "'ThinkingBlock'
+    # object has no attribute 'text'" -- newer Claude models can include
+    # an extended-thinking block in the response before the actual text
+    # answer, especially for longer/more complex prompts (this is why
+    # Description failed while the shorter Product Title succeeded on
+    # the same request). The old code assumed content[0] was always the
+    # text block; now iterates to find the actual text block regardless
+    # of its position or how many other block types (thinking, tool
+    # use, etc.) precede it in the response.
+    for block in message.content:
+        if getattr(block, "type", None) == "text":
+            return block.text.strip()
+    raise AIGenerationError(
+        f"Anthropic response had no text block (got: "
+        f"{[getattr(b, 'type', type(b).__name__) for b in message.content]})"
+    )
 
 
 _GEMINI_DEPRECATED: dict[str, str] = {
