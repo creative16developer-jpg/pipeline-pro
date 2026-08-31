@@ -97,6 +97,21 @@ def _build_product_context(product: dict) -> str:
     name = product.get("name", "Product")
     sku = product.get("site_sku") or product.get("sku", "")
     desc = product.get("description", "")
+    # Client feedback: "such costs for a 500-character description
+    # aren't realistic ... you're the one who needs to figure that
+    # out." Found the concrete cause: this raw description was
+    # included in EVERY AI prompt with zero truncation. Sunsky's raw
+    # descriptions are frequently long HTML/marketing blocks -- since
+    # AI pricing is driven primarily by input tokens, not output
+    # length, an untruncated multi-thousand-character raw description
+    # could add substantial cost to every single AI call regardless of
+    # how short the actual requested output was. The AI only needs
+    # enough context to understand the product, not the full raw
+    # marketing copy (which is also often repetitive/promotional
+    # filler rather than genuinely useful product detail).
+    MAX_RAW_DESC_CHARS = 600
+    if len(desc) > MAX_RAW_DESC_CHARS:
+        desc = desc[:MAX_RAW_DESC_CHARS].rsplit(" ", 1)[0] + "…"
     specs = _extract_specs(product)
     specs_text = (
         "\n".join(f"  - {k}: {v}" for k, v in list(specs.items())[:15])
