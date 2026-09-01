@@ -192,10 +192,11 @@ class PipelineJob(Base):
     fetch_job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
 
     # Status: queued | running | review | enrich_review | category_review |
-    #         content_review | completed | failed | cancelled
+    #         content_review | batch_processing | completed | failed | cancelled
     # T02: enforced at the DB level via a CHECK constraint (see
-    # migrations/008_pipeline_status_check_constraint.sql) rather than a
-    # native Postgres ENUM type — see that file for why.
+    # migrations/008_pipeline_status_check_constraint.sql, extended by
+    # migrations/add_batch_processing.sql) rather than a native Postgres
+    # ENUM type — see that file for why.
     status = Column(String(20), nullable=False, default="queued", index=True)
     # Current execution step: process | generate | review | upload | sync
     current_step = Column(String(30), nullable=True)
@@ -204,6 +205,15 @@ class PipelineJob(Base):
     # Content-gen review stats: {total, ok, fallback, failed}
     stats_json = Column(JSON, nullable=True)
     error_message = Column(Text, nullable=True)
+
+    # Claude Batch Processing (Anthropic only, for now -- client confirmed
+    # starting there before extending to other providers). use_batch_
+    # processing is the operator's opt-in choice at pipeline-creation time;
+    # batch_id/batch_submitted_at track the active Anthropic Message Batch
+    # while the pipeline is paused in "batch_processing" status.
+    use_batch_processing = Column(Boolean, nullable=False, default=False)
+    batch_id = Column(String(100), nullable=True)
+    batch_submitted_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -209,6 +209,22 @@ _ANTHROPIC_DEPRECATED: dict[str, str] = {
 }
 
 
+def _extract_anthropic_text(content: list) -> str:
+    """
+    Find the actual text block in an Anthropic response's content list.
+    Shared between the synchronous Messages call and batch results parsing
+    below -- both can include a ThinkingBlock before the text block (patch
+    111), and batch results have the identical content-list shape.
+    """
+    for block in content:
+        if getattr(block, "type", None) == "text":
+            return block.text.strip()
+    raise AIGenerationError(
+        f"Anthropic response had no text block (got: "
+        f"{[getattr(b, 'type', type(b).__name__) for b in content]})"
+    )
+
+
 async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
     api_key = _get_api_key("ANTHROPIC_API_KEY", "anthropic")
     if not api_key:
@@ -235,13 +251,129 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
     # text block; now iterates to find the actual text block regardless
     # of its position or how many other block types (thinking, tool
     # use, etc.) precede it in the response.
-    for block in message.content:
-        if getattr(block, "type", None) == "text":
-            return block.text.strip()
-    raise AIGenerationError(
-        f"Anthropic response had no text block (got: "
-        f"{[getattr(b, 'type', type(b).__name__) for b in message.content]})"
-    )
+    return _extract_anthropic_text(message.content)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Claude Batch Processing (Anthropic only, for now)
+#
+# Client feedback: full-pipeline batch processing for Claude, at Anthropic's
+# 50% batch-rate discount, in exchange for asynchronous (usually <1h, up to
+# 24h) turnaround instead of the normal per-request synchronous call. Client
+# confirmed via the reviewed build plan: (1) opt-in toggle per pipeline, not
+# automatic; (2) OK with the pipeline visibly pausing while a batch
+# processes; (3) start with Anthropic only, extend to other providers later
+# (OpenAI and Gemini also offer an equivalent batch API at the same 50%
+# discount, confirmed via research, but each is a genuinely separate,
+# provider-specific integration -- not attempted here).
+#
+# custom_id encodes {product_id}:{field_name} directly (Anthropic's own docs
+# allow any opaque identifier here) rather than a separate mapping table --
+# simpler, and the encoding/decoding is trivial since neither product IDs
+# nor our own field names ever contain a colon.
+# ─────────────────────────────────────────────────────────────────────────
+
+def make_batch_custom_id(product_id: int, field_name: str) -> str:
+    return f"{product_id}:{field_name}"
+
+
+def parse_batch_custom_id(custom_id: str) -> tuple[int, str]:
+    product_id_str, field_name = custom_id.split(":", 1)
+    return int(product_id_str), field_name
+
+
+async def submit_anthropic_batch(requests: list[dict]) -> str:
+    """
+    Submit a Claude Message Batch. `requests` is a list of
+    {"custom_id": str, "prompt": str, "model": str | None} dicts -- one per
+    field to generate, across every product in this pipeline run. Returns
+    the batch's own id (used to poll status and fetch results later).
+    """
+    api_key = _get_api_key("ANTHROPIC_API_KEY", "anthropic")
+    if not api_key:
+        raise AIGenerationError("ANTHROPIC_API_KEY not configured — add it in Settings")
+    try:
+        from anthropic import AsyncAnthropic
+    except ImportError:
+        raise AIGenerationError("anthropic package not installed — run: pip install anthropic")
+
+    client = AsyncAnthropic(api_key=api_key)
+    batch_requests = []
+    for req in requests:
+        raw_model = req.get("model") or "claude-sonnet-5"
+        resolved_model = _ANTHROPIC_DEPRECATED.get(raw_model, raw_model)
+        batch_requests.append({
+            "custom_id": req["custom_id"],
+            "params": {
+                "model": resolved_model,
+                "max_tokens": 600,
+                "messages": [{"role": "user", "content": req["prompt"]}],
+            },
+        })
+
+    batch = await client.messages.batches.create(requests=batch_requests)
+    return batch.id
+
+
+async def get_anthropic_batch_status(batch_id: str) -> dict:
+    """
+    Poll a batch's current status. Returns a plain dict (not the SDK's own
+    object) with the fields the polling task actually needs:
+    processing_status ("in_progress" | "ended" | "canceling" | "canceled"),
+    request_counts (processing/succeeded/errored/canceled/expired), and
+    results_url (only present once processing has ended).
+    """
+    api_key = _get_api_key("ANTHROPIC_API_KEY", "anthropic")
+    if not api_key:
+        raise AIGenerationError("ANTHROPIC_API_KEY not configured — add it in Settings")
+    from anthropic import AsyncAnthropic
+
+    client = AsyncAnthropic(api_key=api_key)
+    batch = await client.messages.batches.retrieve(batch_id)
+    return {
+        "id": batch.id,
+        "processing_status": batch.processing_status,
+        "request_counts": {
+            "processing": batch.request_counts.processing,
+            "succeeded": batch.request_counts.succeeded,
+            "errored": batch.request_counts.errored,
+            "canceled": batch.request_counts.canceled,
+            "expired": batch.request_counts.expired,
+        },
+        "ended_at": batch.ended_at,
+    }
+
+
+async def get_anthropic_batch_results(batch_id: str) -> dict[str, tuple[bool, str]]:
+    """
+    Fetch and parse a completed batch's results. Returns
+    {custom_id: (succeeded: bool, text_or_error: str)} for every request in
+    the batch -- the caller (the polling task) decodes each custom_id back
+    into (product_id, field_name) via parse_batch_custom_id() and applies
+    succeeded results, or falls back to logic mode for failed ones, exactly
+    like the existing synchronous per-request fallback already does.
+    """
+    api_key = _get_api_key("ANTHROPIC_API_KEY", "anthropic")
+    if not api_key:
+        raise AIGenerationError("ANTHROPIC_API_KEY not configured — add it in Settings")
+    from anthropic import AsyncAnthropic
+
+    client = AsyncAnthropic(api_key=api_key)
+    results: dict[str, tuple[bool, str]] = {}
+    async for entry in await client.messages.batches.results(batch_id):
+        custom_id = entry.custom_id
+        result = entry.result
+        if result.type == "succeeded":
+            try:
+                text = _extract_anthropic_text(result.message.content)
+                results[custom_id] = (True, text)
+            except AIGenerationError as exc:
+                results[custom_id] = (False, str(exc))
+        else:
+            # errored | canceled | expired
+            error_detail = getattr(result, "error", None)
+            results[custom_id] = (False, f"batch request {result.type}: {error_detail}")
+    return results
 
 
 _GEMINI_DEPRECATED: dict[str, str] = {
