@@ -39,6 +39,9 @@ interface Pipeline {
   config: any;
   stats_json: any;
   error_message: string | null;
+  use_batch_processing?: boolean;
+  batch_id?: string | null;
+  batch_submitted_at?: string | null;
   created_at: string;
   updated_at: string;
   step_jobs?: StepJob[];
@@ -88,6 +91,7 @@ const STAGES = [
 function getActiveStageIndex(pl: Pipeline): number {
   if (pl.status === "completed") return 8;
   if (pl.status === "enrich_review") return 2;
+  if (pl.status === "batch_processing") return 3;
   if (pl.status === "review") return 4;
   if (pl.status === "content_review") return 5;
   if (pl.status === "queued" || pl.status === "failed" || pl.status === "cancelled") return -1;
@@ -100,7 +104,7 @@ function getActiveStageIndex(pl: Pipeline): number {
 
 function StageTrail({ pl, onStageClick, selectedStage, actionableStages }: { pl: Pipeline; onStageClick?: (key: string) => void; selectedStage?: string | null; actionableStages?: Set<string> }) {
   const activeIdx = getActiveStageIndex(pl);
-  const isPaused  = ["enrich_review","review","content_review"].includes(pl.status);
+  const isPaused  = ["enrich_review","review","content_review","batch_processing"].includes(pl.status);
   const isFailed  = ["failed","cancelled"].includes(pl.status);
 
   return (
@@ -285,6 +289,32 @@ function RunningSection({ pl }: { pl: Pipeline }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Enrich Review — Substep A (status = enrich_review)
 // ─────────────────────────────────────────────────────────────────────────────
+
+function BatchProcessingSection({ pl }: { pl: Pipeline }) {
+  const submittedAt = pl.batch_submitted_at ? new Date(pl.batch_submitted_at) : null;
+  const elapsedMinutes = submittedAt ? Math.max(0, Math.round((Date.now() - submittedAt.getTime()) / 60000)) : null;
+
+  return (
+    <div className="bg-card border border-amber-500/30 rounded-[10px] p-5">
+      <div className="flex items-center gap-2.5 mb-1.5">
+        <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse inline-block" />
+        <span className="text-[15px] font-medium text-foreground">Batch submitted to Claude</span>
+      </div>
+      <p className="text-[13px] text-muted-foreground mb-4">
+        {pl.stats_json?.total ? `${pl.stats_json.total} product(s) — ` : ""}
+        usually under 1 hour, up to 24h max
+        {submittedAt && elapsedMinutes !== null ? ` — submitted ${elapsedMinutes < 1 ? "just now" : `${elapsedMinutes} min ago`}` : ""}
+      </p>
+      <div className="h-1.5 bg-secondary rounded-full overflow-hidden mb-2">
+        <div className="h-full bg-amber-400 rounded-full animate-pulse" style={{ width: "60%" }} />
+      </div>
+      <p className="text-[12px] text-muted-foreground/70">
+        Pipeline continues automatically once results are ready — no action needed here.
+        Check the Pipeline Log below for progress updates.
+      </p>
+    </div>
+  );
+}
 
 function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void }) {
   const { toast } = useToast();
@@ -1880,6 +1910,7 @@ function FailedSection({ pl, onAction }: { pl: Pipeline; onAction: (a: string) =
 function pageTitle(status: string): string {
   if (status === "running")        return "Pipeline Running";
   if (status === "enrich_review")  return "Review Before Upload";
+  if (status === "batch_processing") return "Processing with Claude";
   if (status === "review")         return "Category Assignment Required";
   if (status === "content_review") return "Review Before Upload";
   if (status === "completed")      return "Pipeline Completed";
@@ -1892,6 +1923,8 @@ function pageTitle(status: string): string {
 function StatusBadge({ status }: { status: string }) {
   if (status === "running")
     return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-violet-500/20 text-violet-300"><span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse inline-block" /> Running</span>;
+  if (status === "batch_processing")
+    return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-amber-500/20 text-amber-300"><span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block" /> Processing batch</span>;
   if (["enrich_review","review","content_review"].includes(status))
     return <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-amber-500/20 text-amber-300"><span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block" /> Waiting for input</span>;
   if (status === "completed")
@@ -1971,7 +2004,7 @@ export default function PipelineDetail() {
   }, [plId, isDemo, demoState]);
 
   const isLive   = pl ? ["running","queued"].includes(pl.status) : false;
-  const isReview = pl ? ["review","enrich_review","content_review"].includes(pl.status) : false;
+  const isReview = pl ? ["review","enrich_review","content_review","batch_processing"].includes(pl.status) : false;
 
   useEffect(() => { fetchPipeline(); return () => { if (pollRef.current) clearInterval(pollRef.current); }; }, [fetchPipeline]);
 
@@ -2108,6 +2141,8 @@ export default function PipelineDetail() {
       )}
 
       {pl.status === "enrich_review" && <EnrichReviewSection pl={pl} onDone={fetchPipeline} />}
+
+      {pl.status === "batch_processing" && <BatchProcessingSection pl={pl} />}
 
       {pl.status === "review" && <CategoryReviewSection pl={pl} onDone={fetchPipeline} />}
 
