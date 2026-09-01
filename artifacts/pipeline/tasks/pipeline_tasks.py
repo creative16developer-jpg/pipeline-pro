@@ -253,6 +253,8 @@ async def _execute_pipeline(pipeline_job_id: int):
                     pl.stats_json = stats
                     pl.updated_at = datetime.now(timezone.utc)
                     await db.commit()
+                    if stats.get("batch_submitted"):
+                        return  # Resumed by the batch-polling task once results are ready
                     if await _is_cancelled(db, pl.id):
                         return
                 else:
@@ -345,11 +347,17 @@ async def _execute_pipeline(pipeline_job_id: int):
         await celery_engine.dispose()
 
 
-async def _run_generate(db, pl, cfg: dict) -> dict:
+async def _run_generate(db, pl, cfg: dict, force_sync: bool = False) -> dict:
     """
     Content generation step — DAG-aware field generation via services.content_service.
     Saves results back to each Product row so the upload step uses them.
     Returns stats dict: {total, ok, fallback, failed}.
+
+    force_sync=True bypasses batch mode entirely, even if pl.use_batch_
+    processing is set -- used by the interactive "Re-generate content"
+    action, where the operator is actively waiting in the UI for
+    immediate feedback on a specific product, not the initial, bulk
+    Generate step where an asynchronous batch actually makes sense.
     """
     from models.models import Product, CsvMapping
     from sqlalchemy import select
@@ -378,7 +386,7 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
     ai_provider = gs.get("ai_provider", "openai")
 
     # ── Import service (no circular dep — service never imports from routers) ──
-    from services.content_service import generate_product, FIELD_ATTR
+    from services.content_service import generate_product, FIELD_ATTR, get_batchable_ai_fields
 
     # ── Build CSV mapping lookup dict ─────────────────────────────────────────
     csv_q = await db.execute(select(CsvMapping))
@@ -396,6 +404,51 @@ async def _run_generate(db, pl, cfg: dict) -> dict:
     ).scalars().all()
 
     total = len(products)
+
+    # Client feedback: full-pipeline batch processing for Claude, at
+    # Anthropic's 50% batch-rate discount, in exchange for asynchronous
+    # turnaround. Confirmed via the reviewed build plan: opt-in per
+    # pipeline (pl.use_batch_processing), OK with the pipeline pausing
+    # while a batch runs. Only submits a batch when there's genuinely
+    # something batchable -- get_batchable_ai_fields already returns {}
+    # when AI is disabled globally or a product has no depth-0 AI-mode
+    # fields, so this naturally no-ops (falls through to the normal
+    # synchronous path below) rather than submitting an empty/pointless
+    # batch for an all-logic template.
+    if pl.use_batch_processing and not force_sync and ai_enabled and ai_provider == "anthropic":
+        from pipeline.ai_generator import submit_anthropic_batch, make_batch_custom_id
+
+        batch_requests: list[dict] = []
+        for product in products:
+            raw = product.raw_data or {}
+            prod_dict = {
+                "name": product.name or "", "sku": product.sku or "",
+                "description": product.description or "", "price": product.price or "0",
+                "site_sku": product.site_sku or "", **raw,
+            }
+            prompts = get_batchable_ai_fields(prod_dict, template)
+            for field_name, prompt in prompts.items():
+                batch_requests.append({
+                    "custom_id": make_batch_custom_id(product.id, field_name),
+                    "prompt": prompt,
+                    "model": gs.get("ai_model") or None,
+                })
+
+        if batch_requests:
+            batch_id = await submit_anthropic_batch(batch_requests)
+            pl.status = "batch_processing"
+            pl.batch_id = batch_id
+            pl.batch_submitted_at = datetime.now(timezone.utc)
+            pl.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            await _plog(db, pl.id, "generate", "info",
+                        f"Batch submitted to Claude — {len(batch_requests)} request(s) "
+                        f"across {total} product(s). Usually completes within 1 hour, "
+                        f"up to 24h max. Pipeline paused until results are ready.")
+            return {"total": total, "ok": 0, "fallback": 0, "failed": 0, "batch_submitted": True}
+        # Nothing batchable (e.g. every field is logic/derive) -- fall
+        # through to the normal path below, same as batch mode being off.
+
     await _plog(db, pl.id, "generate", "info",
                 f"Content generation: {total} products | "
                 f"AI={'on (' + ai_provider + ')' if ai_enabled else 'off (logic only)'}")
@@ -650,6 +703,8 @@ async def _enrich_resume_pipeline(pipeline_job_id: int):
                     pl.stats_json = stats
                     pl.updated_at = datetime.now(timezone.utc)
                     await db.commit()
+                    if stats.get("batch_submitted"):
+                        return  # Resumed by the batch-polling task once results are ready
                     if await _is_cancelled(db, pl.id):
                         return
                 else:
@@ -912,6 +967,8 @@ async def _continue_pipeline(pipeline_job_id: int, from_step: str):
                     pl.stats_json = stats
                     pl.updated_at = datetime.now(timezone.utc)
                     await db.commit()
+                    if stats.get("batch_submitted"):
+                        return  # Resumed by the batch-polling task once results are ready
                     if await _is_cancelled(db, pl.id):
                         return
                 elif from_idx <= 2:
@@ -1177,7 +1234,7 @@ async def _regenerate_content(pipeline_job_id: int):
 
             try:
                 cfg = pl.config or {}
-                stats = await _run_generate(db, pl, cfg)
+                stats = await _run_generate(db, pl, cfg, force_sync=True)
 
                 pl.status = "content_review"
                 pl.current_step = "content_review"
