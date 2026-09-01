@@ -29,6 +29,9 @@ def _pl_dict(pl: PipelineJob, step_jobs: list = None) -> dict:
         "config": pl.config,
         "stats_json": pl.stats_json,
         "error_message": pl.error_message,
+        "use_batch_processing": pl.use_batch_processing,
+        "batch_id": pl.batch_id,
+        "batch_submitted_at": pl.batch_submitted_at.isoformat() if pl.batch_submitted_at else None,
         "created_at": pl.created_at.isoformat() if pl.created_at else None,
         "updated_at": pl.updated_at.isoformat() if pl.updated_at else None,
     }
@@ -58,6 +61,7 @@ class PipelineCreateRequest(BaseModel):
     include_generate: bool = False
     force_rerun: bool = False
     automatic_review_pause: Optional[bool] = None
+    use_batch_processing: bool = False
     process_config: dict = {}
     upload_config: dict = {}
     sync_config: dict = {}
@@ -159,6 +163,7 @@ async def create_pipeline(body: PipelineCreateRequest, db: AsyncSession = Depend
         store_id=body.store_id,
         fetch_job_id=body.fetch_job_id,
         status=initial_status,
+        use_batch_processing=body.use_batch_processing,
         config={
             "include_enrich":   body.include_enrich,
             "include_generate": body.include_generate,

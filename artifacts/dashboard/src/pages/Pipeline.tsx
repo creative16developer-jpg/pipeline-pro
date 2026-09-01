@@ -3,7 +3,7 @@ import { useLocation, useSearch } from "wouter";
 import {
   Play, Zap, ChevronDown, ChevronRight, RotateCcw,
   CloudDownload, Cpu, Upload, ArrowRightLeft, Sparkles,
-  Info, Loader2, AlertTriangle, FileText, Layers, Check, CheckCircle2, Eye, Download, ImageIcon
+  Info, Loader2, AlertTriangle, FileText, Layers, Check, CheckCircle2, Eye, Download, ImageIcon, Clock
 } from "lucide-react";
 import { useStores } from "@/hooks/use-stores";
 import { useToast } from "@/hooks/use-toast";
@@ -391,6 +391,14 @@ export default function Pipeline() {
   const [forceRerun,      setForceRerun]      = useState(false);
   const [automaticReviewPause, setAutomaticReviewPause] = useState(true);
   const [showAdvanced,    setShowAdvanced]    = useState(false);
+  // Client feedback: full-pipeline batch processing for Claude, at
+  // Anthropic's 50% batch-rate discount, in exchange for asynchronous
+  // (usually <1h, up to 24h) turnaround. Confirmed opt-in per pipeline,
+  // deliberately OFF by default -- unlike includeEnrich/includeGenerate
+  // above, this isn't pulled from saved Pipeline Defaults, since the
+  // client specifically wants to choose this deliberately each run
+  // rather than have it silently on by default.
+  const [useBatchProcessing, setUseBatchProcessing] = useState(false);
 
   // Client feedback confirmed live: a CSV-imported pipeline completed
   // "successfully" with every content field (Description, Slug, Focus
@@ -628,6 +636,7 @@ export default function Pipeline() {
         include_generate: includeGenerate,
         force_rerun:      forceRerun,
         automatic_review_pause: automaticReviewPause,
+        use_batch_processing: useBatchProcessing,
         process_config:   { limit: parseInt(processLimit) || 200 },
         upload_config:    { limit: parseInt(uploadLimit) || 200, skip_images: uploadSkipImages },
         sync_config: {
@@ -1037,6 +1046,22 @@ export default function Pipeline() {
               </p>
             </div>
           </div>
+
+          {includeGenerate && (
+            <div className="flex items-start gap-3 p-3 rounded-xl bg-secondary/30 border border-border/40">
+              <Toggle checked={useBatchProcessing} onChange={setUseBatchProcessing} />
+              <div>
+                <p className="text-sm font-medium flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
+                  Use Batch Processing (Claude)
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  50% cheaper AI generation via Claude's Batch API. Usually completes within
+                  an hour, up to 24h max — the pipeline pauses until results are ready.
+                </p>
+              </div>
+            </div>
+          )}
 
           <div className="flex items-start gap-3 p-3 rounded-xl bg-secondary/30 border border-border/40">
             <Toggle checked={forceRerun} onChange={setForceRerun} />
