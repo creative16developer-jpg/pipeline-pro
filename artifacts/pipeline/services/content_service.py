@@ -1069,16 +1069,116 @@ async def _run_ai_with_retry(
 # Core: run one field
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _prepare_field_context(field: str, product: dict, template: dict) -> tuple[str, dict, dict, dict | None]:
+    """
+    Shared setup extracted from run_field: resolves the field's mode,
+    builds its options dict (with target_language injected per the
+    existing exclusion rules), and applies the specs-table lock when
+    configured. Returns (mode, options, product, override_result) --
+    override_result is non-None only when an explicit override value
+    exists for this field, in which case the caller should return it
+    directly without going any further.
+
+    Shared with the new batch-mode prompt builder (get_batchable_ai_
+    fields) below, so both the live-call path and the batch-prompt-
+    building path apply the exact same target_language/specs-lock
+    rules rather than risking the two drifting apart over time.
+    """
+    override = (template.get("overrides") or {}).get(field)
+    if override is not None:
+        return "override", {}, product, {"field": field, "value": str(override), "source": "override", "status": "ok"}
+
+    field_cfg = (template.get("fields") or {}).get(field, {})
+    options = field_cfg.get("options", {})
+    mode = field_cfg.get("mode") or FIELD_DEFAULT_MODE.get(field, "logic")
+
+    gs = template.get("globalSettings") or {}
+    if field not in ("slug", "image_names"):
+        options = {**options, "target_language": gs.get("target_language", "bg")}
+
+    if gs.get("lock_specs_table", False):
+        product = dict(product)  # shallow copy -- don't mutate the caller's dict
+        for raw_key in ("raw_data", "rawData"):
+            if isinstance(product.get(raw_key), dict) and "paramsTable" in product[raw_key]:
+                raw_copy = dict(product[raw_key])
+                raw_copy["paramsTable"] = ""
+                product[raw_key] = raw_copy
+
+    return mode, options, product, None
+
+
+def get_batchable_ai_fields(product: dict, template: dict) -> dict[str, str]:
+    """
+    For Claude Batch Processing: returns {field_name: prompt} for every
+    field in this product's template that's eligible for batching --
+    "ai" mode, AI enabled globally, and depth 0 (no dependencies on any
+    other field). Depth 0 is the deliberate scope for the first version:
+    Anthropic's Batch API requires every request to be fully independent
+    (no live dependency resolution mid-batch is possible), so a
+    dependent AI-mode field (e.g. an AI-mode Meta Title depending on an
+    AI-mode Title) genuinely can't be batched without the real resolved
+    title text first -- those rare cases still fall back to running
+    synchronously, same as before batch mode existed. In practice this
+    covers the common case cleanly, since Title/Description (depth 0)
+    are by far the most commonly AI-enabled fields observed this
+    session, with downstream fields like Meta Title/Focus Keyword
+    typically left on logic mode.
+    """
+    gs = template.get("globalSettings") or {}
+    if not gs.get("ai_enabled", False):
+        return {}
+
+    fields_cfg = template.get("fields") or {}
+
+    def _enabled(f: str) -> bool:
+        return fields_cfg.get(f, {}).get("enabled", True)
+
+    def _mode(f: str) -> str:
+        return fields_cfg.get(f, {}).get("mode") or FIELD_DEFAULT_MODE.get(f, "logic")
+
+    enabled = [f for f in FIELD_LIST if _enabled(f)]
+
+    def _depth(f: str, _chain: frozenset = frozenset()) -> int:
+        if f in _chain:
+            return 0
+        deps = [d for d in FIELD_DEPS.get(f, []) if d in enabled]
+        if not deps:
+            return 0
+        return 1 + max(_depth(d, _chain | {f}) for d in deps)
+
+    from pipeline.ai_generator import _build_prompt
+
+    prompts: dict[str, str] = {}
+    for f in enabled:
+        if _mode(f) != "ai" or _depth(f) != 0:
+            continue
+        mode, options, prod, override_result = _prepare_field_context(f, product, template)
+        if override_result is not None:
+            continue  # explicit override -- nothing to batch, no AI call needed at all
+        prompts[f] = _build_prompt(f, prod, options)
+    return prompts
+
+
 async def run_field(
     field: str,
     product: dict,
     template: dict,
     resolved: dict | None = None,
+    precomputed_ai: dict[str, tuple[bool, str]] | None = None,
 ) -> dict:
     """
     Generate content for a single field.
     template is a plain dict (not Pydantic) with keys: globalSettings, fields, overrides.
     Returns: {field, value, source, status, error?}
+
+    precomputed_ai, when given, is {field: (succeeded, text_or_error)} --
+    results already fetched from a completed Claude Message Batch (see
+    get_batchable_ai_fields above). When this field is "ai" mode and has
+    a precomputed entry, that result is used directly instead of making
+    a live AI call -- this is what lets generate_product() apply batch
+    results through the SAME dependency-aware DAG logic (patch 93) used
+    for a normal synchronous run, rather than needing a separate,
+    parallel result-application code path.
     """
     if resolved is None:
         resolved = {}
@@ -1132,32 +1232,16 @@ async def run_field(
     error_msg: str | None = None
 
     if mode == "ai" and ai_enabled:
-        try:
-            value = await _run_ai_with_retry(field, product, ai_provider, ai_model, options)
-            source = f"ai:{ai_provider}"
-
-            # Sanity check independent of prompt-following: an AI title
-            # response that's suspiciously short is worse than no AI
-            # response at all -- it's a real, silent quality failure that
-            # doesn't raise an exception, so it slips past the normal
-            # try/except fallback entirely. Confirmed live: gemini-2.5-flash
-            # returned single-word/abbreviation fragments ("Skins", "MagCa",
-            # "S26C") for a "concise title" prompt, on a genuinely full raw
-            # product name -- not a code bug, just a model output-quality
-            # issue an improved prompt alone can't fully guarantee against.
-            # Any AI-mode field with a min_chars rule gets this same net;
-            # falls through to the same fallback_strategy handling below.
-            min_ok_chars = rules_preview.get("min_chars") if (rules_preview := VALIDATORS.get(field, {})) else None
-            if min_ok_chars is None and field == "title":
-                min_ok_chars = 15  # well below any real title, well above a bare fragment
-            if min_ok_chars and len(value.strip()) < min_ok_chars:
-                raise RuntimeError(
-                    f"AI response suspiciously short ({len(value.strip())} chars, "
-                    f"expected >= {min_ok_chars}): {value!r}"
-                )
-        except Exception as ai_err:
-            error_msg = str(ai_err)
-            logger.warning(f"[{field}] AI failed, applying '{fallback_strategy}' fallback: {ai_err}")
+        if precomputed_ai is not None and field in precomputed_ai:
+            succeeded, text_or_error = precomputed_ai[field]
+            if succeeded:
+                return {"field": field, "value": text_or_error,
+                         "source": "ai:anthropic:batch", "status": "ok"}
+            # Batch request failed for this field -- apply the same
+            # fallback_strategy handling a live call failure would get,
+            # rather than a separate, parallel failure path.
+            error_msg = text_or_error
+            logger.warning(f"[{field}] Batch AI failed, applying '{fallback_strategy}' fallback: {error_msg}")
             if fallback_strategy == "skip":
                 return {"field": field, "value": "", "source": "none",
                         "status": "skipped", "error": error_msg}
@@ -1165,6 +1249,40 @@ async def run_field(
                 return {"field": field, "value": "", "source": "ai:failed",
                         "status": "ok", "error": error_msg}
             mode = "logic"
+        else:
+            try:
+                value = await _run_ai_with_retry(field, product, ai_provider, ai_model, options)
+                source = f"ai:{ai_provider}"
+
+                # Sanity check independent of prompt-following: an AI title
+                # response that's suspiciously short is worse than no AI
+                # response at all -- it's a real, silent quality failure that
+                # doesn't raise an exception, so it slips past the normal
+                # try/except fallback entirely. Confirmed live: gemini-2.5-flash
+                # returned single-word/abbreviation fragments ("Skins", "MagCa",
+                # "S26C") for a "concise title" prompt, on a genuinely full raw
+                # product name -- not a code bug, just a model output-quality
+                # issue an improved prompt alone can't fully guarantee against.
+                # Any AI-mode field with a min_chars rule gets this same net;
+                # falls through to the same fallback_strategy handling below.
+                min_ok_chars = rules_preview.get("min_chars") if (rules_preview := VALIDATORS.get(field, {})) else None
+                if min_ok_chars is None and field == "title":
+                    min_ok_chars = 15  # well below any real title, well above a bare fragment
+                if min_ok_chars and len(value.strip()) < min_ok_chars:
+                    raise RuntimeError(
+                        f"AI response suspiciously short ({len(value.strip())} chars, "
+                        f"expected >= {min_ok_chars}): {value!r}"
+                    )
+            except Exception as ai_err:
+                error_msg = str(ai_err)
+                logger.warning(f"[{field}] AI failed, applying '{fallback_strategy}' fallback: {ai_err}")
+                if fallback_strategy == "skip":
+                    return {"field": field, "value": "", "source": "none",
+                            "status": "skipped", "error": error_msg}
+                if fallback_strategy == "empty":
+                    return {"field": field, "value": "", "source": "ai:failed",
+                            "status": "ok", "error": error_msg}
+                mode = "logic"
 
     if mode == "derive":
         gen = _DERIVE_GENERATORS.get(field)
@@ -1249,9 +1367,22 @@ async def run_field(
 # Core: generate all fields for one product (DAG-aware)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def generate_product(product: dict, template: dict) -> dict:
+async def generate_product(
+    product: dict,
+    template: dict,
+    precomputed_ai: dict[str, tuple[bool, str]] | None = None,
+) -> dict:
     """
     Generate all enabled fields using DEPENDENCY-DEPTH-ordered execution.
+
+    precomputed_ai, when given, is forwarded to every run_field call --
+    see run_field's own docstring for what it does. Used by Claude Batch
+    Processing: after a batch completes, results get run back through
+    THIS SAME function (not a separate, parallel result-application
+    path), so dependent fields (e.g. logic-mode Meta Title depending on
+    the now-resolved AI-mode Title) correctly see the real batch result
+    via the normal DAG wave/resolved-dict mechanism, exactly as they
+    would for a live, synchronous AI call.
 
     Client feedback confirmed live via screenshot: Title set to "ai"
     mode, but Slug/Focus Keyword/Meta Description set to "logic" mode
@@ -1316,7 +1447,7 @@ async def generate_product(product: dict, template: dict) -> dict:
 
         if logic_group:
             phase_results = await asyncio.gather(
-                *[run_field(f, product, template, resolved) for f in logic_group],
+                *[run_field(f, product, template, resolved, precomputed_ai) for f in logic_group],
                 return_exceptions=True,
             )
             for f, r in zip(logic_group, phase_results):
@@ -1330,7 +1461,7 @@ async def generate_product(product: dict, template: dict) -> dict:
 
         if ai_group:
             phase_results = await asyncio.gather(
-                *[run_field(f, product, template, resolved) for f in ai_group],
+                *[run_field(f, product, template, resolved, precomputed_ai) for f in ai_group],
                 return_exceptions=True,
             )
             for f, r in zip(ai_group, phase_results):
@@ -1343,7 +1474,7 @@ async def generate_product(product: dict, template: dict) -> dict:
                     resolved[f] = r.get("value", "")
 
         for f in derive_group:
-            r = await run_field(f, product, template, resolved)
+            r = await run_field(f, product, template, resolved, precomputed_ai)
             results[f] = r
             resolved[f] = r.get("value", "")
 
