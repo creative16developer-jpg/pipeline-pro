@@ -864,6 +864,143 @@ async def _refresh_fetch_and_continue(pipeline_job_id: int):
     await _continue_pipeline(pipeline_job_id, "process")
 
 
+async def _poll_batch_pipelines():
+    """
+    Checks every pipeline currently paused in "batch_processing" status,
+    polls its Anthropic Message Batch for completion, and for any that
+    have finished, applies the results and resumes the pipeline.
+
+    Client feedback: full-pipeline batch processing for Claude, at
+    Anthropic's 50% batch-rate discount. This is the piece that actually
+    un-pauses a pipeline after patch 114's Generate step submits a batch
+    and pauses -- without this running periodically, a batch-processing
+    pipeline would stay paused forever, since nothing else ever checks
+    on it.
+
+    Runs as a periodic background task (see main.py's startup hook,
+    same pattern as the category-cache pre-warm loop from patch 92).
+    """
+    from database import make_session_factory
+    from models.models import PipelineJob, Product
+    from pipeline.ai_generator import get_anthropic_batch_status, get_anthropic_batch_results, parse_batch_custom_id
+    from services.content_service import generate_product
+    from sqlalchemy import select
+    import json
+    from pathlib import Path
+
+    CelerySession, celery_engine = make_session_factory()
+    resumed_pipeline_ids: list[int] = []
+    try:
+        async with CelerySession() as db:
+            pipelines = (
+                await db.execute(select(PipelineJob).where(PipelineJob.status == "batch_processing"))
+            ).scalars().all()
+
+            for pl in pipelines:
+                if not pl.batch_id:
+                    continue
+                try:
+                    status = await get_anthropic_batch_status(pl.batch_id)
+                except Exception as exc:
+                    print(f"[batch_poll] pipeline {pl.id}: failed to check batch {pl.batch_id} status — {exc}")
+                    continue
+
+                counts = status["request_counts"]
+                if status["processing_status"] != "ended":
+                    print(f"[batch_poll] pipeline {pl.id}: batch {pl.batch_id} still processing "
+                          f"({counts['processing']} pending, {counts['succeeded']} done)")
+                    continue
+
+                print(f"[batch_poll] pipeline {pl.id}: batch {pl.batch_id} ended — "
+                      f"{counts['succeeded']} succeeded, {counts['errored']} errored, "
+                      f"{counts['canceled']} canceled, {counts['expired']} expired. Applying results…")
+                await _plog(db, pl.id, "generate", "info",
+                            f"Batch complete — {counts['succeeded']} succeeded, "
+                            f"{counts['errored'] + counts['canceled'] + counts['expired']} failed. "
+                            f"Applying results and resuming…")
+
+                try:
+                    results = await get_anthropic_batch_results(pl.batch_id)
+                except Exception as exc:
+                    await _plog(db, pl.id, "generate", "error",
+                                f"Failed to fetch batch results — {exc}")
+                    print(f"[batch_poll] pipeline {pl.id}: failed to fetch batch results — {exc}")
+                    continue
+
+                # Group results by product_id, since one product can have
+                # multiple batched fields (e.g. both title and description).
+                by_product: dict[int, dict[str, tuple[bool, str]]] = {}
+                for custom_id, (succeeded, text_or_error) in results.items():
+                    try:
+                        product_id, field_name = parse_batch_custom_id(custom_id)
+                    except ValueError:
+                        continue
+                    by_product.setdefault(product_id, {})[field_name] = (succeeded, text_or_error)
+
+                # Reload the same generation config _run_generate used to submit
+                # this batch, so the DAG re-run here uses identical field modes.
+                gen_cfg = pl.config.get("content_gen_config") if pl.config else None
+                if not gen_cfg:
+                    saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+                    if saved_path.exists():
+                        try:
+                            gen_cfg = json.loads(saved_path.read_text())
+                        except Exception:
+                            gen_cfg = {}
+                    if not gen_cfg:
+                        from routers.content import DEFAULT_CONFIG
+                        gen_cfg = DEFAULT_CONFIG
+                template: dict = gen_cfg if isinstance(gen_cfg, dict) else {}
+
+                from services.content_service import FIELD_ATTR
+
+                applied = 0
+                for product_id, field_results in by_product.items():
+                    product = await db.get(Product, product_id)
+                    if not product:
+                        continue
+                    raw = product.raw_data or {}
+                    prod_dict = {
+                        "name": product.name or "", "sku": product.sku or "",
+                        "description": product.description or "", "price": product.price or "0",
+                        "site_sku": product.site_sku or "", **raw,
+                    }
+                    field_results_out = await generate_product(prod_dict, template, precomputed_ai=field_results)
+                    sources = product.content_source or {}
+                    for field, result in field_results_out.items():
+                        if field not in field_results:
+                            continue  # only apply fields that were actually part of this batch
+                        attr = FIELD_ATTR.get(field)
+                        value = result.get("value", "")
+                        if attr and value:
+                            setattr(product, attr, value)
+                            sources[field] = result.get("source", "logic")
+                    product.content_source = sources
+                    applied += 1
+                await db.commit()
+
+                await _plog(db, pl.id, "generate", "info",
+                            f"Applied batch results to {applied} product(s). Resuming pipeline…")
+
+                pl.status = "running"
+                pl.updated_at = datetime.now(timezone.utc)
+                await db.commit()
+                resumed_pipeline_ids.append(pl.id)
+    finally:
+        await celery_engine.dispose()
+
+    # Continuing each resumed pipeline happens outside the DB session
+    # above (each _continue_pipeline call opens its own), matching how
+    # every other resume path in this file already works. Uses the
+    # exact pipeline IDs resumed in THIS poll cycle (not a re-query),
+    # since batch_id is never cleared after use -- a generic re-query
+    # like "status == running AND batch_id is not null" could wrongly
+    # match a pipeline that used batch mode earlier but is now running
+    # for a completely unrelated, later reason.
+    for pl_id in resumed_pipeline_ids:
+        await _continue_pipeline(pl_id, "review")
+
+
 async def _continue_pipeline(pipeline_job_id: int, from_step: str):
     """Re-execute a cancelled/failed pipeline in-place from a specific step."""
     from database import make_session_factory

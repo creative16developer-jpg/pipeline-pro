@@ -153,8 +153,28 @@ async def lifespan(app: FastAPI):
                 print(f"[main] Category name cache pre-warm failed (non-fatal): {exc}")
             await asyncio.sleep(interval)
 
+    # Client feedback: full-pipeline batch processing for Claude, at
+    # Anthropic's 50% batch-rate discount, in exchange for asynchronous
+    # turnaround. This is the piece that actually un-pauses a pipeline
+    # after the Generate step submits a batch and pauses (patch 114) --
+    # without this running periodically, a batch-processing pipeline
+    # would stay paused forever, since nothing else ever checks on it.
+    # Polls every 2 minutes -- frequent enough to resume promptly once a
+    # batch completes (most finish within an hour per Anthropic's own
+    # docs), not so frequent as to waste resources on what's a
+    # lightweight status check.
+    async def _poll_batch_pipelines_loop():
+        from tasks.pipeline_tasks import _poll_batch_pipelines
+        while True:
+            try:
+                await _poll_batch_pipelines()
+            except Exception as exc:
+                print(f"[main] Batch pipeline poll failed (non-fatal): {exc}")
+            await asyncio.sleep(120)
+
     import asyncio
     asyncio.create_task(_prewarm_category_cache_loop())
+    asyncio.create_task(_poll_batch_pipelines_loop())
 
     yield
 
