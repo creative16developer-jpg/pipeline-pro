@@ -15,7 +15,7 @@ from models.models import PipelineJob, PipelineLog, Job, JobType, Store
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
-ACTIVE_STATUSES = ("running", "review", "enrich_review", "content_review")
+ACTIVE_STATUSES = ("running", "review", "enrich_review", "content_review", "batch_processing")
 
 
 def _pl_dict(pl: PipelineJob, step_jobs: list = None) -> dict:
@@ -896,7 +896,7 @@ async def delete_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
     pl = await db.get(PipelineJob, pl_id)
     if not pl:
         raise HTTPException(404, f"Pipeline #{pl_id} not found")
-    if pl.status in ("running", "review", "enrich_review", "content_review", "queued"):
+    if pl.status in ("running", "review", "enrich_review", "content_review", "batch_processing", "queued"):
         raise HTTPException(400, "Cannot delete an active or queued pipeline — cancel it first")
 
     await db.execute(
