@@ -274,11 +274,18 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
 # ─────────────────────────────────────────────────────────────────────────
 
 def make_batch_custom_id(product_id: int, field_name: str) -> str:
-    return f"{product_id}:{field_name}"
+    # Client feedback confirmed live via a real Anthropic 400 error:
+    # "requests.0.custom_id: String should match pattern
+    # '^[a-zA-Z0-9_-]{1,64}$'" -- a colon was never actually valid here,
+    # only letters/digits/underscore/hyphen are allowed. Underscore is
+    # safe as the separator since product IDs are purely numeric and
+    # never contain an underscore themselves, even though field names
+    # (e.g. meta_description) do.
+    return f"{product_id}_{field_name}"
 
 
 def parse_batch_custom_id(custom_id: str) -> tuple[int, str]:
-    product_id_str, field_name = custom_id.split(":", 1)
+    product_id_str, field_name = custom_id.split("_", 1)
     return int(product_id_str), field_name
 
 
