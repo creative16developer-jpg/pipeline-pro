@@ -239,7 +239,16 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
     resolved_model = _ANTHROPIC_DEPRECATED.get(raw_model, raw_model)
     message = await client.messages.create(
         model=resolved_model,
-        max_tokens=600,
+        # Client feedback confirmed live: "Anthropic response had no
+        # text block (got: ['thinking'])" -- newer Claude models
+        # (including claude-sonnet-5) have adaptive thinking ON BY
+        # DEFAULT, and thinking tokens count against this same
+        # max_tokens budget. 600 left no room for the actual answer
+        # once thinking consumed part (or, for some requests, ALL) of
+        # the budget -- confirmed directly against Anthropic's own
+        # troubleshooting docs, which explicitly recommend raising
+        # max_tokens to leave room for both.
+        max_tokens=4000,
         messages=[{"role": "user", "content": prompt}],
     )
     # Client feedback confirmed live via Pipeline Log: "'ThinkingBlock'
@@ -313,7 +322,12 @@ async def submit_anthropic_batch(requests: list[dict]) -> str:
             "custom_id": req["custom_id"],
             "params": {
                 "model": resolved_model,
-                "max_tokens": 600,
+                # Same fix as _generate_anthropic above -- adaptive
+                # thinking (on by default on newer models) counts
+                # against this budget, and 600 left no room for the
+                # actual text response once thinking consumed part or
+                # all of it.
+                "max_tokens": 4000,
                 "messages": [{"role": "user", "content": req["prompt"]}],
             },
         })
