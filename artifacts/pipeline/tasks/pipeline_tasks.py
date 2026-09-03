@@ -967,9 +967,24 @@ async def _poll_batch_pipelines():
                     }
                     field_results_out = await generate_product(prod_dict, template, precomputed_ai=field_results)
                     sources = product.content_source or {}
+                    # Client feedback confirmed live via a full pipeline
+                    # log: Meta Description and every other dependent
+                    # field (Slug, Meta Title, Short Description, Focus
+                    # Keyword, Tags, Image Alt, Image Names) came back
+                    # missing in WooCommerce, even though the batch
+                    # itself succeeded (6/6, 0 failed). Root cause:
+                    # generate_product() above already correctly
+                    # computes EVERY enabled field through the full DAG,
+                    # using the batch-resolved Title/Description as
+                    # input for anything that depends on them -- but
+                    # this loop was previously SKIPPING every field not
+                    # literally present in the original batch submission
+                    # (field_results), discarding all of that correctly-
+                    # computed dependent-field output before it was ever
+                    # saved. Now saves everything generate_product()
+                    # actually produced, not just the fields that were
+                    # directly part of the batch request.
                     for field, result in field_results_out.items():
-                        if field not in field_results:
-                            continue  # only apply fields that were actually part of this batch
                         attr = FIELD_ATTR.get(field)
                         value = result.get("value", "")
                         if attr and value:
