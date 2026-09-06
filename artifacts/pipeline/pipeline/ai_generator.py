@@ -187,7 +187,7 @@ async def _generate_openai(prompt: str, model: Optional[str]) -> str:
         max_tokens=600,
         temperature=0.7,
     )
-    return (response.choices[0].message.content or "").strip()
+    return _strip_markdown_fence((response.choices[0].message.content or "").strip())
 
 
 _ANTHROPIC_DEPRECATED: dict[str, str] = {
@@ -209,6 +209,27 @@ _ANTHROPIC_DEPRECATED: dict[str, str] = {
 }
 
 
+def _strip_markdown_fence(text: str) -> str:
+    """
+    Strip a leading/trailing ``` or ```html/```json code fence if the model
+    wrapped its answer in one, despite every content prompt explicitly
+    instructing "Return ONLY the HTML/text. No explanation, no markdown."
+    Client feedback confirmed live via WooCommerce SEO screenshot: meta
+    description saved as literal "```html Водоустойчивият кейс..." -- the
+    prompt instruction alone isn't reliably followed by every model/request,
+    the same well-known behavior already worked around for JSON responses
+    in routers/stores.py, just never applied to this content-generation
+    path. Applied defensively to every provider's output here rather than
+    trusting the prompt alone, since a single stray fence silently corrupts
+    a field with no error raised anywhere -- exactly what happened here.
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[a-zA-Z]*\s*\n?", "", stripped)
+        stripped = re.sub(r"\n?```\s*$", "", stripped)
+    return stripped.strip()
+
+
 def _extract_anthropic_text(content: list) -> str:
     """
     Find the actual text block in an Anthropic response's content list.
@@ -218,7 +239,7 @@ def _extract_anthropic_text(content: list) -> str:
     """
     for block in content:
         if getattr(block, "type", None) == "text":
-            return block.text.strip()
+            return _strip_markdown_fence(block.text.strip())
     raise AIGenerationError(
         f"Anthropic response had no text block (got: "
         f"{[getattr(b, 'type', type(b).__name__) for b in content]})"
@@ -442,7 +463,7 @@ async def _generate_gemini(prompt: str, model: Optional[str]) -> str:
     genai.configure(api_key=api_key)
     model_obj = genai.GenerativeModel(resolved_model)
     response = await model_obj.generate_content_async(prompt)
-    return response.text.strip()
+    return _strip_markdown_fence(response.text.strip())
 
 
 # ---------------------------------------------------------------------------
