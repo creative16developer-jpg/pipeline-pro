@@ -347,7 +347,64 @@ async def _execute_pipeline(pipeline_job_id: int):
         await celery_engine.dispose()
 
 
-async def _run_generate(db, pl, cfg: dict, force_sync: bool = False) -> dict:
+def _template_skipping_generated_fields(product, template: dict) -> tuple[dict, list[str]]:
+    """
+    Client feedback confirmed live: navigating back a step (e.g. Enrich ->
+    Process) and continuing forward re-ran Generate from scratch every
+    time -- 9 Anthropic requests to regenerate a SINGLE already-generated
+    product, just from going back and forth, with zero actual content
+    changes in between. Client's own framing: "when generate once just
+    record the data in the product, so this become static information...
+    no need to regenerate them unless you choose to regenerate them or
+    make manual corrections."
+
+    Root cause: _run_generate always called generate_product/
+    get_batchable_ai_fields for every enabled field on every product,
+    with no check for whether that field's column already held a value
+    (from a prior run OR a manual edit in Content Review -- both look
+    identical here, which is exactly the behavior wanted: a manual edit
+    IS a value, so it's equally protected from being silently clobbered
+    by a re-run, without needing a separate manual-edit-tracking
+    mechanism at all).
+
+    Returns a per-product COPY of the template with template["overrides"]
+    populated for any field whose FIELD_ATTR column already has a
+    truthy value, plus the list of field names skipped this way (for
+    logging). Uses the SAME "overrides" mechanism run_field already
+    checks first (before any AI/logic call, source="override") rather
+    than disabling the field outright -- disabling would drop it from
+    generate_product's dependency-depth calculation and its `resolved`
+    dict entirely, which would silently break any OTHER field that
+    depends on this one's value (e.g. an enabled Meta Title needing the
+    real, already-generated Title text). Routing through "overrides"
+    instead keeps the field fully present in the DAG -- correct depth,
+    correct `resolved[field]` value for dependents -- while still
+    costing zero AI calls, exactly like an operator's own manual
+    override already does today.
+
+    An operator's own pre-existing override for a field always wins
+    and is left untouched (never treated as "generated", never
+    reported as skipped -- it was never going to call AI regardless).
+    """
+    import copy as _copy
+    from services.content_service import FIELD_ATTR
+    filtered = _copy.deepcopy(template)
+    overrides = filtered.setdefault("overrides", {})
+    fields_cfg = filtered.get("fields") or {}
+    skipped: list[str] = []
+    for field, attr in FIELD_ATTR.items():
+        if field in overrides:
+            continue  # operator's own explicit override already wins
+        if not fields_cfg.get(field, {}).get("enabled", True):
+            continue  # field disabled entirely -- never runs anyway, not a "skip"
+        existing_value = getattr(product, attr, None)
+        if existing_value:
+            overrides[field] = existing_value
+            skipped.append(field)
+    return filtered, skipped
+
+
+async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regenerate: bool = False) -> dict:
     """
     Content generation step — DAG-aware field generation via services.content_service.
     Saves results back to each Product row so the upload step uses them.
@@ -358,6 +415,14 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False) -> dict:
     action, where the operator is actively waiting in the UI for
     immediate feedback on a specific product, not the initial, bulk
     Generate step where an asynchronous batch actually makes sense.
+
+    force_regenerate=True disables the already-generated-fields skip
+    (see _template_skipping_generated_fields above) -- set by the
+    explicit "Re-generate content" action only. Every other caller (the
+    main pipeline flow, resuming after Enrich Review, and re-entering
+    Generate after navigating back to an earlier step) leaves this False,
+    so already-populated fields are left untouched as static, already-
+    recorded data rather than being silently regenerated on every pass.
     """
     from models.models import Product, CsvMapping
     from sqlalchemy import select
@@ -419,6 +484,7 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False) -> dict:
         from pipeline.ai_generator import submit_anthropic_batch, make_batch_custom_id
 
         batch_requests: list[dict] = []
+        total_skipped_fields = 0
         for product in products:
             raw = product.raw_data or {}
             prod_dict = {
@@ -426,13 +492,22 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False) -> dict:
                 "description": product.description or "", "price": product.price or "0",
                 "site_sku": product.site_sku or "", **raw,
             }
-            prompts = get_batchable_ai_fields(prod_dict, template)
+            product_template = template
+            if not force_regenerate:
+                product_template, skipped = _template_skipping_generated_fields(product, template)
+                total_skipped_fields += len(skipped)
+            prompts = get_batchable_ai_fields(prod_dict, product_template)
             for field_name, prompt in prompts.items():
                 batch_requests.append({
                     "custom_id": make_batch_custom_id(product.id, field_name),
                     "prompt": prompt,
                     "model": gs.get("ai_model") or None,
                 })
+
+        if total_skipped_fields:
+            await _plog(db, pl.id, "generate", "info",
+                        f"Skipping {total_skipped_fields} already-generated field(s) across "
+                        f"{total} product(s) — already recorded, not re-requested.")
 
         if batch_requests:
             batch_id = await submit_anthropic_batch(batch_requests)
@@ -489,8 +564,23 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False) -> dict:
             sources: dict = product.content_source or {}
             prod_failed = False
 
+            # Skip fields that already have a recorded value (from a prior
+            # run, a prior batch, or a manual Content Review edit) unless
+            # the operator explicitly clicked "Re-generate content" -- see
+            # _template_skipping_generated_fields for the full rationale.
+            product_template = template
+            skipped_fields: list[str] = []
+            if not force_regenerate:
+                product_template, skipped_fields = _template_skipping_generated_fields(product, template)
+                if skipped_fields:
+                    await _plog(db, pl.id, "generate", "info",
+                                f"  {product.sku}: skipping already-generated "
+                                f"{', '.join(skipped_fields)} — already recorded")
+
+            sources_before_skip = dict(sources)
+
             # Run all enabled fields via DAG engine
-            results = await generate_product(prod_dict, template)
+            results = await generate_product(prod_dict, product_template)
 
             for field, result in results.items():
                 attr = FIELD_ATTR.get(field)
@@ -505,7 +595,16 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False) -> dict:
                 source = result.get("source", "logic")
                 if value:
                     setattr(product, attr, value)
-                    sources[field] = source
+                    # For a field we skipped ourselves (not the operator's
+                    # own pre-existing override), keep its original
+                    # provenance (e.g. "ai:anthropic:batch") instead of
+                    # overwriting with "override" -- this run genuinely
+                    # didn't regenerate it, so the history of how it was
+                    # ACTUALLY produced is worth preserving for debugging.
+                    if field in skipped_fields and field in sources_before_skip:
+                        sources[field] = sources_before_skip[field]
+                    else:
+                        sources[field] = source
                     if source.startswith("logic:fallback"):
                         err_detail = result.get("error") or "AI call failed"
                         await _plog(db, pl.id, "generate", "warn",
@@ -1386,7 +1485,7 @@ async def _regenerate_content(pipeline_job_id: int):
 
             try:
                 cfg = pl.config or {}
-                stats = await _run_generate(db, pl, cfg, force_sync=True)
+                stats = await _run_generate(db, pl, cfg, force_sync=True, force_regenerate=True)
 
                 pl.status = "content_review"
                 pl.current_step = "content_review"
