@@ -367,36 +367,90 @@ def _template_skipping_generated_fields(product, template: dict) -> tuple[dict, 
     by a re-run, without needing a separate manual-edit-tracking
     mechanism at all).
 
+    CORRECTION (client feedback confirmed live via pipeline log): the
+    very first version of this fix checked raw column truthiness for
+    EVERY field, including "title" (FIELD_ATTR -> "name") and
+    "description". Those two columns are NOT exclusively written by
+    content generation -- job_tasks.py's own fetch/process step writes
+    the raw Sunsky name/description into these same columns the moment
+    a product is first fetched, well before Generate ever runs (see
+    "existing.name = p['name']" there). So a genuinely brand-new,
+    never-generated product already had a truthy "name" and
+    "description" from Process alone, and got incorrectly skipped on
+    its very first Generate pass -- title/description were silently
+    never AI-generated at all for new products, confirmed via a live
+    pipeline log showing "skipping already-generated title,
+    description" on products that had only ever been through Process.
+
+    Fix: "title" and "description" are checked against product.
+    content_source instead -- a dict populated ONLY by _run_generate's
+    own result-application loop (confirmed via grep: zero references
+    to content_source anywhere in job_tasks.py's fetch/process code),
+    so an entry there is genuine proof this field went through actual
+    generation (ai, logic, or derive), never just a side effect of
+    fetching raw source data. Every OTHER field in FIELD_ATTR (slug,
+    meta_title, meta_description, tags, image_alt, image_names,
+    short_description, focus_keyword) has no such collision -- fetch/
+    process never touches any of those columns (confirmed via the same
+    grep) -- so raw column truthiness remains the correct, simpler
+    check for them, and additionally covers manual edits made directly
+    to those columns (which don't update content_source either, but
+    have no raw-fetch value to be confused with in the first place).
+
     Returns a per-product COPY of the template with template["overrides"]
-    populated for any field whose FIELD_ATTR column already has a
-    truthy value, plus the list of field names skipped this way (for
-    logging). Uses the SAME "overrides" mechanism run_field already
-    checks first (before any AI/logic call, source="override") rather
-    than disabling the field outright -- disabling would drop it from
-    generate_product's dependency-depth calculation and its `resolved`
-    dict entirely, which would silently break any OTHER field that
-    depends on this one's value (e.g. an enabled Meta Title needing the
-    real, already-generated Title text). Routing through "overrides"
-    instead keeps the field fully present in the DAG -- correct depth,
-    correct `resolved[field]` value for dependents -- while still
-    costing zero AI calls, exactly like an operator's own manual
-    override already does today.
+    populated for any field found already-recorded by the rule above,
+    plus the list of field names skipped this way (for logging). Uses
+    the SAME "overrides" mechanism run_field already checks first
+    (before any AI/logic call, source="override") rather than disabling
+    the field outright -- disabling would drop it from generate_
+    product's dependency-depth calculation and its `resolved` dict
+    entirely, which would silently break any OTHER field that depends
+    on this one's value (e.g. an enabled Meta Title needing the real,
+    already-generated Title text). Routing through "overrides" instead
+    keeps the field fully present in the DAG -- correct depth, correct
+    `resolved[field]` value for dependents -- while still costing zero
+    AI calls, exactly like an operator's own manual override already
+    does today.
 
     An operator's own pre-existing override for a field always wins
     and is left untouched (never treated as "generated", never
     reported as skipped -- it was never going to call AI regardless).
+
+    KNOWN LIMITATION: a manual edit to title or description specifically
+    (via the Content Review "fields" endpoint) does NOT set content_
+    source, since that endpoint just writes the column directly. Such
+    an edit currently looks identical to "still holds the untouched raw
+    Sunsky value" for these two fields only, and would be regenerated
+    (overwriting the manual edit) on a later Generate re-run. This is a
+    pre-existing gap in that endpoint (it was never tracking provenance
+    for ANY field, not something this fix introduces or worsens for the
+    other 8 fields) -- flagged here rather than silently left unhandled,
+    but not fixed in this change, since it needs its own dedicated
+    provenance write in that endpoint, not a workaround here.
     """
     import copy as _copy
     from services.content_service import FIELD_ATTR
+
+    # Fields whose column doubles as a raw-fetch storage target --
+    # column truthiness alone can't tell "generated" apart from "still
+    # just the raw Sunsky value from Process". Checked via content_source
+    # instead. Every other FIELD_ATTR entry keeps the simpler, original
+    # column-truthiness check.
+    _FETCH_COLLIDES = {"title", "description"}
+
     filtered = _copy.deepcopy(template)
     overrides = filtered.setdefault("overrides", {})
     fields_cfg = filtered.get("fields") or {}
+    sources = product.content_source or {}
     skipped: list[str] = []
     for field, attr in FIELD_ATTR.items():
         if field in overrides:
             continue  # operator's own explicit override already wins
         if not fields_cfg.get(field, {}).get("enabled", True):
             continue  # field disabled entirely -- never runs anyway, not a "skip"
+        if field in _FETCH_COLLIDES:
+            if field not in sources:
+                continue  # no generation record yet -- still just the raw fetched value
         existing_value = getattr(product, attr, None)
         if existing_value:
             overrides[field] = existing_value
