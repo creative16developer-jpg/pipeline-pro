@@ -132,19 +132,51 @@ def _language_instruction(options: dict) -> str:
     bulgarian. For example GoPro, Apple Iphone, Samsung Galaxy aways
     need to be in english, not translated. Input from sunsky is always
     in english."
+
+    CORRECTION (client feedback confirmed live via a generated product):
+    the original exception wording was ambiguous enough that the model
+    over-applied it to an entire raw Sunsky product name -- a genuinely
+    generic, fully-descriptive English phrase with no real brand in it
+    at all ("HB-9 Long Series 8 in 1 Drawing Ruler Hand Account Multi-
+    Function Hollow Flower Edge Filling Template") -- pasting the whole
+    thing verbatim as an untranslated sentence subject and just
+    appending a short Bulgarian phrase after it, for BOTH title and
+    description (content_source confirmed "ai:anthropic:batch" for
+    both -- a genuine generation result, not a fallback). Tightened the
+    wording below to explicitly separate "this specific short token
+    stays in English" from "the surrounding descriptive words also stay
+    in English", with a concrete negative example matching this exact
+    failure shape, so the model has an unambiguous pattern to avoid
+    rather than a rule it can reasonably over-generalize from GoPro/
+    iPhone-style examples to an entire generic product name.
     """
     lang = options.get("target_language", "bg")
     if lang == "en":
         return "Write all content in English."
     return (
         "Write all content in Bulgarian (Cyrillic script), natural and "
-        "fluent for a Bulgarian e-commerce audience. EXCEPTION: brand "
-        "names, model names, and product line names (e.g. GoPro, Apple "
-        "iPhone, Samsung Galaxy, Xiaomi, Honor, FMFXTR) must NEVER be "
-        "translated or transliterated into Cyrillic -- always keep them "
-        "in their original English/Latin form exactly as given in the "
-        "product data, even though the surrounding sentence is in "
-        "Bulgarian."
+        "fluent for a Bulgarian e-commerce audience. EXCEPTION: genuine "
+        "brand names and product line names (e.g. GoPro, Apple iPhone, "
+        "Samsung Galaxy, Xiaomi, Honor, FMFXTR) must NEVER be translated "
+        "or transliterated -- keep them in their original English/Latin "
+        "form exactly as given, even mid-sentence in otherwise-Bulgarian "
+        "text. A short alphanumeric model code (e.g. HB-9, X7, RT-05) may "
+        "also stay as-is.\n"
+        "This exception applies ONLY to that specific token or short "
+        "phrase -- it does NOT mean the surrounding descriptive words "
+        "stay in English too, and it does NOT mean an entire raw product "
+        "name should be left untranslated just because it contains one. "
+        "Many Sunsky product names are long, generic, English marketing "
+        "phrases with no real brand at all (e.g. \"HB-9 Long Series 8 in "
+        "1 Drawing Ruler Hand Account Multi-Function Hollow Flower Edge "
+        "Filling Template\") -- translate every descriptive word in a "
+        "name like that into natural Bulgarian, keeping ONLY the short "
+        "model code (\"HB-9\") as-is. WRONG (do not do this): pasting "
+        "the entire raw English name verbatim as a sentence subject and "
+        "just appending a short Bulgarian phrase after it -- that is "
+        "not a translation, it is an untranslated title with a Bulgarian "
+        "afterthought, and defeats the purpose of writing Bulgarian "
+        "content at all."
     )
 
 
