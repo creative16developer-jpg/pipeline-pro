@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useStores, useCreateStore, useDeleteStore, useTestConnection, useSyncCategories } from "@/hooks/use-stores";
+import { useStores, useCreateStore, useUpdateStore, useDeleteStore, useTestConnection, useSyncCategories } from "@/hooks/use-stores";
 import { Modal } from "@/components/Modal";
-import { Store as StoreIcon, Plus, Trash2, RefreshCw, Link as LinkIcon, AlertCircle } from "lucide-react";
+import { Store as StoreIcon, Plus, Trash2, RefreshCw, Link as LinkIcon, AlertCircle, Pencil } from "lucide-react";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 
@@ -50,6 +50,7 @@ function StoreCard({ store }: { store: any }) {
   const syncCats = useSyncCategories();
   const deleteStore = useDeleteStore();
   const { toast } = useToast();
+  const [isEditOpen, setIsEditOpen] = useState(false);
 
   const handleTest = async () => {
     try {
@@ -91,14 +92,23 @@ function StoreCard({ store }: { store: any }) {
             </div>
           </div>
         </div>
-        <button 
-          onClick={() => {
-            if(confirm("Are you sure you want to delete this store?")) deleteStore.mutate({ id: store.id });
-          }}
-          className="p-2 text-muted-foreground hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setIsEditOpen(true)}
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-lg transition-colors"
+            title="Edit credentials"
+          >
+            <Pencil className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={() => {
+              if(confirm("Are you sure you want to delete this store?")) deleteStore.mutate({ id: store.id });
+            }}
+            className="p-2 text-muted-foreground hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       <div className="space-y-2 mb-6">
@@ -144,7 +154,117 @@ function StoreCard({ store }: { store: any }) {
           Sync
         </button>
       </div>
+
+      <EditStoreModal store={store} isOpen={isEditOpen} onClose={() => setIsEditOpen(false)} />
     </div>
+  );
+}
+
+function EditStoreModal({ store, isOpen, onClose }: { store: any, isOpen: boolean, onClose: () => void }) {
+  const updateStore = useUpdateStore();
+  const { toast } = useToast();
+  const [formData, setFormData] = useState({
+    name: store.name || '', url: store.url || '',
+    consumerKey: '', consumerSecret: '',
+    wpUsername: store.wpUsername || '', wpAppPassword: '',
+  });
+
+  // Re-sync form when a different store's modal is opened (store prop
+  // changes identity between cards) -- otherwise stale values from a
+  // previously-edited store could linger if React reuses this instance.
+  const [lastStoreId, setLastStoreId] = useState(store.id);
+  if (store.id !== lastStoreId) {
+    setLastStoreId(store.id);
+    setFormData({
+      name: store.name || '', url: store.url || '',
+      consumerKey: '', consumerSecret: '',
+      wpUsername: store.wpUsername || '', wpAppPassword: '',
+    });
+  }
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    // Client feedback: "put edit options for the stores" -- specifically
+    // to re-test hdcam.bg's 403 with a fresh, admin-permissioned Consumer
+    // Key/Secret without deleting and recreating the whole store record.
+    //
+    // consumer_key/consumer_secret/wp_app_password are write-only on the
+    // backend (StoreOut never returns the real secret/password, only a
+    // masked, truncated consumer_key -- see schemas.py). So this form
+    // can't show current secret values, and must NOT send an empty
+    // string for any of them just because the field was left blank --
+    // StoreUpdate's PUT handler uses exclude_none, which excludes only
+    // None, not "". Sending "" here would silently overwrite the real,
+    // working secret with an empty one. Only include a secret field in
+    // the payload when the operator actually typed a new value.
+    const payload: Record<string, string> = {
+      name: formData.name,
+      url: formData.url,
+      wpUsername: formData.wpUsername.trim(),
+    };
+    if (formData.consumerKey.trim()) payload.consumerKey = formData.consumerKey.trim();
+    if (formData.consumerSecret.trim()) payload.consumerSecret = formData.consumerSecret.trim();
+    if (formData.wpAppPassword.trim()) payload.wpAppPassword = formData.wpAppPassword.trim();
+
+    updateStore.mutate({ id: store.id, data: payload }, {
+      onSuccess: () => {
+        toast({ title: "Store updated", description: `${formData.name} saved. Click Test to verify the new credentials.` });
+        onClose();
+        setFormData(f => ({ ...f, consumerKey: '', consumerSecret: '', wpAppPassword: '' }));
+      },
+      onError: (e: any) => {
+        toast({ title: "Error updating store", description: e.message, variant: "destructive" });
+      }
+    });
+  };
+
+  const maskedKey = store.consumerKey || '';
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={`Edit ${store.name}`}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Store Name</label>
+          <input required type="text" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Store URL</label>
+          <input required type="url" value={formData.url} onChange={e => setFormData({...formData, url: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Consumer Key</label>
+          <input type="password" value={formData.consumerKey} onChange={e => setFormData({...formData, consumerKey: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" placeholder={maskedKey ? `Current: ${maskedKey} — leave blank to keep` : "ck_..."} />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Consumer Secret</label>
+          <input type="password" value={formData.consumerSecret} onChange={e => setFormData({...formData, consumerSecret: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" placeholder="Leave blank to keep current" />
+        </div>
+
+        <div className="pt-1 space-y-3 p-4 bg-secondary/20 rounded-xl border border-border/50">
+          <div>
+            <p className="text-xs font-medium text-foreground uppercase tracking-wide">WordPress Credentials (for image upload)</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              WP Admin → Users → Profile → Application Passwords → Add New.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">WP Username</label>
+            <input type="text" value={formData.wpUsername} onChange={e => setFormData({...formData, wpUsername: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" placeholder="admin" />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">WP Application Password</label>
+            <input type="password" value={formData.wpAppPassword} onChange={e => setFormData({...formData, wpAppPassword: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" placeholder="Leave blank to keep current" />
+          </div>
+        </div>
+
+        <div className="pt-4 flex justify-end gap-3">
+          <button type="button" onClick={onClose} className="px-5 py-2.5 rounded-xl border border-border hover:bg-secondary font-medium">Cancel</button>
+          <button type="submit" disabled={updateStore.isPending} className="px-6 py-2.5 rounded-xl bg-primary text-primary-foreground font-medium shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all disabled:opacity-50 flex items-center gap-2">
+            {updateStore.isPending ? "Saving..." : "Save Changes"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
