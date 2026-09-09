@@ -153,7 +153,27 @@ async def sync_store_categories(store_id: int, db: AsyncSession = Depends(get_db
         raise HTTPException(404, "Store not found")
     try:
         raw_cats = await woo_client.get_categories(store)
+    except httpx.HTTPStatusError as e:
+        # Client feedback confirmed live: this always reported a hardcoded
+        # 502 "Bad Gateway" even when the REAL cause was e.g. a 403 from
+        # WooCommerce itself (revoked/wrong-permission API keys, or a
+        # host-level security rule blocking the REST API) -- producing a
+        # genuinely self-contradictory message: "HTTP 502 Bad Gateway:
+        # ...403 Forbidden...". 502 implies an infrastructure/gateway
+        # problem, actively misleading when the real issue is API
+        # authorization. Now propagates the actual status WooCommerce (or
+        # whatever's in front of it) returned, so a 403 reads as 403 --
+        # pointing straight at Consumer Key/Secret permissions or a
+        # firewall/security-plugin rule, not a gateway/proxy issue.
+        raise HTTPException(
+            e.response.status_code,
+            f"Failed to fetch categories from WooCommerce: {e}",
+        )
     except Exception as e:
+        # Genuine connectivity failures (DNS, timeout, connection refused,
+        # TLS errors) have no real HTTP response at all -- 502 Bad Gateway
+        # remains the accurate description for these, unlike the case
+        # above where a real (and different) status code was available.
         raise HTTPException(502, f"Failed to fetch categories from WooCommerce: {e}")
 
     # Preserve cached English translations (name_en) across this delete-and-
