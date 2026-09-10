@@ -1471,6 +1471,45 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                         </div>
                       </div>
 
+                      {/* Client feedback: "3 fields missing for review and
+                          possible edit - short description, image alt,
+                          image name" -- short_description was already
+                          saveable via this same PATCH endpoint (a pure
+                          frontend gap); image_alt/image_names needed the
+                          backend schema updated too (see
+                          ProductFieldsUpdate). All three are real,
+                          already-generated columns (confirmed via
+                          ProductOut, which already returns all three) --
+                          this just makes them visible/editable here,
+                          same pattern as the SEO fields above. */}
+                      <div>
+                        <label className="block text-[12px] font-medium text-foreground/70 mb-1">Short Description</label>
+                        <textarea
+                          value={getField(p, "short_description")}
+                          onChange={e => setDraftField(p.id, "short_description", e.target.value)}
+                          rows={2}
+                          className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400 resize-y"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Image Alt Text</label>
+                          <input
+                            value={getField(p, "image_alt")}
+                            onChange={e => setDraftField(p.id, "image_alt", e.target.value)}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">Image Names</label>
+                          <input
+                            value={getField(p, "image_names")}
+                            onChange={e => setDraftField(p.id, "image_names", e.target.value)}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400 font-mono"
+                          />
+                        </div>
+                      </div>
+
                       {hasDraft(p.id) && (
                         <div className="flex items-center gap-2 sticky bottom-0 bg-card/95 backdrop-blur-sm py-2 -mx-4 px-4 border-t border-violet-500/30">
                           <button

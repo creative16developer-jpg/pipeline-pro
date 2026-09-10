@@ -45,6 +45,17 @@ class ProductFieldsUpdate(BaseModel):
     meta_description: Optional[str] = None
     focus_keyword: Optional[str] = None
     tags: Optional[str] = None
+    # Client feedback: Content Review's edit form was missing Short
+    # Description, Image Alt, and Image Name entirely -- short_description
+    # was already accepted here (a pure frontend gap), but image_alt and
+    # image_names were missing from THIS schema too, so even after adding
+    # inputs for them client-side, a save would have silently dropped both
+    # (Pydantic drops fields not declared on the model rather than saving
+    # them) -- both added here to match ProductOut, which already returns
+    # both, confirming they're real, generated columns just never exposed
+    # for editing.
+    image_alt: Optional[str] = None
+    image_names: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
