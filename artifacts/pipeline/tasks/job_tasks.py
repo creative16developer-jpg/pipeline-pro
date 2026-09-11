@@ -132,9 +132,17 @@ def _apply_inventory_mapping(raw: dict, config: Optional[dict]) -> dict:
     null-handling, defaults). Returns a dict with optional 'weight' and
     'dimensions' keys ready to merge into the upload payload.
 
-    Sunsky provides weight in kg and dimensions in cm. Prefers unit/item
-    dimensions (unitWeight/unitLength/unitWidth/unitHeight) as the primary
-    source -- falls back to package (shipping carton) dimensions
+    Sunsky provides weight in kg. Dimensions, despite this function's own
+    prior assumption ("dimensions in cm"), are actually returned in
+    MILLIMETERS -- confirmed live by comparing raw packLength/packWidth/
+    packHeight/unitLength/unitWidth/unitHeight values directly against
+    Sunsky's own product page for the same item: raw values were exactly
+    10x the page's displayed cm figures (e.g. raw unitLength=250 vs the
+    page's own "One Package Size: 25cm..."), while weight fields needed
+    no such correction (raw packWeight=9.800 matched the page's "Carton
+    Weight: 9.80kgs" exactly). Prefers unit/item dimensions
+    (unitWeight/unitLength/unitWidth/unitHeight) as the primary source --
+    falls back to package (shipping carton) dimensions
     (packWeight/packLength/packWidth/packHeight) only if unit data is
     missing.
 
@@ -151,6 +159,14 @@ def _apply_inventory_mapping(raw: dict, config: Optional[dict]) -> dict:
     case showed Weight 9.80kg and Dimensions 470 x 420 x 320 cm in
     WooCommerce -- a bulk carton's numbers, not a single item's, and
     obviously wrong/misleading to a customer reading the product page.
+
+    FOLLOW-UP CORRECTION (client feedback confirmed live, same
+    investigation): switching to unit* alone was NOT sufficient --
+    unit_length/width/height were ALSO found to be in millimeters (raw
+    250/130/120 vs the site's own "25cm*13cm*12cm"), so without this
+    mm->cm fix, the earlier pack->unit priority fix alone would have
+    just produced a smaller-but-still-10x-wrong 250 x 130 x 120 cm
+    instead of the correct 25 x 13 x 12 cm.
     """
     cfg = config or {}
     weight_unit = cfg.get("weight_unit", "kg")
@@ -171,9 +187,10 @@ def _apply_inventory_mapping(raw: dict, config: Optional[dict]) -> dict:
         return kg * 2.20462 if weight_unit == "lbs" else kg
 
     def _conv_dim(raw_val) -> Optional[float]:
-        cm = _to_float(raw_val)
-        if cm is None:
+        mm = _to_float(raw_val)
+        if mm is None:
             return None
+        cm = mm / 10.0
         return cm / 2.54 if dim_unit == "in" else cm
 
     def _resolve(raw_val, conv_fn, null_mode_key: str, default_key: str) -> Optional[str]:
