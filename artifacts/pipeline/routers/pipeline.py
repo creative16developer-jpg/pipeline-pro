@@ -458,6 +458,21 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             "id": p.id,
             "cat_source": getattr(p, "cat_source", "auto"),
             "manual_primary_woo_cat_id": p.manual_primary_woo_cat_id,
+            # BUG FIX (client feedback confirmed live, twice -- the
+            # frontend hydration fix in PipelineDetail.tsx read
+            # p.manual_woo_cats_json to pre-check the category tree for
+            # an already-saved manual override, and was correct once the
+            # JSON-shape bug in that fix was also fixed, but the
+            # checkboxes STILL never showed as checked even after that.
+            # Root cause was here all along, one layer up: this endpoint
+            # already used manual_woo_cats_json server-side just above
+            # to compute manual_cat_name for the label preview, but never
+            # actually included the raw field itself in the response --
+            # so the frontend's p.manual_woo_cats_json was always
+            # undefined, no matter how correct its own parsing logic
+            # was. cat_source and manual_primary_woo_cat_id were already
+            # being sent; this was the one piece missing.
+            "manual_woo_cats_json": p.manual_woo_cats_json,
             "sku": p.sku,
             "name": p.name,
             "description": p.description or "",
