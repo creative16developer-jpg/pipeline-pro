@@ -249,6 +249,7 @@ async def _run_fetch(db, job):
                f"Sunsky returned {len(all_products)} product(s) across {page_count} page(s)")
 
     job.total_items = len(all_products)
+    job.processed_items = 0
     await db.commit()
 
     for i, p in enumerate(all_products):
@@ -428,6 +429,7 @@ async def _run_process(db, job):
         return
 
     job.total_items = len(products)
+    job.processed_items = 0
     await db.commit()
 
     processor = ImageProcessor()
@@ -1014,6 +1016,7 @@ async def _run_upload(db, job):
                    "(categories + attributes) for already-uploaded products")
     else:
         job.total_items = len(products)
+        job.processed_items = 0
         await db.commit()
 
     created_count = updated_count = skipped_count = failed_count = 0
@@ -1969,6 +1972,7 @@ async def _run_sync(db, job):
         # 1. Collect the unique Sunsky category IDs from the target products
         target_products = (await db.execute(_scoped_product_q())).scalars().all()
         job.total_items = len(target_products)
+        job.processed_items = 0
         await db.commit()
 
         needed_cat_ids: set[str] = set()
@@ -2503,9 +2507,17 @@ async def _run_sync(db, job):
 
         # Only set total_items here if the category phase didn't already set it.
         # This avoids the double-count (4 products → total_items=8) that made
-        # the dashboard show "4/8" instead of "4/4".
+        # the dashboard show "4/8" instead of "4/4". processed_items is reset
+        # in the same branch, for the same reason as every other total_items
+        # site in this file (client feedback confirmed live: total=1,
+        # processed=5 on a fresh single-product upload -- a stale count from
+        # an earlier phase/invocation survived because nothing reset it
+        # alongside a freshly-set total). When the category phase already
+        # set total_items, its own processed_items count is still legitimately
+        # accumulating and must NOT be reset out from under it here.
         if not do_categories or not job.total_items:
             job.total_items = len(attr_products)
+            job.processed_items = 0
         await db.commit()
 
         await _log(db, job.id, LogLevel.info,
