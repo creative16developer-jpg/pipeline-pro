@@ -353,6 +353,8 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
 
     by_name: dict[str, str] = {}
     by_cat_id: dict[str, str] = {}
+    cats_json_by_cat_id: dict[str, str] = {}
+    cats_json_by_name: dict[str, str] = {}
     sunsky_name_by_product: dict[int, str] = {}
     sunsky_id_by_product: dict[int, str] = {}
     try:
@@ -418,6 +420,29 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
                 m.sunsky_cat.strip().lower(): (m.woo_cat_name or True)
                 for m in map_rows if m.woo_cat_id
             }
+            # Client feedback confirmed live via a "mapped" (auto) product
+            # (Soup & Stock Pot): the category checkbox tree in Content
+            # Review showed nothing checked, same symptom as the earlier
+            # "manual" override bug -- but this endpoint never exposed the
+            # actual WooCommerce category ID list for the auto-mapped case
+            # at all, only a display NAME (or bare `True`) via by_cat_id/
+            # by_name above. There was nothing for the frontend to hydrate
+            # from, unlike manual_woo_cats_json which already carries a
+            # real ID list. Separate lookups keyed the same way, but
+            # carrying the actual mapping row's woo_cats_json (same
+            # [{id, name}, ...] shape manual overrides already use, so the
+            # frontend's existing parsing logic works unchanged) -- kept
+            # as separate dicts rather than changing by_cat_id/by_name's
+            # existing values, since those are also used elsewhere below
+            # in ways that expect a name-or-True value, not a full row.
+            cats_json_by_cat_id = {
+                m.sunsky_cat_id: m.woo_cats_json
+                for m in map_rows if m.woo_cat_id and m.sunsky_cat_id and m.woo_cats_json
+            }
+            cats_json_by_name = {
+                m.sunsky_cat.strip().lower(): m.woo_cats_json
+                for m in map_rows if m.woo_cat_id and m.woo_cats_json
+            }
             logger.info(f"[content-data] pl={pl_id} store_id={pl.store_id} "
                         f"loaded {len(by_name)} category mappings, "
                         f"looking for: {sorted(cat_names_present)}")
@@ -434,6 +459,16 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             _mapped_val = by_name.get(sunsky_cat_name.strip().lower())
         resolved_woo_cat = _mapped_val if isinstance(_mapped_val, str) else None
         is_mapped = _mapped_val is not None
+
+        # The actual WooCommerce category ID list backing the auto-mapped
+        # name above -- same lookup priority (numeric ID first, name as
+        # fallback) as _mapped_val itself, so this always corresponds to
+        # the SAME mapping row that produced resolved_woo_cat.
+        mapped_cats_json = (
+            cats_json_by_cat_id.get(sunsky_cat_id) if sunsky_cat_id else None
+        ) or (
+            cats_json_by_name.get(sunsky_cat_name.strip().lower()) if sunsky_cat_name else None
+        )
 
         # Manual per-product override takes priority, mirroring the exact
         # same priority job_tasks.py already applies at real Upload time
@@ -473,6 +508,9 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             # was. cat_source and manual_primary_woo_cat_id were already
             # being sent; this was the one piece missing.
             "manual_woo_cats_json": p.manual_woo_cats_json,
+            # Auto-mapped counterpart to the field above -- see the
+            # mapped_cats_json resolution just before this dict is built.
+            "mapped_woo_cats_json": mapped_cats_json,
             "sku": p.sku,
             "name": p.name,
             "description": p.description or "",

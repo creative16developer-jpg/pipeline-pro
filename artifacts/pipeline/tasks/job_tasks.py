@@ -132,11 +132,25 @@ def _apply_inventory_mapping(raw: dict, config: Optional[dict]) -> dict:
     null-handling, defaults). Returns a dict with optional 'weight' and
     'dimensions' keys ready to merge into the upload payload.
 
-    Sunsky provides weight in kg and dimensions in cm. Prefers package
-    (shipping) dimensions (packWeight/packLength/packWidth/packHeight) over
-    unit/item dimensions (unitWeight/unitLength/unitWidth/unitHeight) as the
-    primary source, since package dimensions are what actually ships --
-    falls back to unit dimensions if package data is missing.
+    Sunsky provides weight in kg and dimensions in cm. Prefers unit/item
+    dimensions (unitWeight/unitLength/unitWidth/unitHeight) as the primary
+    source -- falls back to package (shipping carton) dimensions
+    (packWeight/packLength/packWidth/packHeight) only if unit data is
+    missing.
+
+    CORRECTION (client feedback confirmed live via WooCommerce admin
+    screenshot): this previously prioritized pack* over unit*, on the
+    reasoning that "package dimensions are what actually ships." That
+    holds for calculating a SINGLE shipping box's own weight/size, but
+    Sunsky's packWeight/packLength/packWidth/packHeight represent the
+    dimensions of a BULK CARTON packed for wholesale MOQ shipping --
+    often containing many units, not one -- while WooCommerce's per-
+    product weight/dimensions fields represent the INDIVIDUAL item being
+    sold, used both for per-unit shipping calculation and customer-
+    facing product specs. Confirmed live: a small waterproof camera
+    case showed Weight 9.80kg and Dimensions 470 x 420 x 320 cm in
+    WooCommerce -- a bulk carton's numbers, not a single item's, and
+    obviously wrong/misleading to a customer reading the product page.
     """
     cfg = config or {}
     weight_unit = cfg.get("weight_unit", "kg")
@@ -173,10 +187,10 @@ def _apply_inventory_mapping(raw: dict, config: Optional[dict]) -> dict:
             return None  # omit the field entirely
         return ""  # leave_blank -- explicit empty value
 
-    raw_weight = raw.get("packWeight") or raw.get("unitWeight")
-    raw_length = raw.get("packLength") or raw.get("unitLength")
-    raw_width  = raw.get("packWidth")  or raw.get("unitWidth")
-    raw_height = raw.get("packHeight") or raw.get("unitHeight")
+    raw_weight = raw.get("unitWeight") or raw.get("packWeight")
+    raw_length = raw.get("unitLength") or raw.get("packLength")
+    raw_width  = raw.get("unitWidth")  or raw.get("packWidth")
+    raw_height = raw.get("unitHeight") or raw.get("packHeight")
 
     result: dict = {}
 

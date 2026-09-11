@@ -985,9 +985,25 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   };
 
   const getInitialCategoryDraft = (p: any): { woo_cats: WooCatEntry[]; primary_id: number | null } => {
-    if (p?.cat_source === "manual" && p?.manual_woo_cats_json) {
+    // Client feedback confirmed live via a SECOND product (Soup & Stock
+    // Pot, cat_source "mapped" not "manual"): the checkbox tree showed
+    // nothing checked despite a correct auto-mapped category name/badge
+    // -- same symptom as the earlier manual-override bug, but this was
+    // a genuinely separate gap: this whole hydration path only ever
+    // checked manual_woo_cats_json, never an auto-mapped equivalent,
+    // because the backend never exposed one at all until now (see
+    // pipeline.py's content-data endpoint: mapped_woo_cats_json is new,
+    // sourced from the same SunskyCategoryMapping.woo_cats_json a real
+    // upload already uses, not invented here). Both sources share the
+    // exact same [{id, name}, ...] shape, so one shared code path below
+    // handles both instead of duplicating the same parse/ancestor logic
+    // twice for what's conceptually the same "already resolved,
+    // hydrate the checkboxes from it" case.
+    const jsonStr = p?.cat_source === "manual" ? p?.manual_woo_cats_json : p?.mapped_woo_cats_json;
+    const primaryFallback = p?.cat_source === "manual" ? p?.manual_primary_woo_cat_id : null;
+    if (jsonStr) {
       try {
-        const parsed = JSON.parse(p.manual_woo_cats_json);
+        const parsed = JSON.parse(jsonStr);
         // BUG FIX (client feedback confirmed live via direct DB check --
         // the first version of this fix was STILL never checking any
         // boxes even after a genuine rebuild/restart, tracked down to
@@ -1011,12 +1027,12 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
           })));
           return {
             woo_cats,
-            primary_id: p.manual_primary_woo_cat_id ?? parsed[0]?.id ?? null,
+            primary_id: primaryFallback ?? parsed[0]?.id ?? null,
           };
         }
       } catch {
-        // Malformed manual_woo_cats_json -- fall through to empty rather
-        // than crash the row's render.
+        // Malformed JSON -- fall through to empty rather than crash the
+        // row's render.
       }
     }
     return { woo_cats: [], primary_id: null };

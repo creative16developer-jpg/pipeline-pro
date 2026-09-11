@@ -8,6 +8,7 @@ from pipeline import woo_client
 from datetime import datetime, timezone
 import httpx
 import re
+import html
 
 router = APIRouter(prefix="/stores", tags=["stores"])
 
@@ -189,14 +190,25 @@ async def sync_store_categories(store_id: int, db: AsyncSession = Depends(get_db
 
     for c in raw_cats:
         prev = name_en_by_woo_id.get(c["id"])
+        # Client feedback confirmed live via a checkbox tree screenshot:
+        # a category showed as "Soup &amp; Stock Pot" -- a raw, undecoded
+        # HTML entity -- instead of "Soup & Stock Pot". WooCommerce's own
+        # REST API returns category names with HTML entities intact
+        # (a well-known behavior, not a malformed response), and this was
+        # being stored completely as-is with no decoding anywhere. Fixed
+        # once here at the sync/storage boundary rather than patching
+        # every place a category name gets displayed later, so the
+        # checkbox tree, category labels, and anything else reading
+        # WooCategory.name all get clean text automatically.
+        clean_name = html.unescape(c["name"])
         # Only reuse the cached translation if the underlying name hasn't
         # changed since it was translated -- a renamed category should be
         # retranslated, not keep a stale translation of its old text.
-        carried_name_en = prev[1] if prev and prev[0] == c["name"] else None
+        carried_name_en = prev[1] if prev and prev[0] == clean_name else None
         cat = WooCategory(
             store_id=store_id,
             woo_id=c["id"],
-            name=c["name"],
+            name=clean_name,
             name_en=carried_name_en,
             slug=c["slug"],
             parent_id=c.get("parent") or None,
@@ -229,7 +241,7 @@ async def create_store_category(store_id: int, body: NewCategoryRequest, db: Asy
     cat = WooCategory(
         store_id=store_id,
         woo_id=created["id"],
-        name=created["name"],
+        name=html.unescape(created["name"]),
         slug=created.get("slug", ""),
         parent_id=created.get("parent") or None,
         count=0,
