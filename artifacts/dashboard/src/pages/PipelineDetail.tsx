@@ -956,6 +956,34 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
     return m;
   }, [storeCats]);
 
+  // Client feedback: "now its checked but parent category also should be
+  // checked" -- checking (or hydrating) a leaf/child category should
+  // also include its full ancestor chain, matching how an auto-mapped
+  // Sunsky category resolution already saves the complete path (main +
+  // sub + grandchild) together, rather than requiring the operator to
+  // separately click every level by hand. Shared between hydrating an
+  // already-saved single-entry override (getInitialCategoryDraft) and a
+  // fresh toggle (toggleDraftCategory) so both stay consistent -- an
+  // old save that only captured the leaf will show its ancestors as
+  // checked here too, not just newly-made selections going forward.
+  const withAncestors = (entries: WooCatEntry[]): WooCatEntry[] => {
+    const byId = new Map(storeCats.map(o => [o.id, o]));
+    const seen = new Set(entries.map(e => e.id));
+    const result = [...entries];
+    for (const entry of entries) {
+      let node = byId.get(entry.id);
+      while (node?.parent_id && byId.has(node.parent_id)) {
+        const parent = byId.get(node.parent_id)!;
+        if (!seen.has(parent.id)) {
+          seen.add(parent.id);
+          result.unshift({ id: parent.id, name: parent.name });
+        }
+        node = parent;
+      }
+    }
+    return result;
+  };
+
   const getInitialCategoryDraft = (p: any): { woo_cats: WooCatEntry[]; primary_id: number | null } => {
     if (p?.cat_source === "manual" && p?.manual_woo_cats_json) {
       try {
@@ -977,13 +1005,13 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
         // needed at all beyond a defensive name fallback for older/
         // malformed entries that might be missing it.
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const woo_cats: WooCatEntry[] = parsed.map((c: any) => ({
+          const woo_cats: WooCatEntry[] = withAncestors(parsed.map((c: any) => ({
             id: c.id,
             name: c.name ?? catNameById.get(c.id) ?? `#${c.id}`,
-          }));
+          })));
           return {
             woo_cats,
-            primary_id: p.manual_primary_woo_cat_id ?? woo_cats[0]?.id ?? null,
+            primary_id: p.manual_primary_woo_cat_id ?? parsed[0]?.id ?? null,
           };
         }
       } catch {
@@ -1021,7 +1049,9 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
     setCategoryDraft(prev => {
       const cur = prev[pid] ?? getInitialCategoryDraft(allProducts.find(pr => pr.id === pid));
       const exists = cur.woo_cats.some(c => c.id === opt.id);
-      const woo_cats = exists ? cur.woo_cats.filter(c => c.id !== opt.id) : [...cur.woo_cats, { id: opt.id, name: opt.name }];
+      const woo_cats = exists
+        ? cur.woo_cats.filter(c => c.id !== opt.id)
+        : withAncestors([...cur.woo_cats, { id: opt.id, name: opt.name }]);
       // The most-recently-added (or, when removing the primary, the last
       // remaining) selection becomes primary -- matches the client's
       // "the last one need to be primary" request without requiring an
