@@ -959,11 +959,31 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const getInitialCategoryDraft = (p: any): { woo_cats: WooCatEntry[]; primary_id: number | null } => {
     if (p?.cat_source === "manual" && p?.manual_woo_cats_json) {
       try {
-        const ids = JSON.parse(p.manual_woo_cats_json);
-        if (Array.isArray(ids) && ids.length > 0) {
+        const parsed = JSON.parse(p.manual_woo_cats_json);
+        // BUG FIX (client feedback confirmed live via direct DB check --
+        // the first version of this fix was STILL never checking any
+        // boxes even after a genuine rebuild/restart, tracked down to
+        // this exact line): manual_woo_cats_json is actually stored as
+        // an array of {id, name} objects -- e.g. [{"id": 1859, "name":
+        // "..."}] -- confirmed via psql, NOT a plain array of numeric
+        // IDs as originally assumed here. The original code did
+        // `ids.map((id: number) => ({ id, name: catNameById.get(id)... }))`,
+        // treating each array element as a raw number; since each
+        // element was actually an object, catNameById.get(object) always
+        // returned undefined and `id` itself was never a real matching
+        // number against the tree's option IDs -- so nothing could ever
+        // render as checked, matching exactly what was reported. Each
+        // entry already matches WooCatEntry's shape directly; no mapping
+        // needed at all beyond a defensive name fallback for older/
+        // malformed entries that might be missing it.
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const woo_cats: WooCatEntry[] = parsed.map((c: any) => ({
+            id: c.id,
+            name: c.name ?? catNameById.get(c.id) ?? `#${c.id}`,
+          }));
           return {
-            woo_cats: ids.map((id: number) => ({ id, name: catNameById.get(id) ?? `#${id}` })),
-            primary_id: p.manual_primary_woo_cat_id ?? ids[0] ?? null,
+            woo_cats,
+            primary_id: p.manual_primary_woo_cat_id ?? woo_cats[0]?.id ?? null,
           };
         }
       } catch {
