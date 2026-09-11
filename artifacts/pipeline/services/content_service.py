@@ -230,6 +230,65 @@ def _get_brand(specs: dict) -> str:
     )
 
 
+def _levenshtein(a: str, b: str) -> int:
+    """Plain edit distance, no external dependency. Only ever called on
+    short brand-length tokens (see _fix_brand_spelling), so the O(n*m)
+    DP table here is negligible cost regardless."""
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb))
+        prev = cur
+    return prev[-1]
+
+
+def _fix_brand_spelling(text: str, product: dict) -> str:
+    """Client feedback confirmed live via a generated product (PU760T):
+    the real brand, confirmed correct in both raw Sunsky data
+    (raw_data.brandName) and the raw Sunsky product name, is "PULUZ" --
+    the AI-generated description (content_source: "ai:anthropic", a
+    genuine success, not a fallback) instead read "PULYZ" throughout.
+    Not a translation-instruction ambiguity like the earlier Bulgarian
+    fix -- the model wasn't choosing to translate or not, it simply
+    mis-transcribed one character of a short proper noun it should have
+    copied verbatim. An improved prompt can reduce this kind of slip
+    but can't reliably guarantee against it, the same way the existing
+    AI-title-too-short sanity check above acknowledges prompt-following
+    alone can't be fully guaranteed -- so this corrects it in the
+    output directly rather than relying on wording alone.
+
+    Scans the generated text for word-like tokens within a small edit
+    distance of the product's own known-correct brand name (from the
+    same raw specs table _get_brand already reads elsewhere in this
+    file) and replaces a near-miss with the correct spelling. Distance
+    capped at 2 and length capped within 1 character of the real
+    brand's length specifically to avoid false-positive corrections on
+    unrelated short words that happen to share some letters -- brand
+    names are typically distinctive enough that this stays safe, and
+    an exact case-insensitive match is left untouched (nothing to fix).
+    """
+    raw = _get_raw(product)
+    specs = _parse_params_table(raw.get("paramsTable", ""))
+    brand = _get_brand(specs).strip()
+    if not brand or len(brand) < 3 or not text:
+        return text
+
+    def _repl(m: "re.Match") -> str:
+        word = m.group(0)
+        if word.lower() == brand.lower():
+            return word  # already correct
+        if abs(len(word) - len(brand)) > 1:
+            return word
+        if _levenshtein(word.lower(), brand.lower()) <= 2:
+            return brand
+        return word
+
+    return re.sub(r"[A-Za-z][A-Za-z0-9]*", _repl, text)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Validation engine
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1235,6 +1294,7 @@ async def run_field(
         if precomputed_ai is not None and field in precomputed_ai:
             succeeded, text_or_error = precomputed_ai[field]
             if succeeded:
+                text_or_error = _fix_brand_spelling(text_or_error, product)
                 return {"field": field, "value": text_or_error,
                          "source": "ai:anthropic:batch", "status": "ok"}
             # Batch request failed for this field -- apply the same
@@ -1252,6 +1312,7 @@ async def run_field(
         else:
             try:
                 value = await _run_ai_with_retry(field, product, ai_provider, ai_model, options)
+                value = _fix_brand_spelling(value, product)
                 source = f"ai:{ai_provider}"
 
                 # Sanity check independent of prompt-following: an AI title
