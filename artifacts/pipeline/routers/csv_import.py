@@ -332,7 +332,15 @@ async def upload_csv(
             existing.site_sku = r["site_sku"] or existing.site_sku
             existing.fetch_job_id = job.id
             existing.status = M.ProductStatus.pending
-            existing.woo_product_id = None
+            # woo_product_id moved to ProductStoreListing, scoped per
+            # (product, store) -- see job_tasks.py's ProductStoreListing
+            # comment for the full rationale. CSV import jobs have no
+            # store_id at all (store_id=None above), so there's no
+            # specific store's listing to reset here; setting status to
+            # pending is enough to trigger re-verification the next time
+            # Upload actually runs for whichever store targets this
+            # product, which already checks per-store via a live
+            # WooCommerce SKU lookup regardless of any cached ID.
             existing.error_message = None
             if r["price"] is not None:
                 existing.price = r["price"]

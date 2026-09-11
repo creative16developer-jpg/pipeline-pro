@@ -30,6 +30,14 @@ class WooCatItem(BaseModel):
 class ProductCategoriesUpdate(BaseModel):
     woo_cats: list[WooCatItem] = []
     primary_woo_cat_id: Optional[int] = None
+    # Client feedback confirmed live (multi-store test): a manually-chosen
+    # category references a SPECIFIC store's WooCommerce category IDs --
+    # meaningless (different numeric IDs, even for "the same" category by
+    # name) on a different store. Previously saved directly on Product as
+    # a single global value; now scoped per (product, store) via
+    # ProductStoreListing, so store_id must be supplied by the caller
+    # (Content Review already knows which store its own pipeline targets).
+    store_id: int
 
 
 class ProductFieldsUpdate(BaseModel):
@@ -175,17 +183,29 @@ async def update_product_categories(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Set a manual WooCommerce category override on a product.
-    Sets cat_source='manual' — upload phase will always use this override
-    instead of the store-wide SunskyCategoryMapping rule.
+    Set a manual WooCommerce category override on a product, scoped to a
+    specific store. Sets cat_source='manual' for that store's listing --
+    upload phase will always use this override instead of the store-wide
+    SunskyCategoryMapping rule, for uploads to THIS store specifically.
     """
     product = await db.get(Product, product_id)
     if not product:
         raise HTTPException(404, "Product not found")
 
-    product.manual_woo_cats_json = json.dumps([{"id": c.id, "name": c.name} for c in body.woo_cats])
-    product.manual_primary_woo_cat_id = body.primary_woo_cat_id or (body.woo_cats[0].id if body.woo_cats else None)
-    product.cat_source = "manual"
+    from models.models import ProductStoreListing
+    listing = (await db.execute(
+        select(ProductStoreListing).where(
+            ProductStoreListing.product_id == product_id,
+            ProductStoreListing.store_id == body.store_id,
+        )
+    )).scalar_one_or_none()
+    if listing is None:
+        listing = ProductStoreListing(product_id=product_id, store_id=body.store_id)
+        db.add(listing)
+
+    listing.manual_woo_cats_json = json.dumps([{"id": c.id, "name": c.name} for c in body.woo_cats])
+    listing.manual_primary_woo_cat_id = body.primary_woo_cat_id or (body.woo_cats[0].id if body.woo_cats else None)
+    listing.cat_source = "manual"
     await db.commit()
     await db.refresh(product)
 
@@ -196,16 +216,28 @@ async def update_product_categories(
 @router.delete("/{product_id}/categories/override")
 async def clear_product_category_override(
     product_id: int,
+    store_id: int,
     db: AsyncSession = Depends(get_db),
 ):
-    """Remove manual category override — product returns to auto-mapping."""
+    """Remove manual category override for a specific store — that
+    store's listing returns to auto-mapping. Other stores' overrides (if
+    any) for this same product are untouched."""
     product = await db.get(Product, product_id)
     if not product:
         raise HTTPException(404, "Product not found")
-    product.manual_woo_cats_json = None
-    product.manual_primary_woo_cat_id = None
-    product.cat_source = "auto"
-    await db.commit()
+
+    from models.models import ProductStoreListing
+    listing = (await db.execute(
+        select(ProductStoreListing).where(
+            ProductStoreListing.product_id == product_id,
+            ProductStoreListing.store_id == store_id,
+        )
+    )).scalar_one_or_none()
+    if listing is not None:
+        listing.manual_woo_cats_json = None
+        listing.manual_primary_woo_cat_id = None
+        listing.cat_source = "auto"
+        await db.commit()
     return {"ok": True}
 
 

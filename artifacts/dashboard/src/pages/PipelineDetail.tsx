@@ -1103,7 +1103,13 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
       const r = await fetch(`/api/products/${pid}/categories`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ woo_cats: draft.woo_cats, primary_woo_cat_id: draft.primary_id }),
+        // Client feedback confirmed live (multi-store test): a manually-
+        // chosen category references THIS pipeline's own store's
+        // WooCommerce category IDs specifically -- meaningless on a
+        // different store -- so store_id must be sent; the backend now
+        // requires it to know which store's listing to save the
+        // override against (ProductCategoriesUpdate.store_id).
+        body: JSON.stringify({ woo_cats: draft.woo_cats, primary_woo_cat_id: draft.primary_id, store_id: pl.store_id }),
       });
       if (!r.ok) throw new Error(await r.text());
       const primaryCat = draft.woo_cats.find(c => c.id === draft.primary_id) ?? draft.woo_cats[draft.woo_cats.length - 1];

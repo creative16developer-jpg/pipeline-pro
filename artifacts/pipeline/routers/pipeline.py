@@ -454,6 +454,24 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         has_description = bool(p.description)
         sunsky_cat_name = sunsky_name_by_product.get(p.id, "")
         sunsky_cat_id = sunsky_id_by_product.get(p.id, "")
+        # Client feedback confirmed live (multi-store test): manual
+        # category override moved to ProductStoreListing, scoped per
+        # (product, store) -- a manually-chosen category references a
+        # SPECIFIC store's WooCommerce category IDs, meaningless on a
+        # different store. Fetched once per product here, scoped to
+        # THIS pipeline's own store, used for every manual-override read
+        # below instead of the old global p.manual_woo_cats_json /
+        # p.manual_primary_woo_cat_id / p.cat_source columns.
+        from models.models import ProductStoreListing as _PSL_cd
+        _listing_cd = (await db.execute(
+            select(_PSL_cd).where(
+                _PSL_cd.product_id == p.id,
+                _PSL_cd.store_id == pl.store_id,
+            )
+        )).scalar_one_or_none()
+        _cd_cat_source = _listing_cd.cat_source if _listing_cd else "auto"
+        _cd_manual_cats_json = _listing_cd.manual_woo_cats_json if _listing_cd else None
+        _cd_manual_primary_id = _listing_cd.manual_primary_woo_cat_id if _listing_cd else None
         _mapped_val = by_cat_id.get(sunsky_cat_id) if sunsky_cat_id else None
         if _mapped_val is None and sunsky_cat_name:
             _mapped_val = by_name.get(sunsky_cat_name.strip().lower())
@@ -478,10 +496,10 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         # correctly. Client feedback item #8: "to be able to edit all
         # details."
         manual_cat_name = None
-        if getattr(p, "cat_source", None) == "manual" and p.manual_woo_cats_json:
+        if _cd_cat_source == "manual" and _cd_manual_cats_json:
             try:
-                _manual_cats = json.loads(p.manual_woo_cats_json)
-                _match = next((c for c in _manual_cats if c.get("id") == p.manual_primary_woo_cat_id), None)
+                _manual_cats = json.loads(_cd_manual_cats_json)
+                _match = next((c for c in _manual_cats if c.get("id") == _cd_manual_primary_id), None)
                 manual_cat_name = (_match or (_manual_cats[0] if _manual_cats else {})).get("name")
             except Exception:
                 pass
@@ -491,8 +509,8 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
 
         product_list.append({
             "id": p.id,
-            "cat_source": getattr(p, "cat_source", "auto"),
-            "manual_primary_woo_cat_id": p.manual_primary_woo_cat_id,
+            "cat_source": _cd_cat_source,
+            "manual_primary_woo_cat_id": _cd_manual_primary_id,
             # BUG FIX (client feedback confirmed live, twice -- the
             # frontend hydration fix in PipelineDetail.tsx read
             # p.manual_woo_cats_json to pre-check the category tree for
@@ -507,7 +525,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             # undefined, no matter how correct its own parsing logic
             # was. cat_source and manual_primary_woo_cat_id were already
             # being sent; this was the one piece missing.
-            "manual_woo_cats_json": p.manual_woo_cats_json,
+            "manual_woo_cats_json": _cd_manual_cats_json,
             # Auto-mapped counterpart to the field above -- see the
             # mapped_cats_json resolution just before this dict is built.
             "mapped_woo_cats_json": mapped_cats_json,

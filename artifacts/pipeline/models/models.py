@@ -576,3 +576,53 @@ class InventoryMappingConfig(Base):
     updated_at     = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     store = relationship("Store")
+
+
+class ProductStoreListing(Base):
+    """Per-(product, store) WooCommerce identity and manual category
+    override -- previously these lived directly on Product as single,
+    global columns (woo_product_id, manual_woo_cats_json,
+    manual_primary_woo_cat_id, cat_source), which worked only as long
+    as a product was ever uploaded to exactly one store.
+
+    Client feedback confirmed live via a two-store test (the SAME
+    products, PU760T and TBD0606768701, already uploaded successfully
+    to hdcam.bg): uploading them to a SECOND, different store failed --
+    WordPress media IDs and the WooCommerce product ID cached from the
+    FIRST store were being incorrectly reused against the second
+    store's completely separate WooCommerce installation, where those
+    IDs don't exist ("woocommerce_product_invalid_image_id",
+    "woocommerce_rest_product_invalid_id"). Client confirmed selling
+    the same product across multiple different stores is a genuine,
+    ongoing need, not an edge case -- so this needed a real per-store
+    identity, not a single value shared across every store a product
+    happens to be listed on.
+
+    manual_woo_cats_json/manual_primary_woo_cat_id/cat_source moved
+    here for the identical reason, flagged in the same investigation:
+    a manually-chosen category references a specific store's
+    WooCommerce category IDs, which are meaningless (different
+    numeric IDs, even for "the same" category by name) on a different
+    store's WooCommerce installation.
+
+    The old Product columns are left in place, unused, rather than
+    dropped -- see migrate_product_store_listings.sql for the backfill
+    that seeds this table from them for already-uploaded products.
+    """
+    __tablename__ = "product_store_listings"
+    __table_args__ = (UniqueConstraint("product_id", "store_id"),)
+
+    id                        = Column(Integer, primary_key=True, index=True)
+    product_id                = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"),
+                                        nullable=False, index=True)
+    store_id                  = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"),
+                                        nullable=False, index=True)
+    woo_product_id            = Column(Integer, nullable=True, index=True)
+    manual_woo_cats_json      = Column(Text, nullable=True)
+    manual_primary_woo_cat_id = Column(Integer, nullable=True)
+    cat_source                = Column(String(20), nullable=False, default="auto")
+    created_at                = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at                = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    product = relationship("Product")
+    store = relationship("Store")

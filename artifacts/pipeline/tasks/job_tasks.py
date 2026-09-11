@@ -57,6 +57,46 @@ def _save_cat_cache(entries: dict[str, dict]) -> None:
         print(f"[cat_cache] Could not save: {e}")
 
 
+# ── Per-(product, store) WooCommerce identity ───────────────────────────────
+# Client feedback confirmed live: the same products, already uploaded to one
+# store, failed when uploaded to a SECOND, different store -- the old single
+# Product.woo_product_id column (and manual_woo_cats_json/
+# manual_primary_woo_cat_id/cat_source alongside it) could only ever hold one
+# store's values, so a second store's upload incorrectly reused the first
+# store's WooCommerce product ID and image references, which don't exist
+# there. Client confirmed selling the same product across multiple stores is
+# a real, ongoing need. See ProductStoreListing in models.py for the full
+# rationale and the new table these two helpers wrap -- every one of this
+# file's ~18 former product.woo_product_id / product.manual_woo_cats_json /
+# product.manual_primary_woo_cat_id / product.cat_source reads and writes now
+# goes through a listing scoped to (product_id, store_id) instead.
+
+async def _get_listing(db, product_id: int, store_id: int):
+    from models.models import ProductStoreListing
+    from sqlalchemy import select as _sel_listing
+    return (await db.execute(
+        _sel_listing(ProductStoreListing).where(
+            ProductStoreListing.product_id == product_id,
+            ProductStoreListing.store_id == store_id,
+        )
+    )).scalar_one_or_none()
+
+
+async def _get_or_create_listing(db, product_id: int, store_id: int):
+    """Like _get_listing, but creates (and flushes, so it's visible to
+    later queries in the SAME transaction) an empty listing row if none
+    exists yet for this (product, store) pair -- used at the points that
+    are about to WRITE a store-specific value (a fresh upload, a manual
+    category save) rather than just read one."""
+    listing = await _get_listing(db, product_id, store_id)
+    if listing is None:
+        from models.models import ProductStoreListing
+        listing = ProductStoreListing(product_id=product_id, store_id=store_id, cat_source="auto")
+        db.add(listing)
+        await db.flush()
+    return listing
+
+
 async def _execute_job(job_id: int):
     import sys
     from pathlib import Path
@@ -331,10 +371,18 @@ async def _run_fetch(db, job):
                     pass  # no image update needed
 
                 if changed_fields:
-                    # If the product was already uploaded, reset it so upload re-runs
+                    # If the product was already uploaded, reset it so upload re-runs.
+                    # Client feedback confirmed live (multi-store test): woo_product_id
+                    # is now per-(product, store) via ProductStoreListing, not a single
+                    # global column -- only reset THIS fetch job's own store's listing;
+                    # any other store this product may also be listed on is untouched
+                    # here (a source-data change doesn't know about every store a
+                    # product happens to be sold on beyond the one currently fetching).
                     if existing.status == ProductStatus.uploaded:
                         existing.status = ProductStatus.pending
-                        existing.woo_product_id = None
+                        _listing = await _get_listing(db, existing.id, job.store_id)
+                        if _listing is not None:
+                            _listing.woo_product_id = None
                     existing.raw_data = raw_data
                     existing.fetch_job_id = job.id
                     await _log(db, job.id, LogLevel.info,
@@ -775,7 +823,21 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                   f"entries: {list(uploaded_cache.keys())}")
 
             for img in processed_images:
-                cache_key = img.original_url or ""
+                # Client feedback confirmed live: the SAME product
+                # (globally shared across stores, unique by sunsky_id --
+                # confirmed earlier in this investigation) uploaded fine
+                # to hdcam.bg, then failed on a second, different store
+                # with "woocommerce_product_invalid_image_id: #21836 is
+                # an invalid identifier for image." Root cause: this
+                # cache key was just the Sunsky source URL, with NO
+                # store-scoping at all -- WordPress media attachment IDs
+                # are specific to a single WordPress installation, never
+                # portable across different sites, so a media ID cached
+                # from hdcam.bg's own media library is meaningless (and
+                # gets correctly rejected) on any other site's WooCommerce.
+                # Prefixing with store.id scopes each cache entry to the
+                # exact site it was actually uploaded to.
+                cache_key = f"{store.id}:{img.original_url}" if img.original_url else ""
                 cached = uploaded_cache.get(cache_key) if cache_key else None
                 print(f"[_resolve_product_images] {product.sku} pos={img.position}: "
                       f"original_url={cache_key!r} → {'CACHE HIT' if cached else 'cache miss'}")
@@ -788,18 +850,20 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                                f"    pos={img.position} → reusing WP media from product cache (already uploaded in a previous run)")
                     continue
 
-                # Review 3, item #4: "photos uploaded twice." Fast-path
-                # for the same-Image-row case (re-upload/re-sync without
-                # re-running Process) -- the product-level cache above
-                # is the primary, durable check; this covers the case
-                # where the row itself already has the info too.
-                if img.wp_media_url and img.woo_image_id:
-                    images.append({"id": img.woo_image_id, "src": img.wp_media_url})
-                    if cache_key:
-                        uploaded_cache[cache_key] = {"wp_url": img.wp_media_url, "woo_image_id": img.woo_image_id}
-                    await _log(db, job.id, LogLevel.debug,
-                               f"    pos={img.position} → reusing existing WP media #{img.woo_image_id} (already uploaded)")
-                    continue
+                # NOTE: a secondary fast-path here previously trusted
+                # img.wp_media_url/img.woo_image_id directly off the
+                # Image row itself, bypassing the cache-key check above
+                # entirely. Removed: the Image model has no store_id of
+                # its own to check against, so this path could NEVER be
+                # made safe against the same cross-store staleness just
+                # fixed above -- e.g. Process being skipped (no fresh
+                # Image rows created) on a second store would have left
+                # this old, wrong-store fast-path silently reusing a
+                # previous store's media reference again, undoing the
+                # fix above for exactly the scenario it exists to guard.
+                # The store-scoped cache_key check above already covers
+                # its one legitimate purpose (skip re-uploading an
+                # identical image already sent to THIS store).
                 # Review 3, item #4 second part: "wrong image file name
                 # format." Confirmed root cause: no filename was ever
                 # explicitly passed here, so the upload silently used the
@@ -1001,6 +1065,22 @@ async def _run_upload(db, job):
     else:
         # ── Include ALL non-uploaded statuses (pending/processed/failed/processing)
         # to prevent the "5 fetched → 3 uploaded" bug caused by processing status gaps.
+        #
+        # Client feedback confirmed live (multi-store test): woo_product_id
+        # moved to ProductStoreListing, scoped per (product, store) -- a
+        # bare Product.woo_product_id.is_(None) check would have wrongly
+        # excluded a product from THIS store's upload just because it was
+        # already uploaded to a DIFFERENT store. This checks whether a
+        # listing exists for THIS job's own store specifically.
+        from models.models import ProductStoreListing as _PSL_elig
+        from sqlalchemy import select as _sel_elig
+        _not_uploaded_to_this_store = ~(
+            _sel_elig(_PSL_elig.id).where(
+                _PSL_elig.product_id == Product.id,
+                _PSL_elig.store_id == job.store_id,
+                _PSL_elig.woo_product_id.isnot(None),
+            ).exists()
+        )
         base_filter = [
             or_(
                 Product.status == ProductStatus.processed,
@@ -1008,7 +1088,7 @@ async def _run_upload(db, job):
                 Product.status == ProductStatus.failed,
                 Product.status == ProductStatus.processing,
             ),
-            Product.woo_product_id.is_(None),
+            _not_uploaded_to_this_store,
         ]
 
     if excluded_product_ids:
@@ -1056,17 +1136,23 @@ async def _run_upload(db, job):
         action = "?"
         try:
             raw = product.raw_data or {}
+            # Client feedback confirmed live (multi-store test): fetched
+            # once per product here, reused for both the manual-override
+            # read just below AND the woo_product_id writes further down
+            # in this same iteration, instead of separate global Product
+            # columns that couldn't distinguish which store's data they held.
+            _listing = await _get_or_create_listing(db, product.id, store.id)
 
             # ── Resolve category mapping for this product ─────────────────
             woo_cat_ids: list[int] = []
             primary_woo_cat_id: Optional[int] = None
             try:
                 # Manual product-level override takes absolute priority over batch rules
-                if getattr(product, "cat_source", None) == "manual" and product.manual_woo_cats_json:
+                if _listing.cat_source == "manual" and _listing.manual_woo_cats_json:
                     import json as _json_manual
-                    _manual = _json_manual.loads(product.manual_woo_cats_json)
+                    _manual = _json_manual.loads(_listing.manual_woo_cats_json)
                     woo_cat_ids = [c["id"] for c in _manual if c.get("id")]
-                    primary_woo_cat_id = product.manual_primary_woo_cat_id
+                    primary_woo_cat_id = _listing.manual_primary_woo_cat_id
                 else:
                     from models.models import SunskyCategoryMapping
                     raw_for_cat = product.raw_data or {}
@@ -1235,7 +1321,13 @@ async def _run_upload(db, job):
                 # content changes (a new AI-generated description, updated
                 # images, etc.) that don't happen to touch price/stock/name.
                 await wc.update_product(store, woo_id, payload)
-                product.woo_product_id = woo_id
+                # Client feedback confirmed live (multi-store test): write
+                # the resolved WooCommerce ID to THIS store's own listing,
+                # not the old shared Product.woo_product_id column, so a
+                # second store's upload can never overwrite/be overwritten
+                # by a different store's ID for the same product.
+                _listing = await _get_or_create_listing(db, product.id, store.id)
+                _listing.woo_product_id = woo_id
                 product.status = ProductStatus.uploaded
                 product.error_message = None
                 action = "updated"
@@ -1248,13 +1340,15 @@ async def _run_upload(db, job):
                            f"  {product.sku} → creating in WooCommerce…")
                 try:
                     result = await wc.create_product(store, payload)
-                    product.woo_product_id = result.get("id")
+                    _new_woo_id = result.get("id")
+                    _listing = await _get_or_create_listing(db, product.id, store.id)
+                    _listing.woo_product_id = _new_woo_id
                     product.status = ProductStatus.uploaded
                     product.error_message = None
                     action = "created"
                     created_count += 1
                     await _log(db, job.id, LogLevel.info,
-                               f"  {product.sku} → CREATED woo_id={product.woo_product_id}")
+                               f"  {product.sku} → CREATED woo_id={_new_woo_id}")
                 except Exception as create_err:
                     err_text = str(create_err)
                     if "woocommerce_rest_product_not_created" in err_text and "already present in the lookup table" in err_text:
@@ -1262,7 +1356,8 @@ async def _run_upload(db, job):
                         if existing_woo:
                             woo_id = existing_woo["id"]
                             await wc.update_product(store, woo_id, payload)
-                            product.woo_product_id = woo_id
+                            _listing = await _get_or_create_listing(db, product.id, store.id)
+                            _listing.woo_product_id = woo_id
                             product.status = ProductStatus.uploaded
                             product.error_message = None
                             action = "updated"
@@ -1292,22 +1387,37 @@ async def _run_upload(db, job):
     #   • product.raw_data  (stored during fetch/process steps)
     #   • disk category cache (built by sync jobs, reused here)
     # ═══════════════════════════════════════════════════════════════════════
-    # Query ALL products in this batch that have a WooCommerce ID — including
-    # ones already uploaded in previous runs (which were excluded from the
-    # Phase 1 query by woo_product_id.is_(None)).  This ensures categories
-    # and attributes are always applied, even on re-runs.
+    # Query ALL products in this batch that have a WooCommerce ID on THIS
+    # store — including ones already uploaded in previous runs (which were
+    # excluded from the Phase 1 query above). This ensures categories and
+    # attributes are always applied, even on re-runs.
+    #
+    # Client feedback confirmed live (multi-store test): joins against
+    # ProductStoreListing scoped to store.id now, instead of a bare
+    # Product.woo_product_id check -- otherwise a product already uploaded
+    # to a DIFFERENT store would incorrectly appear "already uploaded" here
+    # for THIS store too, before Phase 1 had ever actually created it here.
     if fetch_job_id:
+        from models.models import ProductStoreListing as _PSL_p2
         uploaded_products = (
             await db.execute(
-                select(Product).where(
+                select(Product).join(
+                    _PSL_p2, _PSL_p2.product_id == Product.id
+                ).where(
                     Product.fetch_job_id == fetch_job_id,
-                    Product.woo_product_id.is_not(None),
+                    _PSL_p2.store_id == store.id,
+                    _PSL_p2.woo_product_id.isnot(None),
                 )
             )
         ).scalars().all()
     else:
-        # No fetch_job_id: fall back to in-memory products that got woo_product_id set
-        uploaded_products = [p for p in products if p.woo_product_id]
+        # No fetch_job_id: fall back to in-memory products that got a
+        # listing (with a real woo_product_id) on THIS store during this run.
+        uploaded_products = []
+        for p in products:
+            _l = await _get_listing(db, p.id, store.id)
+            if _l and _l.woo_product_id:
+                uploaded_products.append(p)
 
     if not uploaded_products:
         await _log(db, job.id, LogLevel.info,
@@ -1522,6 +1632,14 @@ async def _run_upload(db, job):
 
         for prod in uploaded_products:
             raw = prod.raw_data or {}
+            # Client feedback confirmed live (multi-store test): woo_product_id
+            # AND manual category override both moved to ProductStoreListing,
+            # scoped per (product, store) -- fetched once per product here,
+            # used everywhere below instead of the old prod.woo_product_id /
+            # prod.manual_woo_cats_json / prod.manual_primary_woo_cat_id /
+            # prod.cat_source, all of which were single, global columns that
+            # couldn't distinguish which store's data they actually held.
+            _prod_listing = await _get_or_create_listing(db, prod.id, store.id)
 
             # ── Category ─────────────────────────────────────────────────
             sunsky_cat_id = (
@@ -1550,13 +1668,13 @@ async def _run_upload(db, job):
             # update payload) already set -- meaning a manual override
             # could get silently replaced even within a single Upload
             # run, not just on a later Sync.
-            if getattr(prod, "cat_source", None) == "manual" and prod.manual_woo_cats_json:
+            if _prod_listing.cat_source == "manual" and _prod_listing.manual_woo_cats_json:
                 try:
                     import json as _p2_manual_json
-                    _p2_manual = _p2_manual_json.loads(prod.manual_woo_cats_json)
+                    _p2_manual = _p2_manual_json.loads(_prod_listing.manual_woo_cats_json)
                     cat_woo_ids = [c["id"] for c in _p2_manual if c.get("id")]
                     cat_names = [c.get("name", "") for c in _p2_manual if c.get("id")]
-                    p2_primary_woo_cat_id = prod.manual_primary_woo_cat_id
+                    p2_primary_woo_cat_id = _prod_listing.manual_primary_woo_cat_id
                 except Exception as _p2_manual_e:
                     await _log(db, job.id, LogLevel.warn,
                                f"  {prod.sku}: manual override lookup failed — {_p2_manual_e}")
@@ -1653,7 +1771,7 @@ async def _run_upload(db, job):
             if cat_woo_ids:
                 try:
                     await wc.set_product_categories(
-                        store, prod.woo_product_id, cat_woo_ids, p2_primary_woo_cat_id
+                        store, _prod_listing.woo_product_id, cat_woo_ids, p2_primary_woo_cat_id
                     )
                     p2_cat_ok += 1
                     path_str = " → ".join(cat_names) or str(cat_woo_ids)
@@ -1833,7 +1951,7 @@ async def _run_upload(db, job):
             if woo_attrs:
                 try:
                     await wc.set_product_attributes(
-                        store, prod.woo_product_id, woo_attrs
+                        store, _prod_listing.woo_product_id, woo_attrs
                     )
                     p2_attr_ok += 1
                     await _log(db, job.id, LogLevel.info,
@@ -1970,9 +2088,17 @@ async def _run_sync(db, job):
     products_updated = 0
 
     # ── Helper: build the product query scoped to the resolved job ──
+    # Client feedback confirmed live (multi-store test): joins against
+    # ProductStoreListing scoped to store.id, instead of a bare
+    # Product.woo_product_id check -- a product uploaded to a DIFFERENT
+    # store would otherwise be wrongly treated as "uploaded" here too.
+    from models.models import ProductStoreListing as _PSL_sync
     def _scoped_product_q(extra_filters=None):
-        q = select(Product).where(
-            Product.woo_product_id.isnot(None),
+        q = select(Product).join(
+            _PSL_sync, _PSL_sync.product_id == Product.id
+        ).where(
+            _PSL_sync.store_id == store.id,
+            _PSL_sync.woo_product_id.isnot(None),
             Product.status == ProductStatus.uploaded,
         )
         if resolved_fetch_job_id:
@@ -2347,7 +2473,13 @@ async def _run_sync(db, job):
             await _log(db, job.id, LogLevel.info, "  Assigning categories to products in WooCommerce…")
             cat_ok = cat_miss = 0
             for prod in target_products:
-                if not prod.woo_product_id:
+                # Client feedback confirmed live (multi-store test):
+                # fetched once per product, used for woo_product_id and
+                # the manual-override read just below, instead of the
+                # old global Product columns that couldn't distinguish
+                # which store's data they actually held.
+                _sync_listing = await _get_or_create_listing(db, prod.id, store.id)
+                if not _sync_listing.woo_product_id:
                     await _log(db, job.id, LogLevel.warn,
                                f"  ✗ {prod.sku}: not uploaded to WooCommerce yet — skipped")
                     continue
@@ -2371,12 +2503,12 @@ async def _run_sync(db, job):
                 woo_cat_ids: list[int] = []
                 primary_woo_cat_id: Optional[int] = None
                 woo_cat_source = ""
-                if getattr(prod, "cat_source", None) == "manual" and prod.manual_woo_cats_json:
+                if _sync_listing.cat_source == "manual" and _sync_listing.manual_woo_cats_json:
                     try:
                         import json as _sync_manual_json
-                        _sync_manual = _sync_manual_json.loads(prod.manual_woo_cats_json)
+                        _sync_manual = _sync_manual_json.loads(_sync_listing.manual_woo_cats_json)
                         woo_cat_ids = [c["id"] for c in _sync_manual if c.get("id")]
-                        primary_woo_cat_id = prod.manual_primary_woo_cat_id
+                        primary_woo_cat_id = _sync_listing.manual_primary_woo_cat_id
                         if woo_cat_ids:
                             woo_cat_source = "manual override"
                     except Exception as _sync_manual_e:
@@ -2439,12 +2571,12 @@ async def _run_sync(db, job):
                 if woo_cat_ids:
                     try:
                         await woo_client.set_product_categories(
-                            store, prod.woo_product_id, woo_cat_ids, primary_woo_cat_id
+                            store, _sync_listing.woo_product_id, woo_cat_ids, primary_woo_cat_id
                         )
                         products_updated += 1
                         cat_ok += 1
                         await _log(db, job.id, LogLevel.info,
-                                   f"  ✓ {prod.sku} (woo #{prod.woo_product_id}) "
+                                   f"  ✓ {prod.sku} (woo #{_sync_listing.woo_product_id}) "
                                    f"→ category {woo_cat_ids} via {woo_cat_source}")
                     except Exception as e:
                         await _log(db, job.id, LogLevel.warn,
@@ -2557,6 +2689,10 @@ async def _run_sync(db, job):
         for prod in attr_products:
             raw = prod.raw_data or {}
             woo_attrs: list[dict] = []
+            # Client feedback confirmed live (multi-store test): fetched
+            # once per product, used for the woo_product_id reads below
+            # instead of the old global Product.woo_product_id column.
+            _attr_listing = await _get_or_create_listing(db, prod.id, store.id)
 
             # ── If spec data is missing, fetch it now from the detail API ──
             if not raw.get("paramsTable") and not raw.get("optionList") and (prod.sku or prod.sunsky_id):
@@ -2687,26 +2823,26 @@ async def _run_sync(db, job):
 
             # Push to WooCommerce only if we have something to set.
             # Never send an empty list — that would clear user-confirmed attrs.
-            if prod.woo_product_id:
+            if _attr_listing.woo_product_id:
                 if woo_attrs:
                     try:
-                        await woo_client.set_product_attributes(store, prod.woo_product_id, woo_attrs)
+                        await woo_client.set_product_attributes(store, _attr_listing.woo_product_id, woo_attrs)
                         job.processed_items = (job.processed_items or 0) + 1
                         await db.commit()
                         attr_names = ", ".join(a["name"] for a in woo_attrs)
                         await _log(db, job.id, LogLevel.info,
-                                   f"  ✓ {prod.sku} (woo #{prod.woo_product_id}) "
+                                   f"  ✓ {prod.sku} (woo #{_attr_listing.woo_product_id}) "
                                    f"→ {len(woo_attrs)} attribute(s): {attr_names}")
                         products_updated += 1
                     except Exception as e:
                         await _log(db, job.id, LogLevel.warn,
                                    f"  Failed to set attributes on {prod.sku} "
-                                   f"(woo #{prod.woo_product_id}): {e}")
+                                   f"(woo #{_attr_listing.woo_product_id}): {e}")
                 else:
                     job.processed_items = (job.processed_items or 0) + 1
                     await db.commit()
                     await _log(db, job.id, LogLevel.warn,
-                               f"  ✗ {prod.sku} (woo #{prod.woo_product_id}): "
+                               f"  ✗ {prod.sku} (woo #{_attr_listing.woo_product_id}): "
                                f"no spec data or confirmed attrs — skipping (existing attrs preserved)")
             else:
                 await _log(db, job.id, LogLevel.warn,
