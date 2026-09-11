@@ -933,6 +933,47 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const [categoryDraft, setCategoryDraft] = useState<Record<number, { woo_cats: WooCatEntry[]; primary_id: number | null }>>({});
   const storeCatTree = useMemo(() => buildTree(storeCats), [storeCats]);
 
+  // Client feedback confirmed live: a product with an already-saved
+  // manual category override (cat_source="manual", correct name shown
+  // at top with a "manual" badge) showed EVERY checkbox in the tree
+  // below unchecked after a page reload / fresh session. Root cause:
+  // the tree's checked state comes entirely from categoryDraft, which
+  // starts empty and is only ever populated by the operator's own
+  // clicks in the CURRENT browser session -- nothing hydrated it from
+  // the product's actual already-saved manual_woo_cats_json /
+  // manual_primary_woo_cat_id (both already returned by ProductOut,
+  // just never read here). Worked "by coincidence" only in the same
+  // session right after setting it, before any reload.
+  //
+  // Used both to (a) drive what's SHOWN when no draft exists yet, and
+  // (b) SEED a new draft the first time the operator clicks anything --
+  // seeding from empty instead (as toggleDraftCategory/setDraftPrimary
+  // did before this fix) would silently drop every other already-
+  // selected category the instant a single checkbox was toggled.
+  const catNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of storeCats) m.set(c.id, c.name);
+    return m;
+  }, [storeCats]);
+
+  const getInitialCategoryDraft = (p: any): { woo_cats: WooCatEntry[]; primary_id: number | null } => {
+    if (p?.cat_source === "manual" && p?.manual_woo_cats_json) {
+      try {
+        const ids = JSON.parse(p.manual_woo_cats_json);
+        if (Array.isArray(ids) && ids.length > 0) {
+          return {
+            woo_cats: ids.map((id: number) => ({ id, name: catNameById.get(id) ?? `#${id}` })),
+            primary_id: p.manual_primary_woo_cat_id ?? ids[0] ?? null,
+          };
+        }
+      } catch {
+        // Malformed manual_woo_cats_json -- fall through to empty rather
+        // than crash the row's render.
+      }
+    }
+    return { woo_cats: [], primary_id: null };
+  };
+
   useEffect(() => {
     fetch(`/api/pipelines/${pl.id}/content-data`)
       .then(r => r.ok ? r.json() : Promise.reject())
@@ -958,7 +999,7 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
 
   const toggleDraftCategory = (pid: number, opt: WooOpt) => {
     setCategoryDraft(prev => {
-      const cur = prev[pid] ?? { woo_cats: [], primary_id: null };
+      const cur = prev[pid] ?? getInitialCategoryDraft(allProducts.find(pr => pr.id === pid));
       const exists = cur.woo_cats.some(c => c.id === opt.id);
       const woo_cats = exists ? cur.woo_cats.filter(c => c.id !== opt.id) : [...cur.woo_cats, { id: opt.id, name: opt.name }];
       // The most-recently-added (or, when removing the primary, the last
@@ -978,7 +1019,10 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   };
 
   const setDraftPrimary = (pid: number, id: number) => {
-    setCategoryDraft(prev => ({ ...prev, [pid]: { woo_cats: prev[pid]?.woo_cats ?? [], primary_id: id } }));
+    setCategoryDraft(prev => {
+      const cur = prev[pid] ?? getInitialCategoryDraft(allProducts.find(pr => pr.id === pid));
+      return { ...prev, [pid]: { woo_cats: cur.woo_cats, primary_id: id } };
+    });
   };
 
   const handleSaveCategory = async (pid: number) => {
@@ -1625,8 +1669,8 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                           <div className="space-y-2">
                             <MiniCatTree
                               tree={storeCatTree}
-                              selected={categoryDraft[p.id]?.woo_cats ?? []}
-                              primaryId={categoryDraft[p.id]?.primary_id ?? null}
+                              selected={categoryDraft[p.id]?.woo_cats ?? getInitialCategoryDraft(p).woo_cats}
+                              primaryId={categoryDraft[p.id]?.primary_id ?? getInitialCategoryDraft(p).primary_id}
                               onToggle={opt => toggleDraftCategory(p.id, opt)}
                               onSetPrimary={id => setDraftPrimary(p.id, id)}
                             />
