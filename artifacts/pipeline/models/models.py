@@ -491,11 +491,30 @@ class AIExtractionRule(Base):
     Per-attribute rule controlling how AI extracts a WooCommerce attribute value.
     source_fields: "title" | "specs" | "both"
     if_not_found:  "leave_blank" | "flag" | "use_default"
+
+    Client feedback confirmed live via screenshot: "Extraction rules need
+    to be individual for each site / Right now they are same for each
+    site." Confirmed: no store_id existed here at all -- woo_attr_name
+    was globally unique, so there could only ever be ONE rule per
+    attribute name across the entire application, regardless of store,
+    even though the Settings page already showed a per-store dropdown
+    (which turned out to be decorative for this specific list -- it
+    wasn't actually filtering anything).
+
+    Follows the exact same optional-override pattern the sibling
+    AttributeMappingRule model right below already uses successfully:
+    store_id=None means the rule applies globally to all stores (the
+    fallback); a specific store_id creates an override for just that
+    store. Existing rules are left with store_id=NULL on migration, so
+    current behavior is completely unchanged until an operator
+    explicitly creates a new store-specific rule.
     """
     __tablename__ = "ai_extraction_rules"
+    __table_args__ = (UniqueConstraint("store_id", "woo_attr_name", name="uq_extraction_rule_store_attr"),)
 
     id                   = Column(Integer, primary_key=True, index=True)
-    woo_attr_name        = Column(Text, nullable=False, unique=True)
+    store_id             = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=True, index=True)
+    woo_attr_name        = Column(Text, nullable=False)
     source_fields        = Column(String(20), nullable=False, default="both")
     instruction          = Column(Text, nullable=False, default="")
     confidence_threshold = Column(Float, nullable=False, default=0.7)

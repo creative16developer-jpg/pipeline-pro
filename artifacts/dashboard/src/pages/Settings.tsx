@@ -753,6 +753,12 @@ interface ExtractionRule {
   default_value: string | null;
   sort_order: number;
   selector: string | null;
+  // Client feedback confirmed live: "Extraction rules need to be
+  // individual for each site / Right now they are same for each
+  // site." store_id null = applies to every store as the fallback;
+  // a specific store_id overrides the global rule for just that store.
+  store_id: number | null;
+  is_override: boolean;
 }
 
 const SOURCE_OPTS = [
@@ -779,7 +785,7 @@ function AIExtractionRulesTab() {
   const [wooAttrs, setWooAttrs] = useState<any[]>([]);
   const [syncing, setSyncing] = useState(false);
 
-  const emptyForm = (): Omit<ExtractionRule, "id"> => ({
+  const emptyForm = (): Omit<ExtractionRule, "id" | "is_override"> => ({
     woo_attr_name: "",
     source_fields: "both",
     instruction: "",
@@ -788,19 +794,32 @@ function AIExtractionRulesTab() {
     default_value: null,
     sort_order: 0,
     selector: null,
+    // Defaults to a store-specific override for whichever store is
+    // currently selected, matching the reason an operator opens this
+    // page with a store already chosen -- "applyGlobally" toggle in
+    // the form lets them switch to a global (store_id: null) rule
+    // instead when that's what they actually want.
+    store_id: storeId,
   });
   const [form, setForm] = useState(emptyForm());
 
   const load = () => {
     setLoading(true);
-    fetch("/api/attr-rules")
+    // Client feedback confirmed live: this store dropdown already
+    // existed but was purely decorative for the rules list -- every
+    // store saw the identical, fully global rule set regardless of
+    // selection. Now genuinely filters via store_id, and re-runs
+    // whenever the selected store changes (see the dependency array
+    // on the useEffect below -- previously ran once on mount only).
+    const qs = storeId ? `?store_id=${storeId}` : "";
+    fetch(`/api/attr-rules${qs}`)
       .then(r => r.json())
       .then(d => setRules(d.rules ?? []))
       .catch(() => {})
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [storeId]);
 
   useEffect(() => {
     fetch("/api/stores")
@@ -850,6 +869,7 @@ function AIExtractionRulesTab() {
       default_value: r.default_value,
       sort_order: r.sort_order,
       selector: r.selector,
+      store_id: r.store_id,
     });
     setEditingId(r.id);
   };
@@ -1019,6 +1039,45 @@ function AIExtractionRulesTab() {
             />
           </div>
         )}
+
+        {/* Client feedback confirmed live: "Extraction rules need to be
+            individual for each site / Right now they are same for each
+            site." Lets the operator choose whether this rule is a
+            global default or an override for just the currently
+            selected store. */}
+        <div className="col-span-2 space-y-1">
+          <label className="text-xs font-medium text-muted-foreground">Applies To</label>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setForm(f => ({ ...f, store_id: null }))}
+              className={cn(
+                "flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors",
+                form.store_id === null
+                  ? "bg-primary/10 border-primary text-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              )}
+            >
+              All stores (global default)
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm(f => ({ ...f, store_id: storeId }))}
+              disabled={!storeId}
+              className={cn(
+                "flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors disabled:opacity-40",
+                form.store_id !== null
+                  ? "bg-primary/10 border-primary text-primary"
+                  : "border-border text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Only {stores.find(s => s.id === storeId)?.name ?? "this store"}
+            </button>
+          </div>
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            A store-specific rule overrides the global default for that one store only — every other store keeps using the global rule.
+          </p>
+        </div>
       </div>
 
       <div className="flex gap-2">
@@ -1116,7 +1175,18 @@ function AIExtractionRulesTab() {
                   ) : (
                     <>
                       <td className="px-4 py-3">
-                        <div className="font-medium text-foreground text-sm">{r.woo_attr_name}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="font-medium text-foreground text-sm">{r.woo_attr_name}</div>
+                          {r.is_override ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-400" title="Overrides the global rule for this store only">
+                              This store
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-secondary text-muted-foreground" title="Applies to every store unless a store-specific override exists">
+                              Global
+                            </span>
+                          )}
+                        </div>
                         {r.instruction && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">{r.instruction}</div>}
                       </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">

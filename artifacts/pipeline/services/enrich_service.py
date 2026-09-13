@@ -107,18 +107,36 @@ def _rule_based_extract(product: dict) -> list[AttrResult]:
     return results
 
 
-async def _load_rules(db: Optional["AsyncSession"]) -> list[dict]:
-    """Load AIExtractionRule rows from DB, sorted by sort_order."""
+async def _load_rules(db: Optional["AsyncSession"], store_id: Optional[int] = None) -> list[dict]:
+    """Load AIExtractionRule rows from DB, sorted by sort_order.
+
+    Client feedback confirmed live: "Extraction rules need to be
+    individual for each site / Right now they are same for each
+    site." store_id now filters to this store's own override rules
+    plus any global (store_id IS NULL) rule for an attribute name this
+    store hasn't overridden -- same store-specific-wins-over-global
+    pattern the sibling _load_mapping_rules already uses. store_id=None
+    (the default) preserves the exact previous behavior: every rule,
+    unfiltered -- used by any caller that genuinely wants the full
+    admin view rather than one store's effective rule set.
+    """
     if db is None:
         return []
     try:
         from sqlalchemy import select
         from models.models import AIExtractionRule
-        rows = (
-            await db.execute(
-                select(AIExtractionRule).order_by(AIExtractionRule.sort_order, AIExtractionRule.woo_attr_name)
-            )
-        ).scalars().all()
+        q = select(AIExtractionRule).order_by(AIExtractionRule.sort_order, AIExtractionRule.woo_attr_name)
+        if store_id is not None:
+            from sqlalchemy import or_
+            q = q.where(or_(AIExtractionRule.store_id == store_id, AIExtractionRule.store_id.is_(None)))
+        rows = (await db.execute(q)).scalars().all()
+        if store_id is not None:
+            by_name: dict[str, "AIExtractionRule"] = {}
+            for r in rows:
+                existing = by_name.get(r.woo_attr_name)
+                if existing is None or (r.store_id == store_id and existing.store_id is None):
+                    by_name[r.woo_attr_name] = r
+            rows = sorted(by_name.values(), key=lambda r: (r.sort_order, r.woo_attr_name))
         return [
             {
                 "woo_attr_name":        r.woo_attr_name,
@@ -445,7 +463,7 @@ async def extract_attributes(
 
     Returns list of AttrResult dicts sorted by confidence desc.
     """
-    rules = await _load_rules(db)
+    rules = await _load_rules(db, store_id)
     mapping_rules = await _load_mapping_rules(db, store_id)
     resolved_woo_category = await _resolve_woo_category_name(db, store_id, sunsky_category or "")
 
