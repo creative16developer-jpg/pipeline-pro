@@ -1422,6 +1422,22 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
           </div>
         </div>
 
+        {/* Client feedback: with hundreds of products, an operator has no
+            way to tell "this title is old English text because it predates
+            a fix" apart from "generation is broken" -- both look identical
+            in the UI otherwise. This note explains the (intentional,
+            unchanged) behavior right where the confusion happens, rather
+            than requiring a support conversation each time. No functional
+            change -- copy only. */}
+        <div className="bg-blue-500/10 border border-blue-500/30 border-l-[3px] border-l-violet-500 rounded-lg px-4 py-3 text-[13px] text-blue-300 mb-3">
+          Already-generated fields are never automatically re-generated — this
+          protects your AI usage from being silently re-spent every time a
+          product is revisited. If a product below still shows old or
+          incorrect text after a content-quality fix, use{" "}
+          <span className="font-semibold">"Re-generate content"</span> below
+          to refresh it.
+        </div>
+
         {/* Product rows */}
         <div className="flex items-center gap-2 mb-2 px-1">
           <input
