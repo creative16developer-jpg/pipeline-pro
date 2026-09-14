@@ -1230,7 +1230,25 @@ function AIExtractionRulesTab() {
         </span>
       </div>
 
-      {editingId === "new" && <RuleForm />}
+      {/* Client feedback (Review_4.docx, item #5): "When start typing in
+          Woocommerce Attribute Name it stop on each letter and need to
+          click again and again." Root cause: RuleForm is defined as a
+          plain arrow function INSIDE this component's own body (see
+          above), re-created fresh on every render -- invoking it as
+          JSX (<RuleForm />) meant React saw a DIFFERENT component type
+          on every single render (including every render triggered by
+          typing a character), unmounting and remounting the entire
+          form -- and the input inside it -- each time, which is
+          exactly what destroys focus and forces a re-click before the
+          next character can be typed. Calling it as a plain function
+          instead (RuleForm()) inlines its returned JSX directly into
+          THIS component's own render output, with no separate
+          component boundary for React to reconcile against at all --
+          eliminates the remount entirely without needing to hoist the
+          whole form out to top-level scope and thread every piece of
+          state it closes over through as props, a much larger, higher-
+          risk refactor for the same fix. */}
+      {editingId === "new" && RuleForm()}
 
       {loading ? (
         <div className="flex items-center gap-2 py-12 justify-center text-muted-foreground text-sm">
@@ -1256,7 +1274,7 @@ function AIExtractionRulesTab() {
               {rules.map(r => (
                 <tr key={r.id} className="hover:bg-secondary/10 transition-colors">
                   {editingId === r.id ? (
-                    <td colSpan={5} className="p-4"><RuleForm /></td>
+                    <td colSpan={5} className="p-4">{RuleForm()}</td>
                   ) : (
                     <>
                       <td className="px-4 py-3">
@@ -1827,11 +1845,21 @@ function InventoryMappingTab() {
             </div>
           </div>
 
-          {/* Per-field null handling */}
-          <Field label="Weight"        fieldKey="weight" />
-          <Field label="Length"        fieldKey="length" />
-          <Field label="Width"         fieldKey="width" />
-          <Field label="Height"        fieldKey="height" />
+          {/* Per-field null handling. Same fix as AIExtractionRulesTab's
+              RuleForm above (Review_4.docx item #5's actual root cause):
+              Field is defined as a plain arrow function inside THIS
+              component's own body, re-created fresh every render --
+              invoking it as JSX (<Field .../>) meant React saw a
+              different component type on every render, remounting
+              (and defocusing) any input inside it -- including the
+              "Default value" input that appears when a field's null-
+              handling is set to "use_default". Calling it as a plain
+              function instead inlines its JSX with no separate
+              component boundary to remount. */}
+          {Field({ label: "Weight",  fieldKey: "weight"  })}
+          {Field({ label: "Length",  fieldKey: "length"  })}
+          {Field({ label: "Width",   fieldKey: "width"   })}
+          {Field({ label: "Height",  fieldKey: "height"  })}
 
           <button
             onClick={handleSave}
@@ -2875,6 +2903,31 @@ function AttrMappingModal({
   const [storeCatOptions, setStoreCatOptions] = useState<{ id: string; name: string }[]>([]);
   const { data: modalStores } = useStores();
 
+  // Client feedback (Review_4.docx, item #5): "When start typing in
+  // Woocommerce Attribute Name it stop on each letter and need to
+  // click again and again." Both comboboxes below previously passed
+  // options={wooAttrOptions.map(...)} / options={storeCatOptions.map(...)}
+  // inline -- a BRAND NEW array on every single render of this modal,
+  // including every render triggered by typing a character into
+  // EITHER field. This defeated SearchableCombobox's own internal
+  // useMemo (which depends on the options reference) entirely, so the
+  // full filtered list recomputed from scratch on every keystroke
+  // instead of only when the underlying data genuinely changed --
+  // for a "Global" rule specifically, this list is the union of every
+  // connected store's attributes, potentially large enough that
+  // repeating this on every keystroke produces real, perceptible
+  // per-character lag matching the reported symptom. Memoized here so
+  // the array reference only changes when wooAttrOptions/
+  // storeCatOptions themselves actually change, not on every render.
+  const wooAttrComboOptions = useMemo(
+    () => wooAttrOptions.map(a => ({ id: a.id, label: a.name })),
+    [wooAttrOptions]
+  );
+  const storeCatComboOptions = useMemo(
+    () => storeCatOptions.map(c => ({ id: c.id, label: c.name })),
+    [storeCatOptions]
+  );
+
   useEffect(() => {
     // Client feedback: "settings – Attribute Mapping – Add Rule ...
     // Category Name. I don't want to input whole name of the category
@@ -3009,7 +3062,7 @@ function AttrMappingModal({
             <SearchableCombobox
               value={form.woo_attr_name}
               onChange={v => set("woo_attr_name", v)}
-              options={wooAttrOptions.map(a => ({ id: a.id, label: a.name }))}
+              options={wooAttrComboOptions}
               placeholder="e.g. Color, Brand, Material"
               emptyHint={wooAttrOptions.length === 0
                 ? "No WooCommerce attributes synced yet — type the name freely."
@@ -3132,7 +3185,7 @@ function AttrMappingModal({
                 <SearchableCombobox
                   value={form.condition_value ?? ""}
                   onChange={v => set("condition_value", v)}
-                  options={storeCatOptions.map(c => ({ id: c.id, label: c.name }))}
+                  options={storeCatComboOptions}
                   placeholder="Category name, e.g. Waterproof Cases"
                   emptyHint={storeCatOptions.length === 0
                     ? "No categories synced yet — type the name freely."
