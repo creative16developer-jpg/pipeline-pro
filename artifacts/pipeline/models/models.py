@@ -575,12 +575,29 @@ class StarredSunskyCategory(Base):
 
 
 class InventoryMappingConfig(Base):
-    """Per-store config for mapping Sunsky inventory/weight/dimension fields to WooCommerce."""
+    """Config for mapping Sunsky inventory/weight/dimension fields to
+    WooCommerce. store_id=NULL is the global default, used by any store
+    with no config of its own; a specific store_id overrides it for
+    just that store.
+
+    Client feedback: "lets do whichever is necessary to do for per
+    store thing... global and per store both rules options are there,
+    so if client want to do per store or global that is his choice."
+    Follows the same pattern as AIExtractionRule / AttributeMappingRule,
+    with one difference: this table has no separate "rule name"
+    dimension (it's one whole config per store, not one row per
+    attribute), so uniqueness here means "at most one row per specific
+    store, AND at most one global row" -- a plain UNIQUE on a nullable
+    column does NOT enforce "at most one NULL" in standard SQL (NULL is
+    never considered equal to another NULL for uniqueness purposes), so
+    this needs two separate partial unique indexes instead of one
+    ordinary unique constraint -- see the migration for both.
+    """
     __tablename__ = "inventory_mapping_configs"
 
     id             = Column(Integer, primary_key=True, index=True)
     store_id       = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"),
-                            nullable=False, unique=True, index=True)
+                            nullable=True, index=True)
     weight_unit    = Column(String(10), nullable=False, default="kg")
     dimension_unit = Column(String(10), nullable=False, default="cm")
     weight_null    = Column(String(20), nullable=False, default="leave_blank")

@@ -966,14 +966,25 @@ async def _run_upload(db, job):
 
     # ── Inventory Mapping config (weight/dimension unit conversion + null
     # handling) — loaded once per store, same for every product this run.
-    # None (no config saved yet) is handled gracefully by
-    # _apply_inventory_mapping, which falls back to sensible defaults.
+    # Client feedback: "global and per store both rules options are
+    # there, so if client want to do per store or global that is his
+    # choice." Checks this store's OWN config first; if none exists,
+    # falls back to the global (store_id IS NULL) config if one has
+    # been set; if NEITHER exists, inventory_config stays None and
+    # _apply_inventory_mapping falls back to its own hardcoded
+    # defaults, exactly as before this change.
     from models.models import InventoryMappingConfig
     _inv_row = (
         await db.execute(
             select(InventoryMappingConfig).where(InventoryMappingConfig.store_id == job.store_id)
         )
     ).scalar_one_or_none()
+    if _inv_row is None:
+        _inv_row = (
+            await db.execute(
+                select(InventoryMappingConfig).where(InventoryMappingConfig.store_id.is_(None))
+            )
+        ).scalar_one_or_none()
     inventory_config = None
     if _inv_row:
         inventory_config = {

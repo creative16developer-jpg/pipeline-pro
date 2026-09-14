@@ -1572,6 +1572,13 @@ const NULL_OPTS = [
 function InventoryMappingTab() {
   const { toast } = useToast();
   const [stores, setStores] = useState<any[]>([]);
+  const [storesLoaded, setStoresLoaded] = useState(false);
+  // Client feedback: "lets do whichever is necessary to do for per
+  // store thing... global and per store both rules options are there,
+  // so if client want to do per store or global that is his choice."
+  // storeId === null now means "viewing/editing the Global Default"
+  // (a deliberate selection, not "not loaded yet" -- storesLoaded
+  // covers that separately).
   const [storeId, setStoreId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1584,32 +1591,37 @@ function InventoryMappingTab() {
         const list = Array.isArray(d) ? d : (d.stores ?? []);
         setStores(list);
         if (list.length > 0) setStoreId(list[0].id);
+        setStoresLoaded(true);
       });
   }, []);
 
   useEffect(() => {
-    if (!storeId) return;
+    if (!storesLoaded) return;
     setLoading(true);
-    fetch(`/api/stores/${storeId}/inventory-mapping`)
+    const url = storeId === null ? "/api/inventory-mapping/global" : `/api/stores/${storeId}/inventory-mapping`;
+    fetch(url)
       .then(r => r.json())
       .then(setCfg)
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [storeId]);
+  }, [storeId, storesLoaded]);
 
   const update = (key: string, val: string | null) => setCfg((c: any) => ({ ...c, [key]: val }));
 
   const handleSave = async () => {
-    if (!storeId || !cfg) return;
+    if (!cfg) return;
     setSaving(true);
     try {
-      const r = await fetch(`/api/stores/${storeId}/inventory-mapping`, {
+      const url = storeId === null ? "/api/inventory-mapping/global" : `/api/stores/${storeId}/inventory-mapping`;
+      const r = await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(cfg),
       });
       if (!r.ok) throw new Error(await r.text());
-      toast({ title: "Inventory mapping saved" });
+      const saved = await r.json();
+      setCfg(saved);
+      toast({ title: storeId === null ? "Global default saved" : "Inventory mapping saved" });
     } catch (e: any) {
       toast({ title: "Save failed", description: e.message, variant: "destructive" });
     } finally {
@@ -1673,11 +1685,30 @@ function InventoryMappingTab() {
 
       <select
         value={storeId ?? ""}
-        onChange={e => setStoreId(Number(e.target.value))}
+        onChange={e => setStoreId(e.target.value === "" ? null : Number(e.target.value))}
         className="bg-background border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-primary w-full sm:w-64"
       >
+        <option value="">🌐 Global Default (all stores)</option>
         {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
       </select>
+
+      {/* Client feedback: "global and per store both rules options are
+          there, so if client want to do per store or global that is
+          his choice." When a specific store has no config of its own,
+          the GET endpoint falls back to showing the global default
+          (matching what upload will actually use) rather than the
+          hardcoded factory defaults -- this banner makes that visible
+          instead of silently implying the store has its own saved
+          config when it doesn't. */}
+      {storeId !== null && cfg && cfg.is_own_config === false && (
+        <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
+          <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            This store has no config of its own — showing the <strong>global default</strong>.
+            Saving here will create a store-specific override just for this store.
+          </span>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center gap-2 py-12 justify-center text-muted-foreground text-sm">
