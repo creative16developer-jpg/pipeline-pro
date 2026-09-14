@@ -488,6 +488,37 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             cats_json_by_name.get(sunsky_cat_name.strip().lower()) if sunsky_cat_name else None
         )
 
+        # Client feedback (Review_4.docx, item #8): "In some products,
+        # last review step doesn't mark categories." Confirmed: the
+        # map_rows query above only ever fetched THIS store's own
+        # SunskyCategoryMapping rows (store_id == pl.store_id) --
+        # completely missing GLOBAL rules (store_id IS NULL, added
+        # earlier this session), so any product whose category comes
+        # from a global rule showed as fully unmapped here even though
+        # real Upload would correctly resolve and apply it. Even a
+        # naive fix (just also fetching global rows) wouldn't be
+        # enough on its own: a global rule's stored woo_cats_json is a
+        # NAME PATH captured from whichever store originally created
+        # it, never a directly-usable ID list for THIS store -- reuses
+        # the exact same _resolve_category_mapping helper Upload
+        # itself calls, so this preview always matches what Upload
+        # will actually do, rather than maintaining a second, subtly
+        # different resolution path here.
+        if _mapped_val is None and sunsky_cat_name:
+            try:
+                from tasks.job_tasks import _resolve_category_mapping as _cd_resolve_cat
+                _global_resolved = await _cd_resolve_cat(db, pl.store_id, sunsky_cat_name)
+                if _global_resolved:
+                    _mapped_val = f"[global] {sunsky_cat_name}"
+                    is_mapped = True
+                    resolved_woo_cat = _mapped_val
+                    mapped_cats_json = json.dumps([
+                        {"id": i, "name": ""} for i in _global_resolved["woo_cat_ids"]
+                    ])
+            except Exception as _cd_global_e:
+                logger.warning(f"content-data: global category resolution failed for "
+                                f"product {p.id}: {_cd_global_e}")
+
         # Manual per-product override takes priority, mirroring the exact
         # same priority job_tasks.py already applies at real Upload time
         # (cat_source == "manual" wins). Previously this preview never
