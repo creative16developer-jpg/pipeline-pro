@@ -408,7 +408,27 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
         )
     ).scalars().all()
 
-    profile_ids = {r.profile_id for r in rows if r.profile_id}
+    # Client feedback: "lets do whichever is necessary to do for per
+    # store thing... global and per store both rules options are
+    # there." Merge in global (store_id IS NULL) rules for any
+    # sunsky_cat this store hasn't overridden with its own rule --
+    # same store-wins-over-global merge pattern already used for
+    # Extraction Rules. A global row's woo_cats -- unlike a per-store
+    # row's -- are a NAME PATH re-resolved per store at actual upload
+    # time (see job_tasks.py's _resolve_category_path_for_store), not
+    # directly-usable IDs; shown here as-is (the names/IDs it was
+    # originally captured with) purely for display in this list.
+    global_rows = (
+        await db.execute(
+            select(SunskyCategoryMapping)
+            .where(SunskyCategoryMapping.store_id.is_(None))
+            .order_by(SunskyCategoryMapping.sunsky_cat)
+        )
+    ).scalars().all()
+    own_cats = {r.sunsky_cat for r in rows}
+    merged = list(rows) + [g for g in global_rows if g.sunsky_cat not in own_cats]
+
+    profile_ids = {r.profile_id for r in merged if r.profile_id}
     profile_names: dict[int, str] = {}
     if profile_ids:
         profile_rows = (
@@ -429,8 +449,9 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
                 "times_used":         r.times_used or 0,
                 "last_used_at":       r.last_used_at.isoformat() if r.last_used_at else None,
                 "updated_at":         r.updated_at.isoformat() if r.updated_at else None,
+                "is_global":          r.store_id is None,
             }
-            for r in rows
+            for r in merged
         ],
     }
 
@@ -617,6 +638,122 @@ async def delete_category_mapping(
     row = await db.get(SunskyCategoryMapping, mapping_id)
     if not row or row.store_id != store_id:
         raise HTTPException(status_code=404, detail="Mapping not found")
+    await db.delete(row)
+    await db.commit()
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global Category Mapping rules (store_id IS NULL)
+# ─────────────────────────────────────────────────────────────────────────────
+# Client feedback: "lets do whichever is necessary to do for per store
+# thing... global and per store both rules options are there, so if
+# client want to do per store or global that is his choice." A global
+# rule's woo_cats, unlike a per-store rule's, is a NAME PATH re-resolved
+# against each store's own category tree at real upload time -- see
+# job_tasks.py's _resolve_category_path_for_store for the actual
+# resolution logic used during a pipeline run. This endpoint just
+# stores whatever {id, name} pairs the operator picked (from whichever
+# store's tree they were looking at while creating the rule) -- the
+# names are what get reused; the ids are only ever meaningful again on
+# that same original store, and are never trusted directly for any
+# other store at resolution time.
+
+@router.get("/category-mappings/global")
+async def list_global_category_mappings(db: AsyncSession = Depends(get_db)):
+    from models.models import AttributeProfile
+
+    rows = (
+        await db.execute(
+            select(SunskyCategoryMapping)
+            .where(SunskyCategoryMapping.store_id.is_(None))
+            .order_by(SunskyCategoryMapping.sunsky_cat)
+        )
+    ).scalars().all()
+
+    profile_ids = {r.profile_id for r in rows if r.profile_id}
+    profile_names: dict[int, str] = {}
+    if profile_ids:
+        profile_rows = (
+            await db.execute(select(AttributeProfile).where(AttributeProfile.id.in_(profile_ids)))
+        ).scalars().all()
+        profile_names = {p.id: p.name for p in profile_rows}
+
+    return {
+        "store_id": None,
+        "mappings": [
+            {
+                "id":                 r.id,
+                "sunsky_cat":         r.sunsky_cat,
+                "woo_cats":           _mapping_woo_cats(r),
+                "primary_woo_cat_id": r.primary_woo_cat_id or r.woo_cat_id,
+                "profile_id":         r.profile_id,
+                "profile_name":       profile_names.get(r.profile_id) if r.profile_id else None,
+                "times_used":         r.times_used or 0,
+                "last_used_at":       r.last_used_at.isoformat() if r.last_used_at else None,
+                "updated_at":         r.updated_at.isoformat() if r.updated_at else None,
+                "is_global":          True,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.put("/category-mappings/global")
+async def update_global_category_mappings(
+    entries: list[CategoryMappingUpdate],
+    db: AsyncSession = Depends(get_db),
+):
+    for entry in entries:
+        if not entry.sunsky_cat:
+            continue
+        primary_id = entry.primary_woo_cat_id or (entry.woo_cats[0].id if entry.woo_cats else None)
+        primary_cat = next((c for c in entry.woo_cats if c.id == primary_id), entry.woo_cats[0] if entry.woo_cats else None)
+        cats_json = json.dumps([{"id": c.id, "name": c.name} for c in entry.woo_cats])
+
+        stmt = (
+            pg_insert(SunskyCategoryMapping)
+            .values(
+                store_id=None,
+                sunsky_cat=entry.sunsky_cat,
+                woo_cat_id=primary_cat.id if primary_cat else None,
+                woo_cat_name=primary_cat.name if primary_cat else None,
+                woo_cats_json=cats_json,
+                primary_woo_cat_id=primary_id,
+                profile_id=entry.profile_id,
+                times_used=0,
+                updated_at=datetime.now(timezone.utc),
+            )
+            .on_conflict_do_update(
+                # Confirmed via direct testing: unlike Inventory
+                # Mapping's global row (indexed on a constant
+                # expression, which ON CONFLICT can't target), this
+                # partial index IS on a real column (sunsky_cat), so
+                # ON CONFLICT's index_elements + index_where correctly
+                # targets it -- verified this performs a genuine
+                # UPDATE in place, not a duplicate insert, on re-save.
+                index_elements=["sunsky_cat"],
+                index_where=SunskyCategoryMapping.store_id.is_(None),
+                set_={
+                    "woo_cat_id":         primary_cat.id if primary_cat else None,
+                    "woo_cat_name":       primary_cat.name if primary_cat else None,
+                    "woo_cats_json":      cats_json,
+                    "primary_woo_cat_id": primary_id,
+                    "profile_id":         entry.profile_id,
+                    "updated_at":         datetime.now(timezone.utc),
+                },
+            )
+        )
+        await db.execute(stmt)
+    await db.commit()
+    return {"ok": True, "saved": len(entries)}
+
+
+@router.delete("/category-mappings/global/{mapping_id}")
+async def delete_global_category_mapping(mapping_id: int, db: AsyncSession = Depends(get_db)):
+    row = await db.get(SunskyCategoryMapping, mapping_id)
+    if not row or row.store_id is not None:
+        raise HTTPException(status_code=404, detail="Global mapping not found")
     await db.delete(row)
     await db.commit()
     return {"ok": True}

@@ -105,6 +105,13 @@ interface CatMapping {
   profile_name: string | null;
   times_used: number;
   last_used_at: string | null;
+  // Client feedback confirmed live: "Extraction rules need to be
+  // individual for each site / Right now they are same for each
+  // site" -- same request extended to Category Mapping. A global rule
+  // is resolved by NAME against each store's own category tree at
+  // real upload time (see job_tasks.py's
+  // resolve_category_path_for_store), not used as a direct ID list.
+  is_global?: boolean;
 }
 
 // Searchable combobox: free-text input (still supports typing a raw ID or a
@@ -188,12 +195,12 @@ function CategoryMappingDictionary() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editSel, setEditSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null }>({ woo_cats: [], primary_id: null, profile_id: null });
+  const [editSel, setEditSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null; is_global: boolean }>({ woo_cats: [], primary_id: null, profile_id: null, is_global: false });
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [addingNew, setAddingNew] = useState(false);
   const [newSunskyCat, setNewSunskyCat] = useState("");
-  const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null }>({ woo_cats: [], primary_id: null, profile_id: null });
+  const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null; is_global: boolean }>({ woo_cats: [], primary_id: null, profile_id: null, is_global: false });
   const [starredCats, setStarredCats] = useState<{ id: string; name: string }[]>([]);
   const [translating, setTranslating] = useState(false);
 
@@ -306,7 +313,7 @@ function CategoryMappingDictionary() {
 
   const startEdit = (m: CatMapping) => {
     setEditingId(m.id);
-    setEditSel({ woo_cats: m.woo_cats, primary_id: m.primary_woo_cat_id ?? m.woo_cats[0]?.id ?? null, profile_id: m.profile_id ?? null });
+    setEditSel({ woo_cats: m.woo_cats, primary_id: m.primary_woo_cat_id ?? m.woo_cats[0]?.id ?? null, profile_id: m.profile_id ?? null, is_global: m.is_global ?? false });
   };
 
   const toggleWoo = (opt: WooOpt) => {
@@ -332,7 +339,14 @@ function CategoryMappingDictionary() {
     setSaving(true);
     try {
       const primary_id = newSel.primary_id ?? (newSel.woo_cats[0]?.id ?? null);
-      const r = await fetch(`/api/stores/${storeId}/category-mappings`, {
+      // Client feedback: "global and per store both rules options are
+      // there, so if client want to do per store or global that is
+      // his choice." A global rule is saved by NAME (re-resolved per
+      // store at real upload time), so it's fine that the picker above
+      // was necessarily built from THIS store's own category tree --
+      // only the names get reused elsewhere, never these specific ids.
+      const url = newSel.is_global ? "/api/category-mappings/global" : `/api/stores/${storeId}/category-mappings`;
+      const r = await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([{
@@ -343,10 +357,10 @@ function CategoryMappingDictionary() {
         }]),
       });
       if (!r.ok) throw new Error(await r.text());
-      toast({ title: "Mapping added" });
+      toast({ title: newSel.is_global ? "Global mapping added" : "Mapping added" });
       setAddingNew(false);
       setNewSunskyCat("");
-      setNewSel({ woo_cats: [], primary_id: null, profile_id: null });
+      setNewSel({ woo_cats: [], primary_id: null, profile_id: null, is_global: false });
       reload();
     } catch (e: any) {
       toast({ title: "Save failed", description: e.message, variant: "destructive" });
@@ -359,7 +373,8 @@ function CategoryMappingDictionary() {
     if (!storeId) return;
     setSaving(true);
     try {
-      const r = await fetch(`/api/stores/${storeId}/category-mappings`, {
+      const url = editSel.is_global ? "/api/category-mappings/global" : `/api/stores/${storeId}/category-mappings`;
+      const r = await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([{
@@ -384,7 +399,8 @@ function CategoryMappingDictionary() {
     if (!storeId) return;
     setDeleting(m.id);
     try {
-      const r = await fetch(`/api/stores/${storeId}/category-mappings/${m.id}`, { method: "DELETE" });
+      const url = m.is_global ? `/api/category-mappings/global/${m.id}` : `/api/stores/${storeId}/category-mappings/${m.id}`;
+      const r = await fetch(url, { method: "DELETE" });
       if (!r.ok) throw new Error(await r.text());
       toast({ title: "Mapping deleted" });
       setMappings(prev => prev.filter(x => x.id !== m.id));
@@ -556,6 +572,40 @@ function CategoryMappingDictionary() {
             )}
           </div>
 
+          {/* Client feedback: "global and per store both rules options
+              are there, so if client want to do per store or global
+              that is his choice." Categories are picked from THIS
+              store's own tree above (there's no such thing as a
+              store-less category tree to pick from) -- saving as
+              global just means the resulting NAMES get reused and
+              re-resolved on every other store at real upload time,
+              rather than only applying here. */}
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">Applies To</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setNewSel(prev => ({ ...prev, is_global: false }))}
+                className={cn(
+                  "flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors",
+                  !newSel.is_global ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Only {stores.find(s => s.id === storeId)?.name ?? "this store"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewSel(prev => ({ ...prev, is_global: true }))}
+                className={cn(
+                  "flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors",
+                  newSel.is_global ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"
+                )}
+              >
+                All stores (global default)
+              </button>
+            </div>
+          </div>
+
           <div className="flex gap-2">
             <button
               onClick={handleSaveNew}
@@ -658,6 +708,32 @@ function CategoryMappingDictionary() {
                           </select>
                         </div>
 
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-muted-foreground">Applies To</label>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditSel(prev => ({ ...prev, is_global: false }))}
+                              className={cn(
+                                "flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors",
+                                !editSel.is_global ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"
+                              )}
+                            >
+                              Only {stores.find(s => s.id === storeId)?.name ?? "this store"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditSel(prev => ({ ...prev, is_global: true }))}
+                              className={cn(
+                                "flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors",
+                                editSel.is_global ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:text-foreground"
+                              )}
+                            >
+                              All stores (global default)
+                            </button>
+                          </div>
+                        </div>
+
                         <div className="flex gap-2">
                           <button
                             onClick={() => handleSaveEdit(m)}
@@ -675,7 +751,16 @@ function CategoryMappingDictionary() {
                     </td>
                   ) : (
                     <>
-                      <td className="px-4 py-3 font-mono text-xs text-foreground">{m.sunsky_cat}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-foreground">
+                        <div className="flex items-center gap-2">
+                          {m.sunsky_cat}
+                          {m.is_global ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-400" title="Resolved by name against every store's own category tree">Global</span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-secondary text-muted-foreground" title="Only applies to this store">This store</span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-4 py-3">
                         {m.woo_cats.length > 0 ? (
                           <div className="flex flex-wrap gap-1">
