@@ -2373,6 +2373,59 @@ async def _run_sync(db, job):
                 await _log(db, job.id, LogLevel.warn, f"  Starred-category seed failed: {_star_e}")
 
             remaining = needed_cat_ids - set(bfs_meta.keys())
+
+            # Client feedback (Review_4.docx, item #6, PL-112): "didn't
+            # map categories even I put rules in category mapping."
+            # Confirmed via PL-112's own log: 3 category IDs (105679,
+            # 106587, 111748) resolved correctly during Upload's Phase
+            # 2 (which uses get_effective_category_name_map's
+            # comprehensive, full-tree cache -- 3360 entries per the
+            # Enrich step's own log for this same run) but failed here
+            # in Sync with "no category mapping found (tried
+            # candidates: <raw numeric id>)" -- because Sync was using
+            # a COMPLETELY SEPARATE, much smaller, incrementally-built
+            # cache (cache/sunsky_cat_cache.json, loaded as cat_cache
+            # above) with its own capped local BFS fallback (see below)
+            # that simply never reached these 3 categories within its
+            # 80-fetch budget. The category assignment from Upload
+            # happened to already be correct on the live WooCommerce
+            # product ("existing category preserved"), so this
+            # specific run wasn't visibly broken end-to-end, but the
+            # warning is real and Sync-only runs (no preceding Upload
+            # in the same pipeline) would have genuinely failed to
+            # assign these categories at all.
+            #
+            # Fix: check the SAME comprehensive, full-tree cache Upload
+            # already uses successfully, for every ID this weaker local
+            # cache doesn't have, before falling through to the capped
+            # local BFS below -- which remains as a last-resort
+            # fallback for the rare case that BOTH caches miss (e.g. a
+            # startup that raced ahead of the comprehensive cache's own
+            # background warm-up).
+            if remaining:
+                try:
+                    from pipeline.sunsky_client import get_category_name_map_safe, _category_full_cache
+                    await get_category_name_map_safe()  # ensures _category_full_cache is warm
+                    _resolved_from_full_cache = 0
+                    for cid in list(remaining):
+                        entry = _category_full_cache.get(cid)
+                        if entry:
+                            bfs_meta[cid] = {
+                                "id": cid, "name": entry["name"],
+                                "sunsky_parent_id": entry.get("parent_id") or "0",
+                                "_cached_at": cached_now,
+                            }
+                            remaining.discard(cid)
+                            _resolved_from_full_cache += 1
+                    if _resolved_from_full_cache:
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  Resolved {_resolved_from_full_cache} more category ID(s) "
+                                   f"from the full Sunsky tree cache (the same one Upload uses)")
+                except Exception as _fc_e:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  Full-tree category cache lookup failed: {_fc_e} — "
+                               f"falling back to local BFS for remaining IDs")
+
             cache_hits = len(needed_cat_ids) - len(remaining)
             await _log(db, job.id, LogLevel.info,
                        f"  Category cache: {len(cat_cache)} entries loaded "
