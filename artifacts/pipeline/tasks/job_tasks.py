@@ -82,6 +82,30 @@ async def _get_listing(db, product_id: int, store_id: int):
     )).scalar_one_or_none()
 
 
+# Client feedback: "Settings – Attribute Mapping – in Source / Value
+# field need to have 'and', so we can define more than 1 value. For
+# example for Наличност (Stock) we have 'in stock' and 'new item', so
+# instead to create 2 separate rules, we can have 'and'." WooCommerce's
+# own attribute API already natively supports multiple values per
+# attribute (options: ["val1", "val2"]) -- confirmed via
+# woo_client.set_product_attributes's own docstring -- the gap was
+# purely that every site building an attribute's options list here
+# always wrapped a single resolved string as a one-element list, with
+# no way to represent "this attribute should get several values from
+# one rule." Splits on the literal word " and " (case-insensitive,
+# whitespace-trimmed) to match the client's own stated preference for
+# how they'd naturally type it (e.g. "in stock and new item"), rather
+# than requiring a symbol like "|" they'd have to remember. Tradeoff
+# accepted deliberately: a genuine attribute value that happens to
+# contain the word "and" (e.g. "Salt and Pepper") would be
+# mis-split -- acceptable for this use case (short keyword-style
+# status/spec values), not attempted to be perfectly disambiguated.
+def _split_multi_value(raw: str) -> list[str]:
+    import re as _re_smv
+    parts = [p.strip() for p in _re_smv.split(r"\s+and\s+", raw, flags=_re_smv.IGNORECASE)]
+    return [p for p in parts if p]
+
+
 async def _get_or_create_listing(db, product_id: int, store_id: int):
     """Like _get_listing, but creates (and flushes, so it's visible to
     later queries in the SAME transaction) an empty listing row if none
@@ -2057,11 +2081,13 @@ async def _run_upload(db, job):
                             if _attr and _attr["id"] not in seen_attr_ids:
                                 seen_attr_ids.add(_attr["id"])
                                 _seen_names.add(_woo_aname.lower())
-                                await _p2_get_or_create_term(_attr["id"], _woo_val)
+                                _woo_vals = _split_multi_value(_woo_val)
+                                for _v in _woo_vals:
+                                    await _p2_get_or_create_term(_attr["id"], _v)
                                 woo_attrs.append({
                                     "id": _attr["id"],
                                     "name": _attr["name"],
-                                    "options": [_woo_val],
+                                    "options": _woo_vals,
                                     "visible": True,
                                     "variation": False,
                                 })
@@ -2964,11 +2990,13 @@ async def _run_sync(db, job):
                     if _s_attr and _s_attr["id"] not in seen_attr_ids_sync:
                         seen_attr_ids_sync.add(_s_attr["id"])
                         _seen_names_s.add(_s_woo_name.lower())
-                        await get_or_create_term(_s_attr["id"], _s_val)
+                        _s_vals = _split_multi_value(_s_val)
+                        for _v in _s_vals:
+                            await get_or_create_term(_s_attr["id"], _v)
                         woo_attrs.append({
                             "id": _s_attr["id"],
                             "name": _s_attr["name"],
-                            "options": [_s_val],
+                            "options": _s_vals,
                             "visible": True,
                             "variation": False,
                         })

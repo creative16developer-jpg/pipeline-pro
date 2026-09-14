@@ -3022,10 +3022,18 @@ function AttrMappingModal({
               </label>
               <input
                 className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
-                placeholder="e.g. In Stock, Waterproof, New"
+                placeholder="e.g. In Stock, Waterproof, New — or combine with 'and'"
                 value={form.fixed_value}
                 onChange={e => set("fixed_value", e.target.value)}
               />
+              {/* Client feedback: "in Source / Value field need to have
+                  'and', so we can define more than 1 value. For example
+                  for Наличност (Stock) we have 'in stock' and 'new
+                  item', so instead to create 2 separate rules, we can
+                  have 'and'." */}
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Need more than one value on this attribute? Type them separated by <span className="font-mono text-foreground">and</span> — e.g. "in stock and new item" sets both values instead of needing two separate rules.
+              </p>
             </div>
           )}
 
