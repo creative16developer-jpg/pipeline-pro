@@ -540,6 +540,17 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             "slug": p.slug or "",
             "meta_title": p.meta_title or "",
             "meta_description": p.meta_description or "",
+            # Client feedback (Review_4.docx, item #7): "Empty image
+            # alt and image name field in review step." Confirmed:
+            # these two columns exist on Product, and are correctly
+            # generated (derived fields, see content_service.py's
+            # _derive_image_alt / _derive_image_names) -- they were
+            # simply never included in this response dict at all, so
+            # Content Review always showed them blank regardless of
+            # what was actually stored, the same class of bug already
+            # found and fixed once before for manual_woo_cats_json.
+            "image_alt": p.image_alt or "",
+            "image_names": p.image_names or "",
             "focus_keyword": p.focus_keyword or "",
             "tags": p.tags or "",
             "status": p.status.value if hasattr(p.status, "value") else str(p.status),
