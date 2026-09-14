@@ -355,12 +355,34 @@ class JobLog(Base):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SunskyCategoryMapping(Base):
-    """Persistent Sunsky-category → WooCommerce-category mapping per store."""
+    """Persistent Sunsky-category → WooCommerce-category mapping.
+    store_id=NULL is a global rule, resolved by NAME against each
+    store's own category tree at usage time; a specific store_id
+    stores real, directly-usable WooCommerce category IDs for that one
+    store, as before.
+
+    Client feedback: "lets do whichever is necessary to do for per
+    store thing... global and per store both rules options are there,
+    so if client want to do per store or global that is his choice."
+    Confirmed via direct testing that raw WooCommerce category IDs are
+    never portable between different store installations (same
+    category name, completely different numeric IDs per store) -- so
+    unlike a per-store row, a global row's woo_cats_json must be
+    treated purely as a NAME PATH to re-resolve per store, never used
+    as a direct ID list. See job_tasks.py's
+    resolve_category_path_for_store for the actual resolution logic,
+    and add_category_mapping_global.sql for why this needed a separate
+    partial unique index rather than relying on the existing compound
+    constraint alone (which does not, on its own, prevent duplicate
+    global rules for the same category -- confirmed by testing that
+    Postgres never treats two NULLs as "equal" for uniqueness
+    purposes, even inside a compound constraint).
+    """
     __tablename__ = "sunsky_category_mappings"
     __table_args__ = (UniqueConstraint("store_id", "sunsky_cat"),)
 
     id                 = Column(Integer, primary_key=True, index=True)
-    store_id           = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id           = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=True, index=True)
     sunsky_cat         = Column(Text, nullable=False)
     # Numeric Sunsky category ID, when known. Matching by name alone is
     # fragile: name resolution for an unstarred category falls back to a

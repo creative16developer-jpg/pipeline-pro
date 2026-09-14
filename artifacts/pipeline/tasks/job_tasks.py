@@ -97,6 +97,108 @@ async def _get_or_create_listing(db, product_id: int, store_id: int):
     return listing
 
 
+# ── Category Mapping: global rules resolved per-store by name ──────────────
+# Client feedback: "lets do whichever is necessary to do for per store
+# thing... global and per store both rules options are there, so if
+# client want to do per store or global that is his choice." A
+# SunskyCategoryMapping row with store_id=NULL is a global rule; its
+# woo_cats_json is a NAME PATH (never directly-usable IDs, since raw
+# WooCommerce category IDs are never portable between different store
+# installations -- confirmed extensively via direct testing, same root
+# cause already fixed for per-product woo_product_id and manual
+# category overrides earlier this session). Resolved here by walking
+# the path level-by-level against the TARGET store's own WooCategory
+# tree. A store-specific mapping, when one exists, always wins and
+# never needs this resolution at all -- its stored IDs are already
+# correct for that one store directly, exactly as before this change.
+#
+# Consolidated into ONE shared function used by all 3 places this
+# codebase resolves a Sunsky category (Phase 1 upload creation, Phase
+# 2 category+attribute assignment, and the standalone Sync job's
+# category step) instead of three separate, duplicated lookups --
+# reduces the risk of the three sites drifting out of sync with each
+# other on exactly how global-rule resolution should behave.
+
+async def _resolve_category_path_for_store(db, store_id: int, name_path: list[dict]) -> Optional[list[dict]]:
+    """Walks an ordered root-to-leaf category NAME path (as stored in a
+    global mapping's woo_cats_json, captured from whichever store
+    originally created the rule) against a DIFFERENT target store's own
+    WooCategory tree, matching each level by (name, parent's real
+    WooCommerce id) to correctly disambiguate repeated category names
+    across different branches. Returns a NEW [{id, name}, ...] list
+    using the target store's own real IDs, or None if any level of the
+    path doesn't exist by name on this store -- the global rule simply
+    doesn't apply there, falling through to normal "needs mapping"
+    handling exactly as if no rule existed at all.
+    """
+    from models.models import WooCategory
+    from sqlalchemy import select as _sel_wc
+    resolved: list[dict] = []
+    parent_woo_id: Optional[int] = None
+    for entry in name_path:
+        name = entry.get("name")
+        if not name:
+            return None
+        q = _sel_wc(WooCategory).where(WooCategory.store_id == store_id, WooCategory.name == name)
+        q = q.where(WooCategory.parent_id.is_(None) if parent_woo_id is None else WooCategory.parent_id == parent_woo_id)
+        match = (await db.execute(q)).scalars().first()
+        if not match:
+            return None
+        resolved.append({"id": match.woo_id, "name": match.name})
+        parent_woo_id = match.woo_id
+    return resolved
+
+
+async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str) -> Optional[dict]:
+    """Resolves a Sunsky category name to WooCommerce category ID(s) for
+    a specific store. Checks a store-specific SunskyCategoryMapping row
+    first (unchanged from before this change: its stored IDs are used
+    directly); if none exists (or has no usable IDs), falls back to a
+    global (store_id IS NULL) mapping for the same sunsky_cat, resolved
+    against THIS store's own category tree via
+    _resolve_category_path_for_store.
+
+    Returns {"woo_cat_ids": [...], "primary_woo_cat_id": ..., "source": "store"|"global"}
+    or None if neither a store-specific nor an applicable global mapping exists.
+    """
+    from models.models import SunskyCategoryMapping
+    from sqlalchemy import select as _sel_cm
+    import json as _json_cm
+
+    mapping = (await db.execute(
+        _sel_cm(SunskyCategoryMapping).where(
+            SunskyCategoryMapping.store_id == store_id,
+            SunskyCategoryMapping.sunsky_cat == sunsky_cat,
+        )
+    )).scalar_one_or_none()
+
+    if mapping:
+        woo_cat_ids: list[int] = []
+        if mapping.woo_cats_json:
+            woo_cat_ids = [c["id"] for c in _json_cm.loads(mapping.woo_cats_json) if c.get("id")]
+        elif mapping.woo_cat_id:
+            woo_cat_ids = [mapping.woo_cat_id]
+        if woo_cat_ids:
+            primary = mapping.primary_woo_cat_id or woo_cat_ids[-1]
+            return {"woo_cat_ids": woo_cat_ids, "primary_woo_cat_id": primary, "source": "store"}
+
+    global_mapping = (await db.execute(
+        _sel_cm(SunskyCategoryMapping).where(
+            SunskyCategoryMapping.store_id.is_(None),
+            SunskyCategoryMapping.sunsky_cat == sunsky_cat,
+        )
+    )).scalar_one_or_none()
+    if not global_mapping or not global_mapping.woo_cats_json:
+        return None
+
+    name_path = _json_cm.loads(global_mapping.woo_cats_json)
+    resolved = await _resolve_category_path_for_store(db, store_id, name_path)
+    if not resolved:
+        return None
+    woo_cat_ids = [c["id"] for c in resolved]
+    return {"woo_cat_ids": woo_cat_ids, "primary_woo_cat_id": woo_cat_ids[-1], "source": "global"}
+
+
 async def _execute_job(job_id: int):
     import sys
     from pathlib import Path
@@ -1165,7 +1267,6 @@ async def _run_upload(db, job):
                     woo_cat_ids = [c["id"] for c in _manual if c.get("id")]
                     primary_woo_cat_id = _listing.manual_primary_woo_cat_id
                 else:
-                    from models.models import SunskyCategoryMapping
                     raw_for_cat = product.raw_data or {}
                     sunsky_cat = (
                         str(raw_for_cat.get("catName") or
@@ -1180,36 +1281,13 @@ async def _run_upload(db, job):
                         cat_id = str(raw_for_cat.get("categoryId") or raw_for_cat.get("catId") or "").strip()
                         sunsky_cat = upload_category_name_map.get(cat_id, cat_id)
                     if sunsky_cat and job.store_id:
-                        from sqlalchemy import select as _sel
-                        mapping = (await db.execute(
-                            _sel(SunskyCategoryMapping).where(
-                                SunskyCategoryMapping.store_id == job.store_id,
-                                SunskyCategoryMapping.sunsky_cat == sunsky_cat,
-                            )
-                        )).scalar_one_or_none()
-                        if mapping:
-                            if mapping.woo_cats_json:
-                                import json as _json_cat
-                                _woo_cats = _json_cat.loads(mapping.woo_cats_json)
-                                woo_cat_ids = [c["id"] for c in _woo_cats if c.get("id")]
-                            elif mapping.woo_cat_id:
-                                woo_cat_ids = [mapping.woo_cat_id]
-                            # Client feedback confirmed live via WordPress
-                            # admin screenshot: 3 categories checked, none
-                            # marked primary. Root cause: mapping.
-                            # primary_woo_cat_id can be NULL on an EXISTING
-                            # mapping row (e.g. one saved before this
-                            # concept existed, or via a path that never
-                            # set it) -- with no fallback, this silently
-                            # resulted in no primary at all rather than a
-                            # sensible default. Falls back to the deepest/
-                            # most specific category (the last item in a
-                            # hierarchy-ordered woo_cat_ids list) instead
-                            # of leaving it unset.
-                            primary_woo_cat_id = mapping.primary_woo_cat_id or (woo_cat_ids[-1] if woo_cat_ids else None)
-                            if woo_cat_ids:
-                                await _log(db, job.id, LogLevel.info,
-                                           f"  {product.sku}: category mapping {sunsky_cat!r} → woo ids {woo_cat_ids}")
+                        resolved_cat = await _resolve_category_mapping(db, job.store_id, sunsky_cat)
+                        if resolved_cat:
+                            woo_cat_ids = resolved_cat["woo_cat_ids"]
+                            primary_woo_cat_id = resolved_cat["primary_woo_cat_id"]
+                            await _log(db, job.id, LogLevel.info,
+                                       f"  {product.sku}: category mapping {sunsky_cat!r} "
+                                       f"({resolved_cat['source']}) → woo ids {woo_cat_ids}")
                         else:
                             await _log(db, job.id, LogLevel.warn,
                                        f"  {product.sku}: no category mapping for {sunsky_cat!r} — product will have no category")
@@ -1751,9 +1829,47 @@ async def _run_upload(db, job):
                                        f"  {prod.sku}: SunskyCategoryMapping "
                                        f"{_matched_key!r} → {cat_woo_ids}")
                     else:
-                        await _log(db, job.id, LogLevel.warn,
-                                   f"  {prod.sku}: no SunskyCategoryMapping found for "
-                                   f"candidates {_scm_candidates} — category not assigned")
+                        # Client feedback: "lets do whichever is necessary
+                        # to do for per store thing... global and per
+                        # store both rules options are there." No
+                        # store-specific rule matched any candidate --
+                        # try a GLOBAL rule (store_id IS NULL) using the
+                        # exact same candidate list and matching style,
+                        # then resolve its stored NAME PATH against THIS
+                        # store's own category tree (a global rule's IDs
+                        # were captured from whichever store originally
+                        # created it, never directly usable on a
+                        # different store -- see
+                        # _resolve_category_path_for_store).
+                        _global_mapping2 = None
+                        _global_matched_key = None
+                        for _cand in _scm_candidates:
+                            _global_mapping2 = (await db.execute(
+                                _sel_scm(_SCM2).where(
+                                    _SCM2.store_id.is_(None),
+                                    _SCM2.sunsky_cat.ilike(_cand),
+                                )
+                            )).scalar_one_or_none()
+                            if _global_mapping2:
+                                _global_matched_key = _cand
+                                break
+                        _resolved_global2 = None
+                        if _global_mapping2 and _global_mapping2.woo_cats_json:
+                            import json as _json_gm2
+                            _resolved_global2 = await _resolve_category_path_for_store(
+                                db, job.store_id, _json_gm2.loads(_global_mapping2.woo_cats_json)
+                            )
+                        if _resolved_global2:
+                            cat_woo_ids = [c["id"] for c in _resolved_global2]
+                            cat_names   = [c["name"] for c in _resolved_global2]
+                            p2_primary_woo_cat_id = cat_woo_ids[-1]
+                            await _log(db, job.id, LogLevel.info,
+                                       f"  {prod.sku}: SunskyCategoryMapping "
+                                       f"{_global_matched_key!r} (global) → {cat_woo_ids}")
+                        else:
+                            await _log(db, job.id, LogLevel.warn,
+                                       f"  {prod.sku}: no SunskyCategoryMapping found for "
+                                       f"candidates {_scm_candidates} — category not assigned")
                 except Exception as _scm_e:
                     await _log(db, job.id, LogLevel.warn,
                                f"  {prod.sku}: SunskyCategoryMapping lookup failed — {_scm_e}")
@@ -2570,6 +2686,38 @@ async def _run_sync(db, job):
                             primary_woo_cat_id = _smapping.primary_woo_cat_id or (woo_cat_ids[-1] if woo_cat_ids else None)
                             if woo_cat_ids:
                                 woo_cat_source = f"SunskyCategoryMapping ({_skey!r})"
+                        else:
+                            # Client feedback: "lets do whichever is
+                            # necessary to do for per store thing...
+                            # global and per store both rules options
+                            # are there." No store-specific rule matched
+                            # -- try a GLOBAL rule (store_id IS NULL)
+                            # with the same candidates, resolved against
+                            # THIS store's own category tree (mirrors
+                            # the identical fallback added to Phase 1's
+                            # upload category resolution above).
+                            _sync_global = None
+                            _sync_global_key = None
+                            for _cand in _sync_candidates:
+                                _sync_global = (await db.execute(
+                                    _ssel_scm(_SSCM).where(
+                                        _SSCM.store_id.is_(None),
+                                        _SSCM.sunsky_cat.ilike(_cand),
+                                    )
+                                )).scalar_one_or_none()
+                                if _sync_global:
+                                    _sync_global_key = _cand
+                                    break
+                            _sync_resolved_global = None
+                            if _sync_global and _sync_global.woo_cats_json:
+                                import json as _sjson_g
+                                _sync_resolved_global = await _resolve_category_path_for_store(
+                                    db, store_id, _sjson_g.loads(_sync_global.woo_cats_json)
+                                )
+                            if _sync_resolved_global:
+                                woo_cat_ids = [c["id"] for c in _sync_resolved_global]
+                                primary_woo_cat_id = woo_cat_ids[-1]
+                                woo_cat_source = f"SunskyCategoryMapping ({_sync_global_key!r}, global)"
                     except Exception as _sme:
                         await _log(db, job.id, LogLevel.warn,
                                    f"  {prod.sku}: SunskyCategoryMapping lookup failed — {_sme}")
