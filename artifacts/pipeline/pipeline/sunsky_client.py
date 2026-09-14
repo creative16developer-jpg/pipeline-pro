@@ -384,10 +384,109 @@ async def get_category_name_map(force_refresh: bool = False) -> dict[str, str]:
         _category_name_cache = {str(c["id"]): c["name"] for c in tree if c.get("id") and c.get("name")}
         _category_cache_fetched_at = now
         _save_category_cache_to_disk()
+        # Client feedback (Review_4.docx, item #3/#4): "find and map
+        # category easier in settings – sunsky categories" / "Full path
+        # required otherwise we can't be sure which category is this."
+        # The Sunsky Categories settings page could previously only
+        # search root-level category names (a few dozen), leaving
+        # thousands of deeper categories findable only by manually
+        # expanding branches one level at a time -- and even then,
+        # a category's bare leaf name alone doesn't say which branch
+        # it's actually in when names repeat across the tree. Both
+        # need each category's full ancestor path, which needs
+        # parent_id -- already present on every entry in `tree` above
+        # (confirmed via _normalise_category), just never previously
+        # kept anywhere; only bare names survived into
+        # _category_name_cache. Built from this SAME tree walk that
+        # already just happened, at zero extra Sunsky API cost --
+        # never triggers a second walk of its own.
+        _category_full_cache.clear()
+        for c in tree:
+            cid = str(c.get("id") or "")
+            if cid and c.get("name"):
+                _category_full_cache[cid] = {"name": c["name"], "parent_id": c.get("parent_id")}
+        _save_category_full_cache_to_disk()
     except Exception as exc:
         print(f"[sunsky_client] get_category_name_map() failed: {exc} — "
               f"using stale/empty cache as fallback.")
     return _category_name_cache
+
+
+# Richer sibling of _category_name_cache above -- keeps parent_id per
+# category (not just the name) so a full root-to-leaf path can be
+# reconstructed for any category, not just its bare name. Populated
+# from the exact same tree walk as _category_name_cache (see above),
+# never a separate one. Persisted to disk for the same reason as the
+# name-only cache: a server restart should start warm, not force an
+# operator to wait through a fresh multi-minute tree walk before this
+# page becomes useful again.
+_category_full_cache: dict[str, dict] = {}
+_CATEGORY_FULL_CACHE_PATH = Path(__file__).parent.parent / "config_store" / "category_full_map.json"
+
+
+def _load_category_full_cache_from_disk() -> None:
+    global _category_full_cache
+    try:
+        if _CATEGORY_FULL_CACHE_PATH.exists():
+            _category_full_cache = json.loads(_CATEGORY_FULL_CACHE_PATH.read_text()).get("map", {})
+    except Exception as exc:
+        print(f"[sunsky_client] Failed to load category_full_map.json from disk: {exc}")
+
+
+def _save_category_full_cache_to_disk() -> None:
+    try:
+        _CATEGORY_FULL_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CATEGORY_FULL_CACHE_PATH.write_text(json.dumps({"map": _category_full_cache}, ensure_ascii=False))
+    except Exception as exc:
+        print(f"[sunsky_client] Failed to save category_full_map.json to disk: {exc}")
+
+
+_load_category_full_cache_from_disk()
+
+
+def build_category_path(cat_id: str) -> list[dict]:
+    """Walk UP from a category to the root via _category_full_cache's
+    parent_id chain, returning the full path as [{id, name}, ...] in
+    root-to-leaf order (the category itself is the last entry). Returns
+    just the category's own {id, name} (no ancestors) if it isn't in
+    the cache at all, or if a parent link is missing/broken partway up
+    -- a partial or missing path is still more useful to display than
+    silently returning nothing.
+    """
+    chain: list[dict] = []
+    seen: set[str] = set()  # guards against a corrupt/cyclic parent chain
+    current = str(cat_id)
+    while current and current not in seen:
+        seen.add(current)
+        entry = _category_full_cache.get(current)
+        if not entry:
+            if not chain:
+                chain.append({"id": current, "name": current})
+            break
+        chain.append({"id": current, "name": entry["name"]})
+        current = str(entry.get("parent_id") or "")
+    chain.reverse()
+    return chain
+
+
+def search_categories_by_name(query: str, limit: int = 50) -> list[dict]:
+    """Case-insensitive substring search across EVERY cached category
+    name (not just root-level ones), each result annotated with its
+    full root-to-leaf path via build_category_path. Client feedback
+    (Review_4.docx, items #3/#4): searching previously only covered
+    root-level names, and results showed no path -- both fixed here at
+    once, reusing the same cache build_category_path also reads from.
+    """
+    q = query.strip().lower()
+    if not q:
+        return []
+    results = []
+    for cid, entry in _category_full_cache.items():
+        if q in entry["name"].lower():
+            results.append({"id": cid, "name": entry["name"], "path": build_category_path(cid)})
+            if len(results) >= limit:
+                break
+    return results
 
 
 async def get_category_name_map_safe(timeout: float = 20.0) -> dict[str, str]:

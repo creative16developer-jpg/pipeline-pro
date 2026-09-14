@@ -116,6 +116,35 @@ async def get_categories(
         ]
 
 
+@router.get("/categories/search")
+async def search_categories(q: str = Query(..., min_length=1)):
+    """
+    Client feedback (Review_4.docx, items #3/#4): "find and map category
+    easier in settings – sunsky categories" / "Full path required
+    otherwise we can't be sure which category is this." The Sunsky
+    Categories settings page could previously only search root-level
+    category names (a few dozen out of thousands total), leaving deeper
+    categories findable only by manually expanding one branch level at
+    a time -- and even then, a bare leaf name alone doesn't say which
+    branch it's actually in when names repeat across the tree.
+
+    Searches every cached category name at once (not just root-level),
+    each result annotated with its full root-to-leaf path -- see
+    sunsky_client.search_categories_by_name /
+    sunsky_client.build_category_path.
+
+    Warms the cache first via get_category_name_map_safe if it's
+    completely empty (e.g. right after a fresh deploy, before the
+    app's background refresh has ever run) -- capped at 20s so a
+    search never hangs waiting for a full multi-minute tree walk;
+    an empty/stale cache degrades to few or no results rather than
+    blocking the request indefinitely.
+    """
+    if not sunsky_client._category_full_cache:
+        await sunsky_client.get_category_name_map_safe(timeout=20.0)
+    return sunsky_client.search_categories_by_name(q)
+
+
 @router.get("/browse")
 async def browse_products(
     category_id: Optional[str] = Query(default=None),

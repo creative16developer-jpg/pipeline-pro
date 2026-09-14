@@ -1935,6 +1935,8 @@ function SunskyCategoriesTab() {
   const [loadingChild, setLoadingChild] = useState<Set<string>>(new Set());
   const [starred, setStarred]           = useState<StarredSunskyCat[]>([]);
   const [searchQ, setSearchQ]           = useState("");
+  const [searchResults, setSearchResults] = useState<{ id: string; name: string; path: { id: string; name: string }[] }[]>([]);
+  const [searching, setSearching]       = useState(false);
   const [loadingRoot, setLoadingRoot]   = useState(true);
   const [toggling, setToggling]         = useState<string | null>(null);
   const [catFallback, setCatFallback]   = useState(false);
@@ -2010,6 +2012,34 @@ function SunskyCategoriesTab() {
     ? rootCats.filter((c) => c.name.toLowerCase().includes(searchQ.toLowerCase()))
     : rootCats;
 
+  // Client feedback (Review_4.docx, items #3/#4): "find and map category
+  // easier in settings – sunsky categories" / "Full path required
+  // otherwise we can't be sure which category is this." filteredRoot
+  // above only ever searched root-level names -- kept as-is for the
+  // "browse the tree" experience when the search box is empty, but a
+  // non-empty search now hits the new deep-search endpoint instead,
+  // covering every cached category (not just root level) and returning
+  // each match's full ancestor path so a repeated leaf name (e.g. two
+  // different "Cases" in unrelated branches) is no longer ambiguous.
+  // Debounced so a search doesn't fire a request per keystroke.
+  useEffect(() => {
+    const q = searchQ.trim();
+    if (!q) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const timer = setTimeout(() => {
+      fetch(`/api/sunsky/categories/search?q=${encodeURIComponent(q)}`)
+        .then(r => r.ok ? r.json() : [])
+        .then(d => setSearchResults(Array.isArray(d) ? d : []))
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearching(false));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQ]);
+
   return (
     <div>
       <div>
@@ -2037,13 +2067,53 @@ function SunskyCategoriesTab() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
             <input
               type="text"
-              placeholder="Search top-level categories... (expand manually for sub-categories)"
+              placeholder="Search any category, at any depth — full path shown"
               value={searchQ}
               onChange={(e) => setSearchQ(e.target.value)}
               className="w-full bg-background border border-border rounded-xl pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
             />
           </div>
-          {loadingRoot ? (
+          {searchQ.trim() ? (
+            searching ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+                <Loader2 className="w-4 h-4 animate-spin" /> Searching…
+              </div>
+            ) : searchResults.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-6 text-center">
+                No categories match "{searchQ}".
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {searchResults.map((r) => (
+                  <div
+                    key={r.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-secondary/20 px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground truncate">{r.name}</div>
+                      {r.path.length > 1 && (
+                        <div className="text-[11px] text-muted-foreground truncate">
+                          {r.path.slice(0, -1).map((p) => p.name).join(" › ")}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => toggleStar({ id: r.id, name: r.name }, r.path.length > 1 ? r.path[r.path.length - 2].name : undefined)}
+                      disabled={toggling === r.id}
+                      className="shrink-0 px-1 py-0.5 rounded text-lg leading-none transition-colors"
+                      title={isStarred(r.id) ? "Remove from favourites" : "Add to favourites"}
+                    >
+                      {toggling === r.id
+                        ? <Loader2 className="w-4 h-4 animate-spin" />
+                        : isStarred(r.id)
+                          ? <span className="text-amber-400">★</span>
+                          : <span className="text-muted-foreground/30 hover:text-muted-foreground/60">☆</span>}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : loadingRoot ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
               <Loader2 className="w-4 h-4 animate-spin" /> Loading categories…
             </div>
