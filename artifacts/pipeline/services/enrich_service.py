@@ -168,7 +168,25 @@ async def _load_rules(db: Optional["AsyncSession"], store_id: Optional[int] = No
 
 async def _load_mapping_rules(db: Optional["AsyncSession"], store_id: Optional[int]) -> list[dict]:
     """Load AttributeMappingRule rows: global (store_id IS NULL) + this store's,
-    sorted by sort_order so 'first matching rule wins' has a stable order."""
+    sorted by sort_order so 'first matching rule wins' has a stable order.
+
+    BUG FIX (found during a systematic multi-store QA pass, reproduced
+    directly with real data before fixing): sorting purely by
+    (sort_order, id) meant that for the SAME woo_attr_name, whichever
+    rule was CREATED FIRST won -- id is a creation-order artifact, not
+    a meaningful priority signal. A very likely, realistic workflow
+    (set up a global default first, then later add a store-specific
+    override for one particular store) would have the global rule's
+    lower id keep it winning forever, with the store-specific override
+    silently never applying at all -- confirmed by reproducing exactly
+    this scenario: a global rule created first, then a store-specific
+    override for the same attribute created second, returned in the
+    wrong order for the override to ever be seen. Fixed by sorting a
+    THIS-STORE-specific match ahead of a global one whenever both
+    target the same sort_order, without disturbing sort_order's own
+    intended purpose of ordering genuinely different rules (e.g.
+    different attribute names, or category-conditional variants).
+    """
     if db is None:
         return []
     try:
@@ -183,6 +201,11 @@ async def _load_mapping_rules(db: Optional["AsyncSession"], store_id: Optional[i
                 AttributeMappingRule.store_id.is_(None),
             ))
         rows = (await db.execute(q)).scalars().all()
+        if store_id is not None:
+            rows = sorted(
+                rows,
+                key=lambda r: (r.sort_order, 0 if r.store_id == store_id else 1, r.id),
+            )
         return [
             {
                 "woo_attr_name":   r.woo_attr_name,
