@@ -549,7 +549,17 @@ def _get_variant(specs: dict, name: str) -> str:
 def _logic_title(product: dict, options: dict, resolved: dict) -> str:
     csv_title = (product.get("csv_title") or "").strip()
     if csv_title:
-        return csv_title[:120]
+        # Client feedback (Review_4.docx, item #10): "Generated content
+        # cut off mid-sentence." Found while auditing every raw
+        # character-slice in this file for the same class of bug
+        # already fixed elsewhere (see _truncate_no_mid_word's own
+        # docstring) -- this one specific site was missed: a plain
+        # csv_title[:120] slice with zero word-boundary protection,
+        # unlike every other field generator below, which all reuse
+        # _truncate_no_mid_word already. A long CSV-supplied title
+        # would have been chopped mid-word here exactly like the
+        # already-fixed _logic_title case the docstring describes.
+        return _truncate_no_mid_word(csv_title, 120)
 
     name = _strip_html(product.get("name", ""))
     if name:
