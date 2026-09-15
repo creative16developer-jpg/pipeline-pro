@@ -474,7 +474,20 @@ async def _run_fetch(db, job):
             if existing:
                 # ── Compare key fields; update if anything changed
                 changed_fields = []
-                if existing.name != p["name"] and p["name"]:
+                # Client feedback (Review_4.docx, item #11): "While
+                # importing product info with CSV, the system changes
+                # the name." Confirmed: this isn't the CSV import step
+                # itself, but THIS later fetch-refresh path -- when a
+                # CSV-imported product's Sunsky detail data gets
+                # fetched afterward (e.g. to pull images/specs), this
+                # code unconditionally overwrote the name with
+                # Sunsky's own raw title whenever it differed, with no
+                # awareness that csv_title represents a name the
+                # operator deliberately chose to keep, not Sunsky's
+                # default. A product with no csv_title (fetched the
+                # normal, non-CSV way) is unaffected -- still refreshed
+                # from Sunsky exactly as before.
+                if existing.name != p["name"] and p["name"] and not existing.csv_title:
                     existing.name = p["name"]
                     changed_fields.append("name")
                 if existing.price != p.get("price") and p.get("price"):

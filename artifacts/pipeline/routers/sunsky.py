@@ -354,7 +354,14 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
 
         if existing:
             changed = False
-            if p["name"] and existing.name != p["name"]:
+            # Client feedback (Review_4.docx, item #11): "While
+            # importing product info with CSV, the system changes the
+            # name." Same fix as job_tasks.py's parallel fetch-refresh
+            # path -- csv_title marks a name the operator deliberately
+            # chose to keep, not Sunsky's default, so skip the
+            # overwrite when it's set. A normally-fetched product (no
+            # csv_title) is unaffected.
+            if p["name"] and existing.name != p["name"] and not existing.csv_title:
                 existing.name = p["name"]; changed = True
             if p.get("price") and existing.price != p["price"]:
                 existing.price = p["price"]; changed = True
