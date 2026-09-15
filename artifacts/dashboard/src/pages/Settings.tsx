@@ -844,6 +844,7 @@ interface ExtractionRule {
   // a specific store_id overrides the global rule for just that store.
   store_id: number | null;
   is_override: boolean;
+  is_overridden?: boolean;
 }
 
 const SOURCE_OPTS = [
@@ -1272,7 +1273,7 @@ function AIExtractionRulesTab() {
             </thead>
             <tbody className="divide-y divide-border/40">
               {rules.map(r => (
-                <tr key={r.id} className="hover:bg-secondary/10 transition-colors">
+                <tr key={r.id} className={cn("hover:bg-secondary/10 transition-colors", r.is_overridden && "opacity-50")}>
                   {editingId === r.id ? (
                     <td colSpan={5} className="p-4">{RuleForm()}</td>
                   ) : (
@@ -1287,6 +1288,19 @@ function AIExtractionRulesTab() {
                           ) : (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-secondary text-muted-foreground" title="Applies to every store unless a store-specific override exists">
                               Global
+                            </span>
+                          )}
+                          {/* Client feedback confirmed live: "I have
+                              saved 2 rules one for global and one for
+                              per store then why global not showing."
+                              Previously hidden entirely from this list
+                              once an override existed -- now shown,
+                              dimmed, with this note, so it can still
+                              be viewed/edited without switching to a
+                              different store first. */}
+                          {r.is_overridden && (
+                            <span className="text-[10px] text-muted-foreground italic" title="A store-specific rule for this attribute currently takes priority for the selected store">
+                              (overridden by "This store" below)
                             </span>
                           )}
                         </div>

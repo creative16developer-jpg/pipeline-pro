@@ -59,6 +59,14 @@ class RuleOut(BaseModel):
     selector:             Optional[str]
     store_id:             Optional[int]
     is_override:          bool
+    # Client feedback confirmed live: "why global not showing." True
+    # only on a GLOBAL row (store_id is None) when the store currently
+    # being viewed has its OWN override for the same attribute name --
+    # meaning this global row exists and is still returned, but isn't
+    # the one actually applied for this store. Lets the frontend show
+    # it visually de-emphasized with a note, instead of the previous
+    # behavior of hiding it from the list entirely.
+    is_overridden:        bool = False
     created_at:           str
     updated_at:           str
 
@@ -105,15 +113,27 @@ async def list_rules(
                 q.where(or_(AIExtractionRule.store_id == store_id, AIExtractionRule.store_id.is_(None)))
             )
         ).scalars().all()
-        # Store-specific override wins over the global rule for the
-        # same attribute name -- keep only one per name, preferring
-        # this store's own row when both exist.
-        by_name: dict[str, AIExtractionRule] = {}
+        # Client feedback confirmed live: "I have saved 2 rules one
+        # for global and one for per store then why global not
+        # showing." The earlier version of this endpoint HID the
+        # global rule entirely whenever a store-specific override
+        # existed for the same attribute name, on the assumption that
+        # only showing "what's effectively active" was clearer -- in
+        # practice this meant an operator had no way to see or edit
+        # the underlying global rule at all while an override was in
+        # place, without switching to a different store first. Now
+        # returns BOTH rows, with is_overridden marking the global one
+        # as not currently the one that wins for this store (the
+        # frontend can render that visually, e.g. dimmed / a small
+        # "overridden by This store" note) rather than hiding it.
+        active_names = {r.woo_attr_name for r in rows if r.store_id == store_id}
+        rows = sorted(rows, key=lambda r: (r.sort_order, r.woo_attr_name, 0 if r.store_id == store_id else 1))
+        results = []
         for r in rows:
-            existing = by_name.get(r.woo_attr_name)
-            if existing is None or (r.store_id == store_id and existing.store_id is None):
-                by_name[r.woo_attr_name] = r
-        rows = sorted(by_name.values(), key=lambda r: (r.sort_order, r.woo_attr_name))
+            out = RuleOut.from_orm(r)
+            out.is_overridden = (r.store_id is None and r.woo_attr_name in active_names)
+            results.append(out)
+        return {"rules": results}
     else:
         rows = (await db.execute(q)).scalars().all()
     return {"rules": [RuleOut.from_orm(r) for r in rows]}
