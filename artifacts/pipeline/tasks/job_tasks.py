@@ -2742,17 +2742,32 @@ async def _run_sync(db, job):
                                     woo_cat_name=_cat_name,
                                     woo_cats_json=_json_local.dumps([{"id": woo_id, "name": _cat_name}]),
                                     primary_woo_cat_id=woo_id,
-                                ).on_conflict_do_update(
+                                ).on_conflict_do_nothing(
                                     index_elements=["store_id", "sunsky_cat"],
-                                    set_={
-                                        "sunsky_cat_id": cat_id,
-                                        "woo_cat_id": woo_id,
-                                        "woo_cat_name": _cat_name,
-                                        "woo_cats_json": _json_local.dumps([{"id": woo_id, "name": _cat_name}]),
-                                        "primary_woo_cat_id": woo_id,
-                                        "updated_at": datetime.now(timezone.utc),
-                                    },
                                 )
+                                # Client feedback (live test, PL-115/116):
+                                # "which category it should assign in
+                                # WooCommerce" -- confirmed a real bug here:
+                                # this upsert previously used
+                                # on_conflict_do_update, unconditionally
+                                # overwriting ANY existing mapping row for
+                                # this (store_id, sunsky_cat) -- including a
+                                # perfectly valid one the operator had
+                                # already deliberately set (e.g. a flat
+                                # "Waterproof Cases" -> #1859 mapping). That
+                                # directly contradicts this very function's
+                                # own documented priority order two lines
+                                # below ("1. SunskyCategoryMapping (user's
+                                # explicit mapping -- always wins)"): an
+                                # automatic, lower-priority tree-walk result
+                                # was silently clobbering the higher-priority
+                                # explicit mapping it's supposed to defer to.
+                                # on_conflict_do_nothing preserves the
+                                # original "self-healing" purpose (INSERT a
+                                # fresh mapping when none exists yet, e.g. a
+                                # genuinely blank/never-set one) without ever
+                                # touching an existing row, whatever its
+                                # current value.
                                 await db.execute(_stmt)
                                 await db.commit()
                         except Exception as _sync_map_e:
