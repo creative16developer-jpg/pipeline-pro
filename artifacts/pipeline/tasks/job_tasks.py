@@ -1726,6 +1726,17 @@ async def _run_upload(db, job):
             key = name.lower()
             if key in p2_attr_lookup:
                 return p2_attr_lookup[key]
+            # Client feedback (Review_4.docx, item #12): "The pipeline
+            # creates new categories/attributes in Woo which are not
+            # defined before the pipeline." store.allow_auto_create_taxonomy
+            # defaults to True (preserves existing behavior exactly for
+            # every store until an operator explicitly opts into
+            # stricter, existing-taxonomy-only behavior).
+            if not store.allow_auto_create_taxonomy:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Attribute {name!r} doesn't exist in WooCommerce and "
+                           f"auto-create is disabled for this store — skipping")
+                return None
             try:
                 created = await wc.create_woo_attribute(store, name)
                 p2_attr_lookup[key] = created
@@ -1746,6 +1757,11 @@ async def _run_upload(db, job):
             key = term_name.lower()
             if key in p2_term_cache[attr_id]:
                 return p2_term_cache[attr_id][key]
+            if not store.allow_auto_create_taxonomy:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Term {term_name!r} doesn't exist for this attribute in "
+                           f"WooCommerce and auto-create is disabled for this store — skipping")
+                return None
             try:
                 created = await wc.create_attribute_term(store, attr_id, term_name)
                 p2_term_cache[attr_id][key] = created["id"]
@@ -2595,6 +2611,14 @@ async def _run_sync(db, job):
                     cats_synced += 1
                     await _log(db, job.id, LogLevel.debug,
                                f"  {'  ' * _guard}↳ {name} — already in WooCommerce (#{woo_id})")
+                elif not store.allow_auto_create_taxonomy:
+                    # Client feedback (Review_4.docx, item #12): "The
+                    # pipeline creates new categories/attributes in Woo
+                    # which are not defined before the pipeline."
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  {'  ' * _guard}↳ {name!r} doesn't exist in WooCommerce and "
+                               f"auto-create is disabled for this store — skipping")
+                    return None
                 else:
                     try:
                         resp = await woo_client.create_woo_category(store, name, woo_parent)
@@ -2887,6 +2911,15 @@ async def _run_sync(db, job):
             key = name.lower()
             if key in attr_lookup:
                 return attr_lookup[key]
+            # Client feedback (Review_4.docx, item #12): "The pipeline
+            # creates new categories/attributes in Woo which are not
+            # defined before the pipeline." Same gate as Phase 2's
+            # identical get_or_create_attr.
+            if not store.allow_auto_create_taxonomy:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Attribute {name!r} doesn't exist in WooCommerce and "
+                           f"auto-create is disabled for this store — skipping")
+                return None
             try:
                 created = await woo_client.create_woo_attribute(store, name)
                 attr_lookup[key] = created
@@ -2906,6 +2939,11 @@ async def _run_sync(db, job):
             key = term_name.lower()
             if key in term_cache[attr_id]:
                 return term_cache[attr_id][key]
+            if not store.allow_auto_create_taxonomy:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Term {term_name!r} doesn't exist for attribute {attr_id} in "
+                           f"WooCommerce and auto-create is disabled for this store — skipping")
+                return None
             try:
                 created = await woo_client.create_attribute_term(store, attr_id, term_name)
                 term_cache[attr_id][key] = created["id"]

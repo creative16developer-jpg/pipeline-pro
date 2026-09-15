@@ -47,6 +47,14 @@ class StoreOut(BaseModel):
     consumer_key: str
     wp_username: Optional[str] = None
     status: str
+    # Client feedback (Review_4.docx, item #12): "The pipeline creates
+    # new categories/attributes in Woo which are not defined before
+    # the pipeline." Read here so the Store Edit modal can show the
+    # current setting; changed via the dedicated PATCH
+    # /stores/{id}/taxonomy-settings endpoint below (a plain hand-
+    # written endpoint, not routed through the generated API client,
+    # to avoid needing a full client regeneration for one new field).
+    allow_auto_create_taxonomy: bool = True
     last_tested_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

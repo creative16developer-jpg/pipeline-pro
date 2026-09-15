@@ -71,6 +71,14 @@ class Store(Base):
     wp_app_password = Column(String, nullable=True)
     status = Column(SAEnum(StoreStatus, name="store_status"), nullable=False, default=StoreStatus.inactive)
     last_tested_at = Column(DateTime(timezone=True), nullable=True)
+    # Client feedback (Review_4.docx, item #12): "The pipeline creates
+    # new categories/attributes in Woo which are not defined before
+    # the pipeline." Default True preserves existing behavior exactly
+    # (the pipeline has always auto-created a missing WooCommerce
+    # category/attribute/term rather than silently dropping it) -- an
+    # operator who wants strict "only ever use what I've already set
+    # up in WooCommerce" behavior can turn this off per store.
+    allow_auto_create_taxonomy = Column(Boolean, nullable=False, default=True, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

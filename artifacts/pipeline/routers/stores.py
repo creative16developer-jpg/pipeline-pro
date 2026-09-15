@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from pydantic import BaseModel as _BaseModel
 from database import get_db
 from models.models import Store, WooCategory, StoreStatus, WooAttribute, WooAttributeTerm
 from schemas.schemas import StoreCreate, StoreUpdate, StoreOut, WooCategoryOut
@@ -18,6 +19,32 @@ async def list_stores(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Store).order_by(Store.created_at.desc()))
     stores = result.scalars().all()
     return [StoreOut.from_orm_masked(s) for s in stores]
+
+
+class TaxonomySettingsUpdate(_BaseModel):
+    allow_auto_create_taxonomy: bool
+
+
+@router.patch("/{store_id}/taxonomy-settings", response_model=StoreOut)
+async def update_taxonomy_settings(store_id: int, body: TaxonomySettingsUpdate, db: AsyncSession = Depends(get_db)):
+    """
+    Client feedback (Review_4.docx, item #12): "The pipeline creates
+    new categories/attributes in Woo which are not defined before the
+    pipeline." A plain, hand-written endpoint rather than going through
+    the generated API client's StoreUpdate flow -- avoids needing a
+    full client regeneration for this one new boolean field, and keeps
+    this toggle's save action independent of the main store-edit
+    form's own save/error handling (credentials vs. this setting are
+    conceptually separate actions that happen to live in the same
+    modal).
+    """
+    store = await db.get(Store, store_id)
+    if not store:
+        raise HTTPException(404, "Store not found")
+    store.allow_auto_create_taxonomy = body.allow_auto_create_taxonomy
+    await db.commit()
+    await db.refresh(store)
+    return StoreOut.from_orm_masked(store)
 
 
 @router.post("", response_model=StoreOut)

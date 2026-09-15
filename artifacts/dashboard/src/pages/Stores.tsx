@@ -168,6 +168,16 @@ function EditStoreModal({ store, isOpen, onClose }: { store: any, isOpen: boolea
     consumerKey: '', consumerSecret: '',
     wpUsername: store.wpUsername || '', wpAppPassword: '',
   });
+  // Client feedback (Review_4.docx, item #12): "The pipeline creates
+  // new categories/attributes in Woo which are not defined before the
+  // pipeline." Kept as separate state (not part of formData/the main
+  // generated-client save flow above) and saved via its own plain
+  // fetch() call to a dedicated backend endpoint -- avoids needing to
+  // regenerate the API client's types for one new boolean field, and
+  // keeps this toggle's save independent of the credentials form's
+  // own success/error handling.
+  const [allowAutoCreate, setAllowAutoCreate] = useState(store.allowAutoCreateTaxonomy ?? true);
+  const [savingTaxonomySetting, setSavingTaxonomySetting] = useState(false);
 
   // Re-sync form when a different store's modal is opened (store prop
   // changes identity between cards) -- otherwise stale values from a
@@ -180,7 +190,27 @@ function EditStoreModal({ store, isOpen, onClose }: { store: any, isOpen: boolea
       consumerKey: '', consumerSecret: '',
       wpUsername: store.wpUsername || '', wpAppPassword: '',
     });
+    setAllowAutoCreate(store.allowAutoCreateTaxonomy ?? true);
   }
+
+  const handleTaxonomyToggle = async (next: boolean) => {
+    setAllowAutoCreate(next);
+    setSavingTaxonomySetting(true);
+    try {
+      const r = await fetch(`/api/stores/${store.id}/taxonomy-settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allow_auto_create_taxonomy: next }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: next ? "Auto-create enabled" : "Auto-create disabled" });
+    } catch (e: any) {
+      setAllowAutoCreate(!next); // revert on failure
+      toast({ title: "Failed to save setting", description: e.message, variant: "destructive" });
+    } finally {
+      setSavingTaxonomySetting(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -255,6 +285,29 @@ function EditStoreModal({ store, isOpen, onClose }: { store: any, isOpen: boolea
             <label className="text-sm font-medium">WP Application Password</label>
             <input type="password" value={formData.wpAppPassword} onChange={e => setFormData({...formData, wpAppPassword: e.target.value})} className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:border-primary focus:ring-1 transition-all" placeholder="Leave blank to keep current" />
           </div>
+        </div>
+
+        {/* Client feedback (Review_4.docx, item #12): "The pipeline
+            creates new categories/attributes in Woo which are not
+            defined before the pipeline." Saved independently of the
+            main form's Save Changes button (its own PATCH call, fires
+            immediately on toggle) since it's conceptually unrelated to
+            the credentials being edited above. */}
+        <div className="flex items-start gap-3 rounded-xl border border-border p-4">
+          <input
+            type="checkbox"
+            id="allow-auto-create-taxonomy"
+            checked={allowAutoCreate}
+            disabled={savingTaxonomySetting}
+            onChange={e => handleTaxonomyToggle(e.target.checked)}
+            className="mt-1 w-4 h-4 accent-primary"
+          />
+          <label htmlFor="allow-auto-create-taxonomy" className="text-sm cursor-pointer">
+            <div className="font-medium">Allow auto-creating categories &amp; attributes</div>
+            <div className="text-muted-foreground text-xs mt-0.5">
+              When a product needs a category, attribute, or attribute value that doesn't already exist in this store's WooCommerce, the pipeline creates it automatically. Turn this off to only ever use taxonomy you've already set up yourself — anything missing will be skipped and flagged in the pipeline log instead.
+            </div>
+          </label>
         </div>
 
         <div className="pt-4 flex justify-end gap-3">
