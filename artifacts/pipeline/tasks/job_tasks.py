@@ -1614,6 +1614,38 @@ async def _run_upload(db, job):
             a["name"].lower(): a for a in woo_global_attrs
         }
         p2_term_cache: dict[int, dict[str, int]] = {}
+        # Client feedback (Review_4.docx, item #2, clarified): "Brand
+        # (not as attribute)... this is separate field." Cache mirrors
+        # p2_attr_lookup's own shape/purpose, just for the native
+        # product_brand taxonomy instead of custom attributes.
+        p2_brand_lookup: dict[str, dict] = {}
+
+        async def _p2_get_or_create_brand(name: str) -> Optional[dict]:
+            key = name.lower()
+            if key in p2_brand_lookup:
+                return p2_brand_lookup[key]
+            if not p2_brand_lookup:
+                try:
+                    for b in await wc.get_all_woo_brands(store):
+                        p2_brand_lookup[b["name"].lower()] = b
+                except Exception as _be:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  Could not load WooCommerce brands: {_be}")
+                if key in p2_brand_lookup:
+                    return p2_brand_lookup[key]
+            if not store.allow_auto_create_taxonomy:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Brand {name!r} doesn't exist in WooCommerce and "
+                           f"auto-create is disabled for this store — skipping")
+                return None
+            try:
+                created = await wc.create_woo_brand(store, name)
+                p2_brand_lookup[key] = created
+                return created
+            except Exception as _be2:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Cannot create brand {name!r}: {_be2}")
+                return None
 
         # ── Pre-load normalisation dict for this store (enrich step output) ─
         p2_norm_lookup: dict[tuple[str, str], str] = {}
@@ -2013,7 +2045,30 @@ async def _run_upload(db, job):
             # Spec attributes: paramsTable key→value pairs
             params_html = str(raw.get("paramsTable") or "")
             if params_html:
-                for spec_key, spec_val in _parse_params_table(params_html).items():
+                _p2_specs = _parse_params_table(params_html)
+                from services.content_service import _get_manufacturer_brand
+                # Client feedback (Review_4.docx, item #2, clarified):
+                # "Brand (not as attribute)... this is separate field."
+                # Native product_brand taxonomy, set via its own
+                # dedicated API call -- never folded into woo_attrs
+                # below, which is only ever custom attributes, a
+                # genuinely different WooCommerce concept.
+                _p2_brand_name = _get_manufacturer_brand(_p2_specs)
+                if _p2_brand_name:
+                    _p2_brand = await _p2_get_or_create_brand(_p2_brand_name)
+                    if _p2_brand:
+                        try:
+                            await wc.set_product_brand(
+                                store, _prod_listing.woo_product_id, _p2_brand["id"]
+                            )
+                            await _log(db, job.id, LogLevel.info,
+                                       f"  {prod.sku}: brand → {_p2_brand_name!r} "
+                                       f"(WooCommerce #{_p2_brand['id']})")
+                        except Exception as _p2_be:
+                            await _log(db, job.id, LogLevel.warn,
+                                       f"  {prod.sku}: could not set brand "
+                                       f"{_p2_brand_name!r}: {_p2_be}")
+                for spec_key, spec_val in _p2_specs.items():
                     if not spec_key or not spec_val:
                         continue
                     if len(spec_key) > 60 or len(spec_val) > 200:

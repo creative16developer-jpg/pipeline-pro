@@ -230,6 +230,24 @@ def _get_brand(specs: dict) -> str:
     )
 
 
+def _get_manufacturer_brand(specs: dict) -> str:
+    """The product's OWN manufacturer -- e.g. "PULUZ" for a PULUZ-made
+    GoPro accessory -- NOT "Compatible Brand" (e.g. "GoPro"), which is
+    what device the accessory FITS, a genuinely different concept.
+    _get_brand() above deliberately checks Compatible Brand first,
+    which is correct for its own purpose (correcting a mis-spelled
+    "compatible with X" mention in generated text), but would be
+    semantically wrong here: assigning "GoPro" as a product's native
+    WooCommerce Brand taxonomy term when the product itself is made by
+    PULUZ would misrepresent who actually makes it, visibly on a live
+    storefront. Used only for the native product_brand taxonomy
+    assignment (Review_4.docx item #2), never for any AI-generated
+    text correction, which is what _get_brand's own priority order is
+    actually tuned for.
+    """
+    return (specs.get("Brand") or specs.get("Manufacturer") or "").strip()
+
+
 def _levenshtein(a: str, b: str) -> int:
     """Plain edit distance, no external dependency. Only ever called on
     short brand-length tokens (see _fix_brand_spelling), so the O(n*m)

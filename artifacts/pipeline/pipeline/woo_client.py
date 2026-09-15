@@ -667,6 +667,97 @@ async def create_woo_category(store: Store, name: str, parent_woo_id: int = 0) -
 
 
 # ---------------------------------------------------------------------------
+# Brand sync helpers
+# ---------------------------------------------------------------------------
+# Client feedback (Review_4.docx, item #2, clarified via screenshots): "Brand
+# (not as attribute), woocommerce have this field and it need to be fetch
+# with the other fields... brand in woocommerce originaly is not part of the
+# attributes, this is separate field." Confirmed via a live WP Admin
+# screenshot's URL: taxonomy=product_brand -- this is WooCommerce's own
+# native core "Brands" feature (not a third-party plugin), which exposes a
+# dedicated /products/brands REST endpoint, following the exact same
+# convention as /products/categories and /products/attributes. Mirrors
+# create_woo_category's error-recovery pattern (term_exists handling, slug
+# collision retry) rather than reinventing it, since it's the same class of
+# hierarchical WooCommerce taxonomy, just without categories' parent-nesting
+# complexity in practice (brands are effectively flat).
+
+async def get_all_woo_brands(store: Store) -> list[dict]:
+    """List all WooCommerce product brands (native core Brands taxonomy)."""
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        resp = await client.get(
+            f"{_base_url(store)}/products/brands",
+            headers=_auth_header(store),
+            params={"per_page": 100},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def create_woo_brand(store: Store, name: str) -> dict:
+    """
+    Get-or-create a WooCommerce product brand (native core Brands taxonomy,
+    /products/brands). Same edge-case handling as create_woo_category:
+    explicit clean slug, term_exists (400) recovery by fetching/searching for
+    the existing brand instead of raising, slug-collision retry with a short
+    hash suffix.
+
+    Always returns a dict with at least {"id": int, "name": str}.
+    """
+    slug = _make_woo_slug(name)
+    payload = {"name": name, "slug": slug}
+
+    async with httpx.AsyncClient(timeout=30.0, verify=False) as client:
+        url = f"{_base_url(store)}/products/brands"
+        auth = _auth_header(store)
+
+        resp = await client.post(url, headers=auth, json=payload)
+
+        if resp.is_success:
+            return resp.json()
+
+        try:
+            err = resp.json()
+        except Exception:
+            err = {}
+        wc_code = err.get("code", "")
+        wc_data = err.get("data") or {}
+
+        if wc_code in ("term_exists", "woocommerce_rest_term_exists"):
+            existing_id = wc_data.get("resource_id") if isinstance(wc_data, dict) else None
+            if existing_id:
+                r2 = await client.get(f"{url}/{existing_id}", headers=auth)
+                if r2.is_success:
+                    return r2.json()
+
+            r2 = await client.get(url, headers=auth, params={"search": name, "per_page": 20})
+            if r2.is_success:
+                for b in r2.json():
+                    if b.get("name", "").lower() == name.lower():
+                        return b
+
+            r3 = await client.get(url, headers=auth, params={"slug": slug, "per_page": 5})
+            if r3.is_success and r3.json():
+                return r3.json()[0]
+
+        if resp.status_code in (400, 422) and wc_code != "term_exists":
+            import hashlib
+            uid = hashlib.md5(name.encode()).hexdigest()[:6]
+            payload2 = {**payload, "slug": f"{slug[:180]}-{uid}"}
+            r2 = await client.post(url, headers=auth, json=payload2)
+            if r2.is_success:
+                return r2.json()
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code} creating brand {name!r}: {err}",
+                request=resp.request, response=resp,
+            )
+
+        resp.raise_for_status()
+        return resp.json()
+
+
+
+# ---------------------------------------------------------------------------
 # Attribute sync helpers
 # ---------------------------------------------------------------------------
 
@@ -843,6 +934,30 @@ async def get_attribute_terms(store: Store, attribute_woo_id: int) -> list[dict]
                 break
             page += 1
     return results
+
+
+async def set_product_brand(store: Store, woo_id: int, brand_woo_id: int) -> dict:
+    """Update the native WooCommerce Brand taxonomy (product_brand) on
+    an existing product. Client feedback (Review_4.docx, item #2,
+    clarified via screenshots): "Brand (not as attribute)... this is
+    separate field" -- mirrors set_product_categories's own structure,
+    since product_brand is the same class of WooCommerce taxonomy as
+    categories, just single-valued in practice for this pipeline's use
+    case rather than a list."""
+    payload: dict = {"brands": [{"id": brand_woo_id}]}
+    async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        resp = await client.put(
+            f"{_base_url(store)}/products/{woo_id}",
+            headers=_auth_header(store),
+            json=payload,
+        )
+        if not resp.is_success:
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code}: {resp.text[:500]}",
+                request=resp.request,
+                response=resp,
+            )
+        return resp.json()
 
 
 async def set_product_categories(
