@@ -137,6 +137,19 @@ async def upload_image_to_wordpress(
     different WordPress-level fields; setting one does not set the
     other.
 
+    Client feedback (Review_4.docx, item #2): "I forgot 2 image fields
+    which are empty now" -- confirmed live via a WordPress media
+    library screenshot: the attachment's own Caption (labelled "Short
+    description" in this WP theme/admin's UI) and Description fields,
+    right below Alt Text and Title on the same edit panel, were both
+    always blank. Set here to the same alt_text value passed in --
+    there's no separate per-image descriptive text generated anywhere
+    in this pipeline to draw a genuinely different value from for each
+    of the three, and leaving them populated with something accurate
+    is a clear improvement over leaving them empty; a more tailored,
+    distinct value for each field would need new content generation
+    this fix doesn't attempt.
+
     Requires wp_username + wp_app_password on the Store (WordPress Application
     Password — NOT the WooCommerce consumer key/secret, which only work with
     /wp-json/wc/v3/* and cannot authenticate /wp-json/wp/v2/media).
@@ -175,7 +188,7 @@ async def upload_image_to_wordpress(
         "Content-Disposition": f'attachment; filename="{fname}"',
         "Content-Type": mime_type,
     }
-    params = {"alt_text": alt_text} if alt_text else None
+    params = {"alt_text": alt_text, "caption": alt_text, "description": alt_text} if alt_text else None
 
     try:
         async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
