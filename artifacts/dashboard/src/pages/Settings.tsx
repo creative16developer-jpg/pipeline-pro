@@ -112,6 +112,7 @@ interface CatMapping {
   // real upload time (see job_tasks.py's
   // resolve_category_path_for_store), not used as a direct ID list.
   is_global?: boolean;
+  is_overridden?: boolean;
 }
 
 // Searchable combobox: free-text input (still supports typing a raw ID or a
@@ -655,7 +656,7 @@ function CategoryMappingDictionary() {
             </thead>
             <tbody className="divide-y divide-border/40">
               {filtered.map(m => (
-                <tr key={m.id} className="hover:bg-secondary/10 transition-colors">
+                <tr key={m.id} className={cn("hover:bg-secondary/10 transition-colors", m.is_overridden && "opacity-50")}>
                   {editingId === m.id ? (
                     <td colSpan={6} className="p-4">
                       <div className="space-y-3">
@@ -758,6 +759,18 @@ function CategoryMappingDictionary() {
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-400" title="Resolved by name against every store's own category tree">Global</span>
                           ) : (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-secondary text-muted-foreground" title="Only applies to this store">This store</span>
+                          )}
+                          {/* Client feedback confirmed live: "why
+                              global not showing" -- same question,
+                              same underlying pattern, already fixed
+                              once for Extraction Rules. Previously
+                              hidden entirely once a store-specific
+                              rule existed for the same sunsky_cat --
+                              now shown, dimmed, with this note. */}
+                          {m.is_overridden && (
+                            <span className="text-[10px] text-muted-foreground italic" title="A store-specific rule for this category currently takes priority for the selected store">
+                              (overridden by "This store" below)
+                            </span>
                           )}
                         </div>
                       </td>

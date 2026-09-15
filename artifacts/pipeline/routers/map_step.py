@@ -426,7 +426,18 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
         )
     ).scalars().all()
     own_cats = {r.sunsky_cat for r in rows}
-    merged = list(rows) + [g for g in global_rows if g.sunsky_cat not in own_cats]
+    # Client feedback confirmed live: "why global not showing" (same
+    # question, same underlying pattern, already fixed once for
+    # Extraction Rules). Previously this hid a global rule entirely
+    # whenever a store-specific rule existed for the same sunsky_cat,
+    # showing only the override -- meaning an operator couldn't view
+    # or edit the underlying global rule at all while a per-store
+    # override was in place, without switching to a different store
+    # that has no override first. Now returns BOTH rows; is_overridden
+    # marks the global one as not currently the one that wins for this
+    # store, so the frontend can show it de-emphasized instead of
+    # hiding it.
+    merged = list(rows) + list(global_rows)
 
     profile_ids = {r.profile_id for r in merged if r.profile_id}
     profile_names: dict[int, str] = {}
@@ -450,6 +461,7 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
                 "last_used_at":       r.last_used_at.isoformat() if r.last_used_at else None,
                 "updated_at":         r.updated_at.isoformat() if r.updated_at else None,
                 "is_global":          r.store_id is None,
+                "is_overridden":      r.store_id is None and r.sunsky_cat in own_cats,
             }
             for r in merged
         ],
