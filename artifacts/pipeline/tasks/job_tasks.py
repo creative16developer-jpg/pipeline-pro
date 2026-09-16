@@ -2044,30 +2044,41 @@ async def _run_upload(db, job):
 
             # Spec attributes: paramsTable key→value pairs
             params_html = str(raw.get("paramsTable") or "")
+            _p2_specs = _parse_params_table(params_html) if params_html else {}
+
+            # Client feedback (Review_4.docx, item #2, clarified):
+            # "Brand (not as attribute)... this is separate field."
+            # Native product_brand taxonomy, set via its own dedicated
+            # API call -- never folded into woo_attrs below, which is
+            # only ever custom attributes, a genuinely different
+            # WooCommerce concept.
+            #
+            # BUG FIX (found live during store testing, PL-115 through
+            # PL-117): this whole block used to live INSIDE
+            # "if params_html:" below, so a product with no spec table
+            # at all never got a brand lookup, even though raw_data's
+            # brandName field (see _get_manufacturer_brand's own
+            # docstring) is completely independent of paramsTable and
+            # would still have been available. Moved out so brand
+            # extraction runs regardless of whether a spec table exists.
+            from services.content_service import _get_manufacturer_brand
+            _p2_brand_name = _get_manufacturer_brand(raw, _p2_specs)
+            if _p2_brand_name:
+                _p2_brand = await _p2_get_or_create_brand(_p2_brand_name)
+                if _p2_brand:
+                    try:
+                        await wc.set_product_brand(
+                            store, _prod_listing.woo_product_id, _p2_brand["id"]
+                        )
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  {prod.sku}: brand → {_p2_brand_name!r} "
+                                   f"(WooCommerce #{_p2_brand['id']})")
+                    except Exception as _p2_be:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  {prod.sku}: could not set brand "
+                                   f"{_p2_brand_name!r}: {_p2_be}")
+
             if params_html:
-                _p2_specs = _parse_params_table(params_html)
-                from services.content_service import _get_manufacturer_brand
-                # Client feedback (Review_4.docx, item #2, clarified):
-                # "Brand (not as attribute)... this is separate field."
-                # Native product_brand taxonomy, set via its own
-                # dedicated API call -- never folded into woo_attrs
-                # below, which is only ever custom attributes, a
-                # genuinely different WooCommerce concept.
-                _p2_brand_name = _get_manufacturer_brand(_p2_specs)
-                if _p2_brand_name:
-                    _p2_brand = await _p2_get_or_create_brand(_p2_brand_name)
-                    if _p2_brand:
-                        try:
-                            await wc.set_product_brand(
-                                store, _prod_listing.woo_product_id, _p2_brand["id"]
-                            )
-                            await _log(db, job.id, LogLevel.info,
-                                       f"  {prod.sku}: brand → {_p2_brand_name!r} "
-                                       f"(WooCommerce #{_p2_brand['id']})")
-                        except Exception as _p2_be:
-                            await _log(db, job.id, LogLevel.warn,
-                                       f"  {prod.sku}: could not set brand "
-                                       f"{_p2_brand_name!r}: {_p2_be}")
                 for spec_key, spec_val in _p2_specs.items():
                     if not spec_key or not spec_val:
                         continue

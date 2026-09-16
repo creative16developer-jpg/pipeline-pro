@@ -230,7 +230,7 @@ def _get_brand(specs: dict) -> str:
     )
 
 
-def _get_manufacturer_brand(specs: dict) -> str:
+def _get_manufacturer_brand(raw: dict, specs: dict) -> str:
     """The product's OWN manufacturer -- e.g. "PULUZ" for a PULUZ-made
     GoPro accessory -- NOT "Compatible Brand" (e.g. "GoPro"), which is
     what device the accessory FITS, a genuinely different concept.
@@ -244,8 +244,33 @@ def _get_manufacturer_brand(specs: dict) -> str:
     assignment (Review_4.docx item #2), never for any AI-generated
     text correction, which is what _get_brand's own priority order is
     actually tuned for.
+
+    BUG FIX (found live during store testing, PL-115 through PL-117):
+    checking only the parsed paramsTable spec dict (specs.get("Brand")
+    / specs.get("Manufacturer")) meant this returned nothing at all
+    for the large majority of this catalog's products (waterproof
+    cases, silicone cases, lens protectors, etc.) -- their paramsTable
+    only ever has a "Compatible with" key (what device it fits, e.g.
+    "Gopro: Fusion"), deliberately excluded above, with no separate
+    Brand/Manufacturer spec key at all. Confirmed the real manufacturer
+    (PULUZ, matching Sunsky's own product page's explicit "Brand:
+    PULUZ" line) is available all along as a genuine, dedicated,
+    top-level field on Sunsky's raw API response -- raw_data["brandName"]
+    -- entirely separate from paramsTable, previously never read
+    anywhere in this codebase (only ever mentioned in a comment
+    elsewhere as a manual cross-reference during a past investigation,
+    never actually checked in code). Checked first now, since it's a
+    dedicated, structured field far more reliable than trying to infer
+    a manufacturer from unstructured spec text; specs.get("Brand") /
+    specs.get("Manufacturer") kept as a fallback for the rare product
+    whose raw_data genuinely lacks brandName but does have one of
+    those spec keys instead.
     """
-    return (specs.get("Brand") or specs.get("Manufacturer") or "").strip()
+    return (
+        (raw.get("brandName") or "").strip()
+        or specs.get("Brand", "").strip()
+        or specs.get("Manufacturer", "").strip()
+    )
 
 
 def _levenshtein(a: str, b: str) -> int:
