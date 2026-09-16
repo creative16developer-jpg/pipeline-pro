@@ -594,6 +594,8 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             # found and fixed once before for manual_woo_cats_json.
             "image_alt": p.image_alt or "",
             "image_names": p.image_names or "",
+            "image_caption": p.image_caption or "",
+            "image_description": p.image_description or "",
             "brand": _cd_brand_name or "",
             "focus_keyword": p.focus_keyword or "",
             "tags": p.tags or "",

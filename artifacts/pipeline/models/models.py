@@ -102,6 +102,13 @@ class Product(Base):
     tags = Column(Text, nullable=True)
     image_alt = Column(Text, nullable=True)
     image_names = Column(Text, nullable=True)
+    # Client feedback confirmed live via WordPress media library
+    # screenshot: "all these fields should be here of wordpress
+    # media." WordPress's own media attachment Caption and Description
+    # fields -- distinct from image_alt (Alt Text) and from the
+    # WooCommerce product's own description column above.
+    image_caption = Column(Text, nullable=True)
+    image_description = Column(Text, nullable=True)
     # Tracks source of each field: {"description": "ai:openai", "short_description": "logic", ...}
     content_source = Column(JSON, nullable=True)
     price = Column(String, nullable=True)

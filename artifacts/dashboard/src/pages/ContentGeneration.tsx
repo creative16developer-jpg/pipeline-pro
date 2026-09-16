@@ -23,6 +23,13 @@ const FIELD_LIST = [
   "tags",
   "image_alt",
   "image_names",
+  // Client feedback confirmed live via WordPress media library
+  // screenshot: "all these fields should be here of wordpress
+  // media." WordPress's own media attachment Caption and Description
+  // fields, previously just a hardcoded reuse of Alt Text's value
+  // with no field, toggle, or Settings visibility of their own.
+  "image_caption",
+  "image_description",
 ];
 
 const FIELD_LABELS: Record<string, string> = {
@@ -36,6 +43,8 @@ const FIELD_LABELS: Record<string, string> = {
   short_description: "Short Description",
   meta_description: "Meta Description",
   focus_keyword: "Focus Keyword (Yoast/RankMath)",
+  image_caption: "Image Caption (WordPress media)",
+  image_description: "Image Description (WordPress media)",
 };
 
 const FIELD_DEPS: Record<string, string[]> = {
@@ -46,6 +55,8 @@ const FIELD_DEPS: Record<string, string[]> = {
   short_description: ["description"],
   meta_description: ["description"],
   focus_keyword: ["title"],
+  image_caption: ["image_alt"],
+  image_description: ["short_description"],
 };
 
 const FIELD_DEFAULT_MODE: Record<string, string> = {
@@ -59,6 +70,8 @@ const FIELD_DEFAULT_MODE: Record<string, string> = {
   short_description: "derive",
   meta_description: "derive",
   focus_keyword: "derive",
+  image_caption: "derive",
+  image_description: "derive",
 };
 
 const MODE_OPTIONS = ["logic", "ai", "derive"] as const;
@@ -264,6 +277,8 @@ const FIELD_RULES: Record<string, string[]> = {
   tags: ["Maximum 3 tags", "Extracted from name + specs table"],
   image_alt: ["Max 125 characters", 'Format: "Title – Attribute – Brand"'],
   image_names: ["Max 70 chars per name", 'Format: "{slug}-1.webp"'],
+  image_caption: ["Max 125 characters", "Same value as Image Alt Text by default", "WordPress media library's Caption field"],
+  image_description: ["Max 300 characters", "Reuses Short Description by default", "WordPress media library's Description field"],
   description: ["50 – 300 words", 'Banned phrases: "the best", "100%", "guarantee"', "Structured sections configurable below"],
   short_description: ["Max 400 characters", "Plain text (no HTML)"],
   meta_title: ["Max 60 characters", 'Format: "Title | Brand"'],

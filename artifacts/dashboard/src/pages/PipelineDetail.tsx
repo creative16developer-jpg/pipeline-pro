@@ -1666,6 +1666,37 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                           />
                         </div>
                       </div>
+                      {/* Client feedback confirmed live via WordPress
+                          media library screenshot: "all these fields
+                          should be here of wordpress media." Same
+                          editable-input pattern as Image Alt Text /
+                          Image Names above -- these are now real,
+                          independently-generated content_service
+                          fields (see content_service.py's
+                          _derive_image_caption / _derive_image_description),
+                          not a hardcoded reuse of Alt Text's value. */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">
+                            Image Caption <span className="font-normal text-foreground/40">(WordPress media)</span>
+                          </label>
+                          <input
+                            value={getField(p, "image_caption")}
+                            onChange={e => setDraftField(p.id, "image_caption", e.target.value)}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">
+                            Image Description <span className="font-normal text-foreground/40">(WordPress media)</span>
+                          </label>
+                          <input
+                            value={getField(p, "image_description")}
+                            onChange={e => setDraftField(p.id, "image_description", e.target.value)}
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
+                      </div>
 
                       {hasDraft(p.id) && (
                         <div className="flex items-center gap-2 sticky bottom-0 bg-card/95 backdrop-blur-sm py-2 -mx-4 px-4 border-t border-violet-500/30">

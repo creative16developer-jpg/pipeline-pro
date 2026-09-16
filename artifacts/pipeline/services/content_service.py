@@ -41,6 +41,18 @@ FIELD_LIST = [
     "short_description",  # derive ← description
     "meta_description",   # derive ← description
     "focus_keyword",      # derive ← title (basic Yoast/RankMath SEO field)
+    # Client feedback confirmed live via WordPress media library
+    # screenshot: "Additional image fields you didn't put them here?
+    # all these fields should be here of wordpress media." Alt Text
+    # was already a first-class configurable field; Caption and
+    # Description (WordPress's OWN media attachment fields, distinct
+    # from the WooCommerce product's own description) previously only
+    # existed as a hardcoded reuse of Alt Text's value inside
+    # upload_image_to_wordpress, with no visibility or toggle in
+    # Settings at all. Registered as real fields now, matching every
+    # other configurable field's pattern exactly.
+    "image_caption",      # derive ← image_alt (WP media Caption field)
+    "image_description",  # derive ← short_description (WP media Description field)
 ]
 
 FIELD_DEFAULT_MODE: dict[str, str] = {
@@ -54,6 +66,8 @@ FIELD_DEFAULT_MODE: dict[str, str] = {
     "short_description": "derive",
     "meta_description":  "derive",
     "focus_keyword":      "derive",
+    "image_caption":      "derive",
+    "image_description":  "derive",
 }
 
 FIELD_DEPS: dict[str, list[str]] = {
@@ -64,6 +78,8 @@ FIELD_DEPS: dict[str, list[str]] = {
     "short_description": ["description"],
     "meta_description":  ["description"],
     "focus_keyword":     ["title"],
+    "image_caption":     ["image_alt"],
+    "image_description": ["short_description"],
 }
 
 FIELD_ATTR: dict[str, str] = {
@@ -77,6 +93,8 @@ FIELD_ATTR: dict[str, str] = {
     "image_alt":         "image_alt",
     "image_names":       "image_names",
     "focus_keyword":     "focus_keyword",
+    "image_caption":     "image_caption",
+    "image_description": "image_description",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -89,6 +107,8 @@ VALIDATORS: dict[str, dict] = {
     "tags":              {"non_empty": True, "max_items": 3},
     "image_alt":         {"non_empty": True, "max_chars": 125},
     "image_names":       {"non_empty": True, "max_chars": 70},
+    "image_caption":     {"non_empty": True, "max_chars": 125},
+    "image_description": {"non_empty": False, "max_chars": 300},
     # max_chars default here is deliberately generous (2000) -- Description
     # had NO configurable length limit at all before this (client feedback:
     # "Description need to have an option for Max Characters"), only a
@@ -957,6 +977,43 @@ def _derive_image_alt(product: dict, options: dict, resolved: dict) -> str:
     return alt
 
 
+def _derive_image_caption(product: dict, options: dict, resolved: dict) -> str:
+    """WordPress media library's Caption field (labelled "Short
+    description" in some admin themes -- confirmed live via
+    screenshot). Client feedback: "all these fields should be here of
+    wordpress media" -- previously just a hardcoded reuse of Alt
+    Text's value inside upload_image_to_wordpress with no field of its
+    own; registered as a real, independently-toggleable field now.
+    Defaults to reusing image_alt's already-resolved value -- Caption
+    is conventionally shown directly under an image on many WordPress
+    themes, where repeating the same short, accurate description Alt
+    Text already provides is a normal, sensible default rather than a
+    placeholder needing distinct text.
+    """
+    alt = resolved.get("image_alt", "")
+    max_chars = int(options.get("max_chars", 125))
+    if len(alt) > max_chars:
+        alt = _truncate_no_mid_word(alt, max_chars)
+    return alt
+
+
+def _derive_image_description(product: dict, options: dict, resolved: dict) -> str:
+    """WordPress media library's Description field. Client feedback:
+    "all these fields should be here of wordpress media." Deliberately
+    NOT just another copy of Alt Text/Caption's text -- reuses the
+    product's own short_description instead, giving this field
+    genuinely different, more detailed content than the other two
+    media fields rather than three identical copies of the same short
+    phrase. Falls back to image_alt only if short_description isn't
+    available for some reason (e.g. that field disabled in Settings).
+    """
+    text = resolved.get("short_description", "") or resolved.get("image_alt", "")
+    max_chars = int(options.get("max_chars", 300))
+    if len(text) > max_chars:
+        text = _truncate_no_mid_word(text, max_chars)
+    return text
+
+
 def _derive_meta_title(product: dict, options: dict, resolved: dict) -> str:
     title = resolved.get("title", "") or product.get("name", "")
     raw = _get_raw(product)
@@ -1125,6 +1182,8 @@ _LOGIC_GENERATORS: dict[str, Any] = {
     "short_description": _derive_short_description,
     "meta_description":  _derive_meta_description,
     "focus_keyword":     _derive_focus_keyword,
+    "image_caption":     _derive_image_caption,
+    "image_description": _derive_image_description,
 }
 
 _DERIVE_GENERATORS: dict[str, Any] = {
@@ -1135,6 +1194,8 @@ _DERIVE_GENERATORS: dict[str, Any] = {
     "short_description": _derive_short_description,
     "meta_description":  _derive_meta_description,
     "focus_keyword":     _derive_focus_keyword,
+    "image_caption":     _derive_image_caption,
+    "image_description": _derive_image_description,
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

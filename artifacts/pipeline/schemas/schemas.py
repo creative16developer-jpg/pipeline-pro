@@ -97,6 +97,8 @@ class ProductOut(BaseModel):
     tags: Optional[str] = None
     image_alt: Optional[str] = None
     image_names: Optional[str] = None
+    image_caption: Optional[str] = None
+    image_description: Optional[str] = None
     content_source: Optional[Any] = None
     price: Optional[str] = None
     sale_price: Optional[str] = None

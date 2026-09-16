@@ -939,6 +939,14 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
             # base value + per-position numbering pattern already used
             # for the product-level reference, so both stay consistent.
             base_alt = product.image_alt or product.name or ""
+            # Client feedback confirmed live via WordPress media
+            # library screenshot: "all these fields should be here of
+            # wordpress media." Same base+per-position pattern as
+            # base_alt above, now for the two fields that previously
+            # just silently reused base_alt's own value with no field
+            # of their own.
+            base_caption = product.image_caption or base_alt
+            base_description = product.image_description or base_alt
 
             # Product-level, source-URL-keyed dedup cache. Confirmed
             # live that patch 78's Image-row-level dedup alone wasn't
@@ -1018,8 +1026,11 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                 ext = Path(img.processed_path).suffix or ".webp"
                 wp_filename = f"{base_slug}-{img.position + 1}{ext}"
                 wp_alt = (base_alt if img.position == 0 else f"{base_alt} - {img.position + 1}") if base_alt else None
+                wp_caption = (base_caption if img.position == 0 else f"{base_caption} - {img.position + 1}") if base_caption else None
+                wp_description = (base_description if img.position == 0 else f"{base_description} - {img.position + 1}") if base_description else None
                 wp_url, wp_media_id = await wc.upload_image_to_wordpress(
-                    store, img.processed_path, filename=wp_filename, alt_text=wp_alt
+                    store, img.processed_path, filename=wp_filename, alt_text=wp_alt,
+                    caption=wp_caption, description=wp_description,
                 )
                 if wp_url:
                     images.append({"id": wp_media_id, "src": wp_url})

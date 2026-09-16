@@ -64,6 +64,12 @@ class ProductFieldsUpdate(BaseModel):
     # for editing.
     image_alt: Optional[str] = None
     image_names: Optional[str] = None
+    # Client feedback confirmed live via WordPress media library
+    # screenshot: "all these fields should be here of wordpress
+    # media." Same as image_alt/image_names above -- real, generated
+    # columns, now also editable in Content Review.
+    image_caption: Optional[str] = None
+    image_description: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

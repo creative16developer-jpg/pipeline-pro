@@ -118,6 +118,8 @@ async def upload_image_to_wordpress(
     file_path: str,
     filename: Optional[str] = None,
     alt_text: Optional[str] = None,
+    caption: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[int]]:
     """
     Upload a local image file to the WordPress media library.
@@ -142,13 +144,17 @@ async def upload_image_to_wordpress(
     library screenshot: the attachment's own Caption (labelled "Short
     description" in this WP theme/admin's UI) and Description fields,
     right below Alt Text and Title on the same edit panel, were both
-    always blank. Set here to the same alt_text value passed in --
-    there's no separate per-image descriptive text generated anywhere
-    in this pipeline to draw a genuinely different value from for each
-    of the three, and leaving them populated with something accurate
-    is a clear improvement over leaving them empty; a more tailored,
-    distinct value for each field would need new content generation
-    this fix doesn't attempt.
+    always blank. Originally fixed by defaulting both to the same
+    alt_text value, since no distinct per-image content existed yet.
+
+    UPDATE: caption/description now accept their own real values
+    (client feedback: "all these fields should be here of wordpress
+    media" -- image_caption/image_description are now proper,
+    independently-generated content_service fields, not a hardcoded
+    reuse of alt_text -- see content_service.py's
+    _derive_image_caption / _derive_image_description). Each still
+    falls back to alt_text if the caller doesn't have a value for it
+    (e.g. an older product generated before these fields existed).
 
     Requires wp_username + wp_app_password on the Store (WordPress Application
     Password — NOT the WooCommerce consumer key/secret, which only work with
@@ -188,7 +194,11 @@ async def upload_image_to_wordpress(
         "Content-Disposition": f'attachment; filename="{fname}"',
         "Content-Type": mime_type,
     }
-    params = {"alt_text": alt_text, "caption": alt_text, "description": alt_text} if alt_text else None
+    params = {
+        "alt_text": alt_text,
+        "caption": caption or alt_text,
+        "description": description or alt_text,
+    } if (alt_text or caption or description) else None
 
     try:
         async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
