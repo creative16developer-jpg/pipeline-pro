@@ -538,6 +538,18 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             resolved_woo_cat = manual_cat_name
             is_mapped = True
 
+        # Client feedback: "show in review step as well that this
+        # will be brand same like we doing for all fields." Computed
+        # the exact same way real Upload/Sync will resolve it
+        # (raw_data.brandName first, spec-table Brand/Manufacturer as
+        # fallback), so what an operator sees here in review always
+        # matches what actually gets assigned later -- not a second,
+        # separately-implemented guess.
+        from services.content_service import _get_manufacturer_brand as _cd_get_brand, _parse_params_table as _cd_parse_specs
+        _cd_raw = p.raw_data or {}
+        _cd_specs = _cd_parse_specs(str(_cd_raw.get("paramsTable") or "")) if _cd_raw.get("paramsTable") else {}
+        _cd_brand_name = _cd_get_brand(_cd_raw, _cd_specs)
+
         product_list.append({
             "id": p.id,
             "cat_source": _cd_cat_source,
@@ -582,6 +594,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             # found and fixed once before for manual_woo_cats_json.
             "image_alt": p.image_alt or "",
             "image_names": p.image_names or "",
+            "brand": _cd_brand_name or "",
             "focus_keyword": p.focus_keyword or "",
             "tags": p.tags or "",
             "status": p.status.value if hasattr(p.status, "value") else str(p.status),

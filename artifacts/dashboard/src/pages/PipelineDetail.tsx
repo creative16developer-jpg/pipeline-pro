@@ -1585,6 +1585,31 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                             className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
                           />
                         </div>
+                        {/* Client feedback: "show in review step as
+                            well that this will be brand same like we
+                            doing for all fields." Read-only, not an
+                            editable input like the fields above --
+                            Brand is computed fresh from raw_data.brandName
+                            (or the spec table as a fallback) every time
+                            Upload/Sync actually runs, not a stored,
+                            directly-editable column, so an editable
+                            box here would misleadingly suggest typing
+                            a different value and saving it would
+                            change what gets assigned -- it wouldn't.
+                            Shows exactly what will be used, computed
+                            the identical way real Upload/Sync will. */}
+                        <div>
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">
+                            Brand <span className="font-normal text-foreground/40">(native WooCommerce field, auto-detected)</span>
+                          </label>
+                          <div className="w-full px-3 py-2 border border-border rounded-lg text-[13px] bg-secondary/30">
+                            {p.brand ? (
+                              <span className="text-foreground">{p.brand}</span>
+                            ) : (
+                              <span className="text-foreground/40 italic">Not detected — Sunsky provided no brand/manufacturer for this product</span>
+                            )}
+                          </div>
+                        </div>
                         <div>
                           <label className="block text-[12px] font-medium text-foreground/70 mb-1">Meta Title</label>
                           <input
