@@ -3035,6 +3035,40 @@ async def _run_sync(db, job):
                            f"  Could not create term {term_name!r} for attr {attr_id}: {e}")
                 return None
 
+        # Client feedback: "let's do it on sync as well as that we
+        # need to update in wordpress side as well" -- Sync is exactly
+        # the mechanism that updates already-uploaded products, so
+        # this is what retroactively corrects Brand for anything
+        # uploaded before the raw_data.brandName fix. Mirrors Phase
+        # 2's identical brand cache/helper.
+        brand_lookup: dict[str, dict] = {}
+
+        async def get_or_create_brand(name: str) -> Optional[dict]:
+            key = name.lower()
+            if key in brand_lookup:
+                return brand_lookup[key]
+            if not brand_lookup:
+                try:
+                    for b in await woo_client.get_all_woo_brands(store):
+                        brand_lookup[b["name"].lower()] = b
+                except Exception as _sbe:
+                    await _log(db, job.id, LogLevel.warn,
+                               f"  Could not load WooCommerce brands: {_sbe}")
+                if key in brand_lookup:
+                    return brand_lookup[key]
+            if not store.allow_auto_create_taxonomy:
+                await _log(db, job.id, LogLevel.warn,
+                           f"  Brand {name!r} doesn't exist in WooCommerce and "
+                           f"auto-create is disabled for this store — skipping")
+                return None
+            try:
+                created = await woo_client.create_woo_brand(store, name)
+                brand_lookup[key] = created
+                return created
+            except Exception as _sbe2:
+                await _log(db, job.id, LogLevel.warn, f"  Cannot create brand {name!r}: {_sbe2}")
+                return None
+
         # Query the same scoped product set used for categories
         attr_products = (await db.execute(_scoped_product_q())).scalars().all()
 
@@ -3125,8 +3159,33 @@ async def _run_sync(db, job):
 
             # ── Spec attributes: paramsTable HTML key-value pairs ──
             params_html = str(raw.get("paramsTable") or "")
+            _s_specs = _parse_params_table(params_html) if params_html else {}
+
+            # Client feedback: "let's do it on sync as well as that we
+            # need to update in wordpress side as well" -- retroactively
+            # corrects Brand for any product uploaded before the
+            # raw_data.brandName fix. Same restructuring as Phase 2:
+            # runs regardless of whether a spec table exists, since
+            # brandName is independent of paramsTable.
+            from services.content_service import _get_manufacturer_brand as _sync_get_brand
+            _s_brand_name = _sync_get_brand(raw, _s_specs)
+            if _s_brand_name:
+                _s_brand = await get_or_create_brand(_s_brand_name)
+                if _s_brand:
+                    try:
+                        await woo_client.set_product_brand(
+                            store, _attr_listing.woo_product_id, _s_brand["id"]
+                        )
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  {prod.sku}: brand → {_s_brand_name!r} "
+                                   f"(WooCommerce #{_s_brand['id']})")
+                    except Exception as _sbe3:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  {prod.sku}: could not set brand "
+                                   f"{_s_brand_name!r}: {_sbe3}")
+
             if params_html:
-                spec_pairs = _parse_params_table(params_html)
+                spec_pairs = _s_specs
                 for spec_key, spec_val in list(spec_pairs.items())[:15]:
                     if len(spec_key) > 60 or len(spec_val) > 100:
                         continue
