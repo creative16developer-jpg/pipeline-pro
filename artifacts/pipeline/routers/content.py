@@ -94,6 +94,24 @@ DEFAULT_CONFIG: dict = {
             "mode": "derive",
             "options": {"max_chars": 70},
         },
+        # Client feedback confirmed live: Image Caption/Description
+        # showed empty even with the patch adding this feature already
+        # applied. Root cause: DEFAULT_CONFIG here was never updated to
+        # include these two fields at all when that patch was built --
+        # meaning generation never even attempted them, for EVERY
+        # operator (not just ones with a stale saved settings file --
+        # a brand-new install falling straight back to DEFAULT_CONFIG
+        # would have had the identical gap).
+        "image_caption": {
+            "enabled": True,
+            "mode": "derive",
+            "options": {"max_chars": 125},
+        },
+        "image_description": {
+            "enabled": True,
+            "mode": "derive",
+            "options": {"max_chars": 300},
+        },
         "short_description": {
             "enabled": True,
             "mode": "derive",

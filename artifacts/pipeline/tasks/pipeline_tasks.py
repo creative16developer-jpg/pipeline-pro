@@ -498,6 +498,29 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
             gen_cfg = DEFAULT_CONFIG
             await _plog(db, pl.id, "generate", "info", "Using default content generation config")
 
+    # Client feedback confirmed live: Image Caption/Description showed
+    # empty even with the feature's own patch already applied and the
+    # server restarted. Root cause (part 2 -- part 1 was
+    # routers/content.py's DEFAULT_CONFIG itself never including these
+    # two fields at all, fixed separately): a saved settings file from
+    # BEFORE a new field existed is not empty, so the "if not gen_cfg"
+    # fallback to DEFAULT_CONFIG above never triggers for an operator
+    # who has ever saved Content Generation settings before -- their
+    # saved file is used exactly as-is, forever, with no way for a
+    # newly-added field to ever appear for them without manually
+    # revisiting and re-saving that settings page. Backfills any field
+    # present in the current code's DEFAULT_CONFIG but missing from
+    # whatever gen_cfg was actually loaded (saved file OR the
+    # DEFAULT_CONFIG fallback itself, harmless either way since a
+    # merge with itself changes nothing) -- so a field added to the
+    # code later always gets a sensible default, without silently
+    # requiring every existing operator to notice and re-save
+    # Settings for it to ever take effect at all.
+    if isinstance(gen_cfg, dict):
+        from routers.content import DEFAULT_CONFIG as _DEFAULT_CFG
+        gen_cfg = dict(gen_cfg)
+        gen_cfg["fields"] = {**_DEFAULT_CFG["fields"], **(gen_cfg.get("fields") or {})}
+
     # Validate/normalise the config
     template: dict = gen_cfg if isinstance(gen_cfg, dict) else {}
     gs = (template.get("globalSettings") or {})
