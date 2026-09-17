@@ -490,13 +490,29 @@ async def _run_fetch(db, job):
                 if existing.name != p["name"] and p["name"] and not existing.csv_title:
                     existing.name = p["name"]
                     changed_fields.append("name")
-                if existing.price != p.get("price") and p.get("price"):
+                # Client feedback confirmed live: "pipeline didn't
+                # take the QTY from imported CSV." Confirmed: CSV
+                # import correctly sets stock_quantity (and price)
+                # from the operator's own CSV data, but this fetch
+                # step -- which always runs right after CSV import to
+                # pull Sunsky's own images/specs -- immediately and
+                # unconditionally overwrote both with Sunsky's own
+                # reported numbers, so the CSV-supplied value never
+                # actually took effect even once. Same root cause and
+                # same fix as the earlier csv_title/name-preservation
+                # bug: existing.csv_title marks a product whose price/
+                # stock the operator deliberately supplied via CSV,
+                # not Sunsky's own default -- skip the overwrite in
+                # that case. A normally-fetched product (no csv_title)
+                # is completely unaffected, still refreshed from
+                # Sunsky exactly as before.
+                if existing.price != p.get("price") and p.get("price") and not existing.csv_title:
                     existing.price = p["price"]
                     changed_fields.append("price")
                 if existing.stock_status != p.get("stock_status") and p.get("stock_status"):
                     existing.stock_status = p["stock_status"]
                     changed_fields.append("stock_status")
-                if p.get("stock_quantity") is not None and existing.stock_quantity != p["stock_quantity"]:
+                if p.get("stock_quantity") is not None and existing.stock_quantity != p["stock_quantity"] and not existing.csv_title:
                     existing.stock_quantity = p["stock_quantity"]
                     changed_fields.append("stock_quantity")
                 if p.get("description") and existing.description != p["description"]:

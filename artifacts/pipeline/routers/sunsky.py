@@ -363,11 +363,16 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
             # csv_title) is unaffected.
             if p["name"] and existing.name != p["name"] and not existing.csv_title:
                 existing.name = p["name"]; changed = True
-            if p.get("price") and existing.price != p["price"]:
+            # Client feedback confirmed live: "pipeline didn't take
+            # the QTY from imported CSV." Same fix as job_tasks.py's
+            # parallel fetch path -- csv_title marks price/stock the
+            # operator deliberately supplied via CSV, not Sunsky's
+            # default, so skip the overwrite in that case too.
+            if p.get("price") and existing.price != p["price"] and not existing.csv_title:
                 existing.price = p["price"]; changed = True
             if p.get("stock_status") and existing.stock_status != p["stock_status"]:
                 existing.stock_status = p["stock_status"]; changed = True
-            if p.get("stock_quantity") is not None and existing.stock_quantity != p["stock_quantity"]:
+            if p.get("stock_quantity") is not None and existing.stock_quantity != p["stock_quantity"] and not existing.csv_title:
                 existing.stock_quantity = p["stock_quantity"]; changed = True
 
             # Re-stamp fetch_job_id regardless of whether any field changed —
