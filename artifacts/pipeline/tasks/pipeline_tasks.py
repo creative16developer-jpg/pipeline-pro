@@ -547,6 +547,18 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
 
     total = len(products)
 
+    # Client feedback: "Do the data fields we generate have sufficient
+    # access to structured category data... prior to the actual
+    # generation?" Confirmed via direct code investigation: category
+    # data was already resolved elsewhere in the pipeline (Enrich's
+    # own attribute extraction, at this exact same
+    # extract_sunsky_category/get_effective_category_name_map call)
+    # but never threaded into the AI generation prompt context at all.
+    # Loaded once here for the whole batch, not per-product, matching
+    # Enrich's own established pattern for the identical lookup.
+    from services.enrich_service import extract_sunsky_category, get_effective_category_name_map
+    _gen_category_name_map = await get_effective_category_name_map(db)
+
     # Client feedback: full-pipeline batch processing for Claude, at
     # Anthropic's 50% batch-rate discount, in exchange for asynchronous
     # turnaround. Confirmed via the reviewed build plan: opt-in per
@@ -567,7 +579,9 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
             prod_dict = {
                 "name": product.name or "", "sku": product.sku or "",
                 "description": product.description or "", "price": product.price or "0",
-                "site_sku": product.site_sku or "", **raw,
+                "site_sku": product.site_sku or "",
+                "category_name": extract_sunsky_category(raw, _gen_category_name_map),
+                **raw,
             }
             product_template = template
             if not force_regenerate:
@@ -635,6 +649,7 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
                 "price":       product.price or "0",
                 "csv_title":   csv_title,
                 "site_sku":    site_sku,
+                "category_name": extract_sunsky_category(raw, _gen_category_name_map),
                 **raw,
             }
 

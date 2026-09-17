@@ -1289,6 +1289,21 @@ def _prepare_field_context(field: str, product: dict, template: dict) -> tuple[s
     gs = template.get("globalSettings") or {}
     if field not in ("slug", "image_names"):
         options = {**options, "target_language": gs.get("target_language", "bg")}
+        # Client feedback: "Do the data fields we generate have
+        # sufficient access to structured category data... prior to
+        # the actual generation?" Confirmed via direct code
+        # investigation: category data was already resolved elsewhere
+        # in the pipeline (Enrich's own attribute extraction) but never
+        # threaded into the AI generation prompt context at all.
+        # product["category_name"] is set once per product by
+        # pipeline_tasks.py's _run_generate, the same way it already
+        # sets up target_language above -- passed through here into
+        # options so _build_prompt/_build_product_context in
+        # ai_generator.py can include it. Excluded from slug/
+        # image_names for the same reason target_language already is:
+        # neither field's prompt template references category context
+        # at all.
+        options = {**options, "category_name": product.get("category_name", "")}
 
     if gs.get("lock_specs_table", False):
         product = dict(product)  # shallow copy -- don't mutate the caller's dict

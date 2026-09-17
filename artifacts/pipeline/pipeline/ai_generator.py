@@ -93,7 +93,38 @@ def _extract_specs(product: dict) -> dict[str, str]:
     return specs
 
 
-def _build_product_context(product: dict) -> str:
+def _extract_variant_info(product: dict) -> str:
+    """Client feedback: "Do the data fields we generate have sufficient
+    access to structured category data, variant information...
+    Or just use the product name for context + the prompt." Confirmed
+    via direct code investigation: variant/option data was already
+    flowing through the pipeline (used by job_tasks.py's own upload-
+    time attribute assignment, at the exact same modelLabel/optionList
+    fields) but was never included in the AI generation prompt context
+    at all. Same parsing pattern as job_tasks.py's own variant-
+    attribute handling, reused here rather than reimplemented
+    separately to avoid the two ever silently drifting apart.
+    """
+    raw = product.get("rawData") or product.get("raw_data") or {}
+    model_label = str(raw.get("modelLabel") or "").strip()
+    option_list = raw.get("optionList") or {}
+    if isinstance(option_list, str):
+        try:
+            option_list = json.loads(option_list)
+        except Exception:
+            option_list = {}
+    option_items = option_list.get("items", []) if isinstance(option_list, dict) else []
+    option_values = [
+        str(item.get("keywords") or item.get("value") or "").strip()
+        for item in option_items if isinstance(item, dict)
+    ]
+    option_values = [v for v in option_values if v][:10]
+    if not model_label or not option_values:
+        return ""
+    return f"{model_label}: {', '.join(option_values)}"
+
+
+def _build_product_context(product: dict, category_name: str = "") -> str:
     name = product.get("name", "Product")
     sku = product.get("site_sku") or product.get("sku", "")
     desc = product.get("description", "")
@@ -117,7 +148,22 @@ def _build_product_context(product: dict) -> str:
         "\n".join(f"  - {k}: {v}" for k, v in list(specs.items())[:15])
         if specs else "  (none available)"
     )
-    return f"Product Name: {name}\nSKU: {sku}\nDescription: {desc or '(none)'}\nSpecifications:\n{specs_text}"
+    variant_info = _extract_variant_info(product)
+    lines = [f"Product Name: {name}", f"SKU: {sku}"]
+    # Client feedback confirmed via direct code investigation: category
+    # and variant data were already flowing through the pipeline
+    # elsewhere (used by Enrich's own attribute extraction and
+    # Upload's own attribute assignment respectively) but never
+    # threaded into the AI generation prompt context at all -- added
+    # here, conditionally, so a product where either is genuinely
+    # unavailable doesn't show a confusing "Category: " blank line.
+    if category_name:
+        lines.append(f"Category: {category_name}")
+    lines.append(f"Description: {desc or '(none)'}")
+    lines.append(f"Specifications:\n{specs_text}")
+    if variant_info:
+        lines.append(f"Variant Options: {variant_info}")
+    return "\n".join(lines)
 
 
 def _language_instruction(options: dict) -> str:
@@ -201,7 +247,7 @@ def _build_prompt(field: str, product: dict, options: dict) -> str:
     """Fill in the externalised template for `field` from PROMPT_TEMPLATES
     (pipeline/prompts.json). Falls back to the 'default' template for any
     field without its own entry."""
-    ctx = _build_product_context(product)
+    ctx = _build_product_context(product, category_name=options.get("category_name", ""))
     template = PROMPT_TEMPLATES.get(field, PROMPT_TEMPLATES["default"])
 
     format_args = {
