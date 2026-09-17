@@ -292,16 +292,34 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
     resolved_model = _ANTHROPIC_DEPRECATED.get(raw_model, raw_model)
     message = await client.messages.create(
         model=resolved_model,
-        # Client feedback confirmed live: "Anthropic response had no
-        # text block (got: ['thinking'])" -- newer Claude models
-        # (including claude-sonnet-5) have adaptive thinking ON BY
-        # DEFAULT, and thinking tokens count against this same
-        # max_tokens budget. 600 left no room for the actual answer
-        # once thinking consumed part (or, for some requests, ALL) of
-        # the budget -- confirmed directly against Anthropic's own
-        # troubleshooting docs, which explicitly recommend raising
-        # max_tokens to leave room for both.
-        max_tokens=4000,
+        # Client feedback confirmed live: "'ThinkingBlock' object has
+        # no attribute 'text'" / max_tokens raised 600->4000 (see
+        # below) already addressed one round of this same underlying
+        # issue -- adaptive thinking, on by default on newer Claude
+        # models, counts against this same max_tokens budget. Client
+        # feedback confirmed live AGAIN via PL-119 (a real, complete
+        # pipeline run on claude-haiku-4-5): generated Description
+        # text cut off mid-section (a "Compatibility" heading with
+        # zero text following it, exactly matching a response that
+        # ran out of budget partway through), across multiple fields
+        # (Focus Keyword, Meta Title, Image Caption/Description too).
+        #
+        # Confirmed via Anthropic's own official docs
+        # (platform.claude.com/docs/en/build-with-claude/effort) that
+        # Claude uses HIGH effort by default -- "spending as many
+        # tokens as needed for excellent results" -- and that the
+        # documented way to reduce that for a workload that doesn't
+        # need heavy reasoning (this one is straightforward marketing-
+        # copy generation, not complex problem-solving) is
+        # output_config={"effort": "low"}, passed as a plain top-level
+        # keyword argument -- confirmed via Anthropic's own canonical
+        # example, which uses no separate "thinking" parameter
+        # alongside it at all. Frees far more of the same max_tokens
+        # budget for the actual visible answer instead of high-effort
+        # internal reasoning this task doesn't need. max_tokens also
+        # raised further for additional safety margin.
+        max_tokens=6000,
+        output_config={"effort": "low"},
         messages=[{"role": "user", "content": prompt}],
     )
     # Client feedback confirmed live via Pipeline Log: "'ThinkingBlock'
@@ -375,12 +393,22 @@ async def submit_anthropic_batch(requests: list[dict]) -> str:
             "custom_id": req["custom_id"],
             "params": {
                 "model": resolved_model,
-                # Same fix as _generate_anthropic above -- adaptive
-                # thinking (on by default on newer models) counts
-                # against this budget, and 600 left no room for the
-                # actual text response once thinking consumed part or
-                # all of it.
-                "max_tokens": 4000,
+                # Client feedback confirmed live AGAIN via PL-119 (a
+                # real, complete pipeline run using this exact batch
+                # path -- log shows "Batch submitted to Claude"):
+                # generated Description text cut off mid-section (a
+                # "Compatibility" heading with zero text following it)
+                # across multiple fields. Same underlying cause and
+                # same fix as _generate_anthropic above: Claude uses
+                # HIGH effort by default, spending as many tokens as
+                # needed -- output_config={"effort": "low"} is
+                # Anthropic's own documented way to reduce that for a
+                # workload that doesn't need heavy reasoning, freeing
+                # far more of the same max_tokens budget for the
+                # actual visible answer. max_tokens also raised
+                # further for additional safety margin.
+                "max_tokens": 6000,
+                "output_config": {"effort": "low"},
                 "messages": [{"role": "user", "content": req["prompt"]}],
             },
         })
