@@ -936,8 +936,17 @@ def _derive_slug(product: dict, options: dict, resolved: dict) -> str:
 
     slug = _slugify(title)
     if not slug:
+        # Client feedback: "it should work for all fields" -- audited
+        # every raw character-slice in this file after the earlier
+        # csv_title fix; this fallback path (only reached when
+        # _slugify(title) is genuinely empty, an already-rare edge
+        # case) was still using an unprotected raw slice, unlike every
+        # other field's truncation. Low real-world risk given how
+        # short this fallback string always is relative to the
+        # default max_chars, but fixed for consistency and to close
+        # the gap outright rather than leave a theoretical one.
         fb = f"product-{sku[-8:].lower()}" if sku else "product"
-        return fb[:max_chars]
+        return _truncate_no_mid_word(fb, max_chars, boundary="-")
 
     slug = _truncate_no_mid_word(slug, max_chars, boundary="-")
     if sku and sku[-4:].lower() not in slug:
@@ -1121,7 +1130,19 @@ def _derive_short_description(product: dict, options: dict, resolved: dict) -> s
             break
 
     if not result and text:
-        result = text[:400]
+        # Client feedback confirmed live via screenshot: Short
+        # Description showed garbled, seemingly-cut text ("Features1.
+        # ... environments. 2.") -- matches exactly this fallback path
+        # (reached when the sentence-by-sentence loop above never sets
+        # `result` at all, e.g. the very first sentence alone already
+        # exceeds 400 chars, so the loop's own `break` fires before
+        # ever assigning it) using an unprotected raw text[:400] slice
+        # that could cut mid-word. Same class of bug already fixed
+        # once for meta_description's own equivalent fallback -- this
+        # one was missed in that earlier pass. "it should work for all
+        # fields" -- audited every raw slice in this file after that
+        # feedback and found this genuinely unsafe one.
+        result = _truncate_no_mid_word(text, 400)
 
     return result.strip()
 
