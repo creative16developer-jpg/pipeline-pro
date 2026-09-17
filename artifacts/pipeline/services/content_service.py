@@ -1409,6 +1409,27 @@ async def run_field(
             succeeded, text_or_error = precomputed_ai[field]
             if succeeded:
                 text_or_error = _fix_brand_spelling(text_or_error, product)
+                # Client feedback confirmed live via a real generated
+                # product: "russian or chinese words in the text" --
+                # source data in a language other than English can get
+                # copied verbatim into otherwise-Bulgarian output
+                # instead of translated (see _language_instruction's
+                # own strengthened wording for the actual prompt-side
+                # fix). Chinese characters occupy a distinct, easily
+                # and reliably detectable Unicode range, unlike
+                # Russian vs. Bulgarian (both Cyrillic, no simple
+                # character-set check can tell them apart) -- this is
+                # a lightweight, log-only safety net specifically for
+                # the Chinese case, not a full flag/block mechanism
+                # (which would need its own UI/schema work), so a
+                # leak is at least visible in the pipeline log even if
+                # the strengthened prompt doesn't catch every case.
+                if options.get("target_language", "bg") != "en" and any("\u4e00" <= ch <= "\u9fff" for ch in text_or_error):
+                    logger.warning(
+                        f"[{field}] Generated text contains Chinese characters despite "
+                        f"target_language={options.get('target_language', 'bg')!r} -- likely "
+                        f"untranslated source data leaked through: {text_or_error[:200]!r}"
+                    )
                 return {"field": field, "value": text_or_error,
                          "source": "ai:anthropic:batch", "status": "ok"}
             # Batch request failed for this field -- apply the same
