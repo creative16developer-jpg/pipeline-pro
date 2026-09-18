@@ -742,6 +742,19 @@ _TAG_PREFERRED_SPEC_KEYS = (
     "brand", "compatible brand", "manufacturer",
     "model", "model number", "model no",
     "type", "product type",
+    # Client feedback confirmed live (Review_4.docx item #13, "wrong
+    # generated tags -- only 'Insta360' as tag"): confirmed via direct
+    # investigation of a real product's raw Sunsky spec data that
+    # "compatible with" is genuinely the key Sunsky uses for a large
+    # share of this catalog (waterproof cases, silicone cases, lens
+    # protectors) -- these products have NO separate Brand/Manufacturer
+    # spec key at all, only this one, so it was never matching any
+    # existing key here and tag generation fell back to a weaker
+    # method. Placed last (lowest priority): a genuine Brand/
+    # Manufacturer/Type field, when one exists, is still a cleaner,
+    # more direct signal than parsing it out of this field's own
+    # "Brand: Model" formatting below.
+    "compatible with",
 )
 
 
@@ -793,7 +806,23 @@ def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
     for key in _TAG_PREFERRED_SPEC_KEYS:
         v = specs_lower.get(key)
         if isinstance(v, str) and v.strip():
-            tag = _tag_case(v.strip())
+            # Client feedback confirmed live: "compatible with"'s raw
+            # value is frequently HTML-entity-encoded ("Gopro:&nbsp;
+            # Fusion" -- the bold-tag markup around "Gopro:" is already
+            # stripped by _parse_params_table, but HTML entities like
+            # &nbsp; are not, since that function only strips actual
+            # <tag> markup) and formatted as "Brand: Model" rather than
+            # a clean single value the way brand/manufacturer/type
+            # fields already are. Confirmed directly against the real
+            # value from this exact key: html.unescape handles the
+            # entity, and taking only the part before a colon (when one
+            # exists) extracts just the brand ("Gopro"), not the whole
+            # "Brand: Model" string, which would otherwise make an
+            # oddly-specific, ugly tag.
+            v_clean = html.unescape(v.strip())
+            if key == "compatible with" and ":" in v_clean:
+                v_clean = v_clean.split(":", 1)[0].strip()
+            tag = _tag_case(v_clean)
             if tag not in tags:
                 tags.append(tag)
 
