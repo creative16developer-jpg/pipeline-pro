@@ -582,6 +582,38 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
     return opts.map(o => ({ id: o.id, label: getPath(o.id) })).sort((a, b) => a.label.localeCompare(b.label));
   }, [data?.woo_options]);
 
+  // Client feedback confirmed live via screenshot: "In the flow was
+  // marked 3 categories but the product is added only in one
+  // (primary)." Confirmed the root cause directly: picking a leaf
+  // category from this section's dropdown saved ONLY that single id,
+  // discarding its ancestor chain entirely. This is the exact same
+  // problem ContentReviewSection's own withAncestors already solves
+  // for a different screen (parsing an EXISTING mapping back into a
+  // draft there) -- that component isn't in scope here (a completely
+  // separate React function component in this same file), so this is
+  // a local equivalent using this section's own already-loaded
+  // data?.woo_options (confirmed above to carry parent_id, the same
+  // raw data getPath already walks) rather than importing across
+  // components.
+  const withCategoryAncestors = (entries: { id: number; name: string }[]): { id: number; name: string }[] => {
+    const opts: any[] = data?.woo_options ?? [];
+    const byId = new Map<number, any>(opts.map(o => [o.id, o]));
+    const seen = new Set(entries.map(e => e.id));
+    const result = [...entries];
+    for (const entry of entries) {
+      let node = byId.get(entry.id);
+      while (node?.parent_id && byId.has(node.parent_id)) {
+        const parent = byId.get(node.parent_id)!;
+        if (!seen.has(parent.id)) {
+          seen.add(parent.id);
+          result.unshift({ id: parent.id, name: parent.name });
+        }
+        node = parent;
+      }
+    }
+    return result;
+  };
+
   const profiles: any[]   = data?.profiles ?? [];
   const cats: any[]       = data?.categories ?? [];
   const newCats           = cats.filter(c => c.is_new);
@@ -593,9 +625,26 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
       const mappings = cats.map(c => {
         const s = sel[c.sunsky_cat];
         const woo_cat_id = s?.woo_cat_id ?? c.woo_cats?.[0]?.id ?? null;
+        // Client feedback confirmed live via screenshot: "In the flow
+        // was marked 3 categories but the product is added only in
+        // one (primary)." Confirmed the root cause directly: picking
+        // a category from this dropdown built woo_cats with ONLY that
+        // single leaf id, discarding its ancestor chain entirely --
+        // so a product uploaded into "Case & Bags" never also got
+        // checked under its parent "DJI & Insta360 Accessories" or
+        // "Аксесоари" categories the way WooCommerce products
+        // normally are. withAncestors (already used elsewhere in this
+        // same file for parsing an EXISTING mapping back into a
+        // draft) walks the loaded category tree and fills in any
+        // missing parent categories -- applied here too now, so
+        // confirming a dropdown pick saves the full ancestor chain,
+        // not just the leaf.
+        const woo_cats = woo_cat_id
+          ? withCategoryAncestors([{ id: woo_cat_id, name: wooOptions.find(o => o.id === woo_cat_id)?.label ?? "" }])
+          : c.woo_cats ?? [];
         return {
           sunsky_cat: c.sunsky_cat,
-          woo_cats: woo_cat_id ? [{ id: woo_cat_id, name: wooOptions.find(o => o.id === woo_cat_id)?.label ?? "" }] : c.woo_cats ?? [],
+          woo_cats,
           primary_woo_cat_id: woo_cat_id,
           profile_id: s?.profile_id ?? c.profile_id ?? null,
           save_as_rule: s?.save_as_rule ?? true,
