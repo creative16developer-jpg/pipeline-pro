@@ -360,24 +360,53 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     try:
         from services.enrich_service import extract_sunsky_category
         # Deliberately NOT using get_effective_category_name_map() here --
-        # that function always falls back to sunsky_client's live,
+        # that function always falls back to sunsky_client's LIVE,
         # rate-limited full category tree walk whenever a category isn't
         # in the starred set, with up to a 20s wait. It's fine to pay that
         # cost once per pipeline run (where it's actually called), but this
         # endpoint gets polled repeatedly by the review screen -- confirmed
         # live: every poll re-triggered a fresh 20s tree walk against
         # Sunsky's API, making the whole page sluggish for no benefit here.
-        # This display card only needs the fast, zero-API-call starred-
-        # category source; an un-starred category just shows its raw
-        # Sunsky name/ID here instead of the mapped WooCommerce name --
-        # informational only, doesn't affect what Upload actually applies.
+        #
+        # UPDATE (client feedback confirmed live via screenshot -- see
+        # combined_name_map below): the starred set alone was too narrow,
+        # causing a genuinely mapped category to display as its raw
+        # numeric ID and show "unmapped" in this preview. Merged in
+        # sunsky_client's _category_full_cache too: a completely
+        # different, already-in-memory resource from the live tree walk
+        # this comment warns against -- loaded from disk at process
+        # start, zero API calls to read here, so this stays exactly as
+        # fast per poll as the starred-only version was.
         from sqlalchemy import select as _sel_star
         from models.models import StarredSunskyCategory
         starred_rows = (await db.execute(_sel_star(StarredSunskyCategory))).scalars().all()
         starred_only_map = {r.cat_id: r.name for r in starred_rows}
+        # Client feedback confirmed live via screenshot: a genuinely
+        # mapped product ("Mount & Holder") showed as "unmapped" here,
+        # displaying the raw Sunsky category ID (111332) instead of its
+        # real name -- confirmed via an earlier real Upload log that
+        # the actual mapping was found and applied correctly there, so
+        # this was a display-only false negative, not a real upload
+        # problem, but still worth fixing since it looks broken and
+        # erodes trust in this screen. Root cause: starred_only_map
+        # only covers a small, curated subset of categories, and
+        # extract_sunsky_category falls back to returning the raw ID
+        # string when a category isn't in whatever map it's given --
+        # that raw-ID string then gets used AS IF it were the real
+        # category name for the mapping-rule lookup below, which of
+        # course never matches a rule keyed by the real name.
+        # sunsky_client's _category_full_cache is a SEPARATE resource
+        # from the live, rate-limited get_category_name_map() this
+        # endpoint deliberately avoids (per the comment above) --
+        # already loaded into memory from disk at process start, no
+        # API call involved in reading it here, so merging its names
+        # in alongside the starred set costs nothing extra per poll.
+        from pipeline.sunsky_client import _category_full_cache as _cfc
+        full_cache_name_map = {cid: entry["name"] for cid, entry in _cfc.items() if entry.get("name")}
+        combined_name_map = {**full_cache_name_map, **starred_only_map}
         for p in products:
             raw = p.raw_data or {}
-            sunsky_name_by_product[p.id] = extract_sunsky_category(raw, starred_only_map)
+            sunsky_name_by_product[p.id] = extract_sunsky_category(raw, combined_name_map)
             sunsky_id_by_product[p.id] = str(raw.get("categoryId") or raw.get("catId") or raw.get("category_id") or "").strip()
     except Exception as _name_e:
         logger.warning(f"[content-data] category name resolution failed: {_name_e}")
