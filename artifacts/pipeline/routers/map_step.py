@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -23,6 +24,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
@@ -147,12 +150,25 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
     # see which specific products they represented.
     cat_counts: dict[str, int] = {}
     cat_skus: dict[str, list[str]] = {}
+    # Client feedback: "it should automatically show selected in review
+    # step all [Sunsky's own ancestor categories] with selected and it
+    # should assign as well." Confirmed the client's chosen approach
+    # (Option A): match against EXISTING WooCommerce categories only by
+    # name -- never auto-create a category here, unlike the separate
+    # auto-create-taxonomy fallback that already exists elsewhere for a
+    # genuinely different scenario (no mapping at all yet). Tracks each
+    # Sunsky category's own raw numeric id too (not just its resolved
+    # name), needed to walk sunsky_client's own disk-cached category
+    # tree via build_category_path below.
+    cat_raw_id: dict[str, str] = {}
     for p in products:
         raw = p.raw_data or {}
         cat = _extract_sunsky_cat(raw, category_name_map)
         if cat:
             cat_counts[cat] = cat_counts.get(cat, 0) + 1
             cat_skus.setdefault(cat, []).append(p.site_sku or p.sku or f"#{p.id}")
+            if cat not in cat_raw_id:
+                cat_raw_id[cat] = str(raw.get("categoryId") or raw.get("catId") or raw.get("category_id") or "").strip()
 
     # Load saved mappings for this store
     saved_rows = (
@@ -187,10 +203,35 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
     )).scalar_one()
 
     categories = []
+    # Client feedback: "it should automatically show selected in review
+    # step all [Sunsky's own ancestor categories]... and it should
+    # assign as well." Case-insensitive name lookup against this
+    # store's OWN already-loaded WooCommerce category tree -- Option A
+    # (client's explicit choice): only ever matches an EXISTING
+    # WooCommerce category, never creates one here.
+    woo_cat_by_name = {c.name.strip().lower(): c for c in woo_cats}
+    from pipeline.sunsky_client import build_category_path as _build_sunsky_path
     for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1]):
         m = saved.get(cat)
         woo_cat_list = _mapping_woo_cats(m) if m else []
         primary_id = m.primary_woo_cat_id if m else (woo_cat_list[0]["id"] if woo_cat_list else None)
+        # Only for a genuinely new (unmapped) category -- an already-
+        # saved rule reflects a deliberate, possibly-edited choice the
+        # operator already made, which this must never silently alter.
+        sunsky_ancestor_matches: list[dict] = []
+        if m is None and cat_raw_id.get(cat):
+            try:
+                sunsky_path = _build_sunsky_path(cat_raw_id[cat])
+                # Exclude the last entry -- that's the leaf itself (this
+                # same Sunsky category), which the operator picks a
+                # WooCommerce category for explicitly; only its
+                # ancestors are auto-matched here.
+                for ancestor in sunsky_path[:-1]:
+                    match = woo_cat_by_name.get(str(ancestor.get("name", "")).strip().lower())
+                    if match:
+                        sunsky_ancestor_matches.append({"id": match.woo_id, "name": match.name})
+            except Exception as _sap_e:
+                logger.warning(f"[map-data] Sunsky ancestor match failed for {cat!r}: {_sap_e}")
         categories.append({
             "sunsky_cat":         cat,
             "product_count":      count,
@@ -200,6 +241,7 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             "profile_id":         m.profile_id if m else None,
             "is_new":             m is None,
             "times_used":         m.times_used if m else 0,
+            "sunsky_ancestor_matches": sunsky_ancestor_matches,
         })
 
     # Client feedback confirmed this exact bug live: "I selected 3

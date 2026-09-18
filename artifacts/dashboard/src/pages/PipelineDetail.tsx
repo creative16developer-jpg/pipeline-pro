@@ -640,7 +640,23 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
         // confirming a dropdown pick saves the full ancestor chain,
         // not just the leaf.
         const woo_cats = woo_cat_id
-          ? withCategoryAncestors([{ id: woo_cat_id, name: wooOptions.find(o => o.id === woo_cat_id)?.label ?? "" }])
+          ? withCategoryAncestors([
+              { id: woo_cat_id, name: wooOptions.find(o => o.id === woo_cat_id)?.label ?? "" },
+              // Client feedback: "it should automatically show
+              // selected in review step all [Sunsky's own ancestor
+              // categories]... and it should assign as well." Option A
+              // (client's explicit choice): sunsky_ancestor_matches
+              // (from map-data) only ever contains a Sunsky ancestor
+              // level that ALREADY matches an existing WooCommerce
+              // category by name -- a level with no match is already
+              // correctly absent from this list server-side, never
+              // fabricated here. Merged in alongside the operator's own
+              // leaf pick before withCategoryAncestors runs, so its own
+              // de-duplication (by id) naturally handles any overlap
+              // between the two sources rather than needing separate
+              // logic for it.
+              ...(c.sunsky_ancestor_matches ?? []),
+            ])
           : c.woo_cats ?? [];
         return {
           sunsky_cat: c.sunsky_cat,
