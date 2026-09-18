@@ -101,8 +101,19 @@ async def _get_listing(db, product_id: int, store_id: int):
 # mis-split -- acceptable for this use case (short keyword-style
 # status/spec values), not attempted to be perfectly disambiguated.
 def _split_multi_value(raw: str) -> list[str]:
+    # Client feedback confirmed live via screenshot: "Merget values" --
+    # a "Наличност" attribute showed as ONE combined value
+    # ("В наличност, Нови модели") instead of two separate selected
+    # terms. Confirmed the root cause directly: this only ever split
+    # on the literal English word " and ", never a comma -- but a
+    # comma is the far more natural way for an operator to type
+    # multiple values into a Bulgarian-language Fixed Value field (the
+    # word "and" itself is English; the equivalent Bulgarian word is
+    # "и", not what this function originally looked for at all).
+    # Confirmed directly: the old regex left a real, comma-separated
+    # rule value completely unsplit as a single string.
     import re as _re_smv
-    parts = [p.strip() for p in _re_smv.split(r"\s+and\s+", raw, flags=_re_smv.IGNORECASE)]
+    parts = [p.strip() for p in _re_smv.split(r"\s+and\s+|\s*,\s*", raw, flags=_re_smv.IGNORECASE)]
     return [p for p in parts if p]
 
 
