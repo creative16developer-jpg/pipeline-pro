@@ -285,6 +285,21 @@ async def _generate_openai(prompt: str, model: Optional[str]) -> str:
     return _strip_markdown_fence((response.choices[0].message.content or "").strip())
 
 
+# Client feedback confirmed live via PL-121: "This model does not
+# support the effort parameter." Not every Claude model accepts
+# output_config -- shared, self-healing cache so a failure discovered
+# via EITHER the live path (_generate_anthropic) or the batch path
+# (submit_anthropic_batch) teaches the other: once a given model is
+# known not to support effort, every subsequent call for that same
+# model -- live or batch -- correctly omits it, without needing to
+# hardcode a specific model-name allowlist that would need updating
+# every time Anthropic ships a new model. Starts empty every process
+# restart (in-memory only, not persisted) -- a fresh worker simply
+# relearns it on the first failure again, an acceptable cost for
+# avoiding a stale, wrong cached value surviving indefinitely.
+_MODEL_SUPPORTS_EFFORT: dict[str, bool] = {}
+
+
 _ANTHROPIC_DEPRECATED: dict[str, str] = {
     # Client feedback: confirmed live via preview panel that Title/
     # Description generation was falling back to logic mode
@@ -353,7 +368,23 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
     client = AsyncAnthropic(api_key=api_key)
     raw_model = model or "claude-sonnet-5"
     resolved_model = _ANTHROPIC_DEPRECATED.get(raw_model, raw_model)
-    message = await client.messages.create(
+    # Client feedback confirmed live via PL-121, a genuine regression
+    # from the effort fix immediately below: "This model does not
+    # support the effort parameter." Confirmed: NOT every Claude model
+    # accepts output_config -- only the newest ones do, and this
+    # store's own configured model doesn't. The earlier fix sent
+    # effort unconditionally to every Anthropic call regardless of
+    # which model was actually selected, breaking generation entirely
+    # (every single field falling back to logic mode) for any store on
+    # an older model, which is strictly worse than the mid-generation
+    # cutoffs that fix was meant to solve. Wrapped in a genuine
+    # try/retry: send effort first (the actual fix, for models that
+    # support it), and only on this SPECIFIC "does not support the
+    # effort parameter" error, retry once without it -- so a model
+    # that can't use it still gets a working (if less budget-optimal)
+    # generation instead of failing outright. Any other kind of error
+    # still raises normally, unaffected by this fallback.
+    _create_kwargs = dict(
         model=resolved_model,
         # Client feedback confirmed live: "'ThinkingBlock' object has
         # no attribute 'text'" / max_tokens raised 600->4000 (see
@@ -382,9 +413,20 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
         # internal reasoning this task doesn't need. max_tokens also
         # raised further for additional safety margin.
         max_tokens=6000,
-        output_config={"effort": "low"},
         messages=[{"role": "user", "content": prompt}],
     )
+    try:
+        if _MODEL_SUPPORTS_EFFORT.get(resolved_model, True):
+            message = await client.messages.create(output_config={"effort": "low"}, **_create_kwargs)
+            _MODEL_SUPPORTS_EFFORT[resolved_model] = True
+        else:
+            message = await client.messages.create(**_create_kwargs)
+    except Exception as _eff_err:
+        if "effort" in str(_eff_err).lower() and "does not support" in str(_eff_err).lower():
+            _MODEL_SUPPORTS_EFFORT[resolved_model] = False
+            message = await client.messages.create(**_create_kwargs)
+        else:
+            raise
     # Client feedback confirmed live via Pipeline Log: "'ThinkingBlock'
     # object has no attribute 'text'" -- newer Claude models can include
     # an extended-thinking block in the response before the actual text
@@ -452,28 +494,42 @@ async def submit_anthropic_batch(requests: list[dict]) -> str:
     for req in requests:
         raw_model = req.get("model") or "claude-sonnet-5"
         resolved_model = _ANTHROPIC_DEPRECATED.get(raw_model, raw_model)
+        _batch_params = {
+            "model": resolved_model,
+            # Client feedback confirmed live AGAIN via PL-119 (a
+            # real, complete pipeline run using this exact batch
+            # path -- log shows "Batch submitted to Claude"):
+            # generated Description text cut off mid-section (a
+            # "Compatibility" heading with zero text following it)
+            # across multiple fields. Same underlying cause and
+            # same fix as _generate_anthropic above: Claude uses
+            # HIGH effort by default, spending as many tokens as
+            # needed -- output_config={"effort": "low"} is
+            # Anthropic's own documented way to reduce that for a
+            # workload that doesn't need heavy reasoning, freeing
+            # far more of the same max_tokens budget for the
+            # actual visible answer. max_tokens also raised
+            # further for additional safety margin.
+            "max_tokens": 6000,
+            "messages": [{"role": "user", "content": req["prompt"]}],
+        }
+        # Client feedback confirmed live via PL-121: "This model does
+        # not support the effort parameter." A batch request that
+        # fails can't be retried mid-batch the way a live call can --
+        # by the time the error comes back, the whole batch has
+        # already been submitted. Consults the same shared cache
+        # _generate_anthropic's own live-path retry populates: only
+        # includes output_config once this model is known (from an
+        # earlier live-path failure) not to reject it, defaulting to
+        # including it (True) for any model not yet known either way
+        # -- an unseen model's first-ever batch run may still hit this
+        # error once, but every batch run after that first failure,
+        # for the same model, correctly omits it.
+        if _MODEL_SUPPORTS_EFFORT.get(resolved_model, True):
+            _batch_params["output_config"] = {"effort": "low"}
         batch_requests.append({
             "custom_id": req["custom_id"],
-            "params": {
-                "model": resolved_model,
-                # Client feedback confirmed live AGAIN via PL-119 (a
-                # real, complete pipeline run using this exact batch
-                # path -- log shows "Batch submitted to Claude"):
-                # generated Description text cut off mid-section (a
-                # "Compatibility" heading with zero text following it)
-                # across multiple fields. Same underlying cause and
-                # same fix as _generate_anthropic above: Claude uses
-                # HIGH effort by default, spending as many tokens as
-                # needed -- output_config={"effort": "low"} is
-                # Anthropic's own documented way to reduce that for a
-                # workload that doesn't need heavy reasoning, freeing
-                # far more of the same max_tokens budget for the
-                # actual visible answer. max_tokens also raised
-                # further for additional safety margin.
-                "max_tokens": 6000,
-                "output_config": {"effort": "low"},
-                "messages": [{"role": "user", "content": req["prompt"]}],
-            },
+            "params": _batch_params,
         })
 
     batch = await client.messages.batches.create(requests=batch_requests)
