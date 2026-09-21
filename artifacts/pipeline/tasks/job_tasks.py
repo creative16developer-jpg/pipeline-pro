@@ -2122,6 +2122,27 @@ async def _run_upload(db, job):
                         continue
                     if len(spec_key) > 60 or len(spec_val) > 200:
                         continue
+                    # Client feedback confirmed live via PL-136, right
+                    # after the spec-table parser fix started actually
+                    # detecting real spec data for the first time all
+                    # session: "One Package Weight", "Carton Weight",
+                    # "Carton Size", "Qty per Carton", "Loading
+                    # Container" all appeared as candidate attributes --
+                    # internal supplier warehouse/shipping data, never
+                    # meant for a customer-facing WooCommerce product
+                    # page. content_service.py's _logic_description
+                    # already excludes these exact same keys from
+                    # generated Description text (same substrings,
+                    # confirmed live on an earlier product) -- this loop
+                    # needed the identical filter, since it was never
+                    # actually reachable before the parser fix and so
+                    # never needed one until now.
+                    if any(_sub in spec_key.strip().lower() for _sub in (
+                        "package", "carton", "container", "loading",
+                        "moq", "lead time", "warehouse", "shipping",
+                        "freight", "pallet",
+                    )):
+                        continue
                     if spec_key.strip().lower() in p2_protected_attr_names:
                         # Same collision risk as the modelLabel/optionList
                         # case above -- a raw spec-table key can coincide
@@ -3292,6 +3313,17 @@ async def _run_sync(db, job):
                 spec_pairs = _s_specs
                 for spec_key, spec_val in list(spec_pairs.items())[:15]:
                     if len(spec_key) > 60 or len(spec_val) > 100:
+                        continue
+                    # Same shipping/logistics filter as Phase 2's
+                    # identical fix -- Sync's own raw-spec-attribute
+                    # loop needed the same protection once the parser
+                    # fix made real spec data reachable here for the
+                    # first time.
+                    if any(_sub in spec_key.strip().lower() for _sub in (
+                        "package", "carton", "container", "loading",
+                        "moq", "lead time", "warehouse", "shipping",
+                        "freight", "pallet",
+                    )):
                         continue
                     if spec_key.strip().lower() in p2_protected_attr_names_b:
                         continue  # same collision risk as the modelLabel case above
