@@ -855,7 +855,16 @@ def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
     # spec field: a meaningful word from the product's own category/name
     # still communicates what kind of product this is, just less
     # precisely than a real Type spec would.
-    cat = product.get("category", "")
+    # Client feedback confirmed live via screenshot: only a single
+    # "Xiaomi" tag reached WooCommerce for SYA002283914A. Traced the
+    # cause directly: this branch checked product.get("category", "")
+    # -- confirmed via a full codebase search that this exact key is
+    # NEVER set anywhere at all, a dead branch that has never actually
+    # fired. The real, already-populated equivalent is
+    # product["category_name"] (added earlier this session for the AI
+    # generation context feature) -- simply never wired in here too
+    # when that field was added, since this function predates it.
+    cat = product.get("category_name", "") or product.get("category", "")
     if cat:
         cat_tag = _tag_case(cat.strip())
         if cat_tag not in tags:
