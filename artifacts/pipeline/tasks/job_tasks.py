@@ -2276,17 +2276,83 @@ async def _run_upload(db, job):
 # ---------------------------------------------------------------------------
 
 def _parse_params_table(html: str) -> dict[str, str]:
-    """Extract key-value spec pairs from Sunsky paramsTable HTML."""
-    import re
-    from html import unescape
+    """Extract key-value spec pairs from Sunsky paramsTable HTML.
 
-    keys = [unescape(k.strip()) for k in re.findall(
-        r'class=["\']params_key["\'][^>]*>\s*(.*?)\s*</td>', html, re.DOTALL | re.IGNORECASE
-    )]
-    vals = [unescape(re.sub(r'<[^>]+>', '', v).strip()) for v in re.findall(
-        r'class=["\']params_val["\'][^>]*>\s*(.*?)\s*</td>', html, re.DOTALL | re.IGNORECASE
-    )]
-    return {k: v for k, v in zip(keys, vals) if k and v}
+    BUG FIX (found live during real testing, EDA007358326A): the
+    original implementation matched on class="params_key" /
+    class="params_val" -- confirmed directly against real Sunsky
+    paramsTable HTML throughout this entire session that these
+    specific CSS classes never actually appear anywhere on the <td>
+    elements themselves (only a params_begin/params_prop class
+    appears, and only on some wrapper <div>s, never on a cell). This
+    meant this function has been silently returning an empty dict for
+    every single product, this whole time -- the raw-spec-attribute
+    assignment loop both Phase 2 (Upload) and Sync call this for
+    has never actually had any real spec data to work with at all.
+
+    Also confirmed the real HTML nests some spec categories (e.g.
+    "General") in an outer row whose second cell contains a WHOLE
+    nested sub-table (the real "Compatible with" row lives one level
+    deeper inside it) -- a flat, single-level regex has no way to
+    reach that. Rewritten as a proper HTMLParser-based table walker
+    (Python's own standard library, no new dependency): only the
+    DEEPEST-level rows are treated as genuine key/value pairs; a row
+    whose own second cell contains a nested <table> is a section
+    header, not a real pair, and is skipped so parsing can reach what
+    it actually wraps instead. Duplicated here (not imported from
+    content_service.py, which has the identical fix) matching this
+    codebase's existing convention of keeping small utility functions
+    independent per-module rather than cross-importing between
+    job_tasks.py and content_service.py.
+    """
+    import re as _re_ppt
+    from html.parser import HTMLParser as _HTMLParser_ppt
+
+    class _SpecTableParser(_HTMLParser_ppt):
+        def __init__(self):
+            super().__init__()
+            self.pairs: dict[str, str] = {}
+            self.in_tr = False
+            self.in_td = False
+            self.current_cells: list[str] = []
+            self.current_cell_text: list[str] = []
+            self.row_has_nested_table = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "table" and self.in_tr:
+                self.row_has_nested_table = True
+            elif tag == "tr":
+                self.in_tr = True
+                self.current_cells = []
+                self.row_has_nested_table = False
+            elif tag == "td":
+                self.in_td = True
+                self.current_cell_text = []
+            elif tag == "br" and self.in_td:
+                self.current_cell_text.append(" ")
+
+        def handle_endtag(self, tag):
+            if tag == "td":
+                self.in_td = False
+                text = _re_ppt.sub(r"\s+", " ", "".join(self.current_cell_text)).strip()
+                self.current_cells.append(text)
+            elif tag == "tr":
+                self.in_tr = False
+                if not self.row_has_nested_table and len(self.current_cells) >= 2:
+                    k, v = self.current_cells[0].strip(), self.current_cells[1].strip()
+                    if k and v:
+                        self.pairs[k] = v
+
+        def handle_data(self, data):
+            if self.in_td:
+                self.current_cell_text.append(data)
+
+    parser = _SpecTableParser()
+    try:
+        parser.feed(html)
+    except Exception:
+        pass
+    return parser.pairs
 
 
 async def _run_sync(db, job):

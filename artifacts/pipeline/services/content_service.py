@@ -22,6 +22,7 @@ import html
 import logging
 import re
 import zlib
+from html.parser import HTMLParser as _HTMLParser
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -224,17 +225,72 @@ def _slugify(text: str) -> str:
     return text.strip("-")
 
 
+class _SpecTableParser(_HTMLParser):
+    """Robust table parser handling arbitrarily nested tables. Confirmed
+    live (EDA007358326A) that Sunsky wraps some spec categories (e.g.
+    "General") in an outer row whose second cell contains a WHOLE
+    nested sub-table (e.g. the real "Compatible with" row lives one
+    level deeper inside it) -- only the DEEPEST-level rows are genuine
+    key/value pairs; a row whose own second cell contains a nested
+    <table> is a section header, not a real pair, and is skipped so
+    parsing can reach what it actually wraps instead. The previous
+    single regex (matching one flat <tr><td>..</td><td>..</td> pattern)
+    had no way to tell these apart: its own non-greedy .*? simply
+    stopped at the first </td> it found, which for a nested row is
+    partway through the inner table, silently pairing the OUTER label
+    ("General") with the INNER table's own first cell ("Compatible
+    with" itself, not its value) -- and never reaching the real pair
+    at all. Confirmed this was already a genuine, pre-existing parsing
+    gap, not something introduced by this session's tag/brand fixes:
+    those fixes were correct on their own terms, but had nothing
+    real to work with for any spec nested this way.
+    """
+    def __init__(self):
+        super().__init__()
+        self.pairs: dict[str, str] = {}
+        self.in_tr = False
+        self.in_td = False
+        self.current_cells: list[str] = []
+        self.current_cell_text: list[str] = []
+        self.row_has_nested_table = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table" and self.in_tr:
+            self.row_has_nested_table = True
+        elif tag == "tr":
+            self.in_tr = True
+            self.current_cells = []
+            self.row_has_nested_table = False
+        elif tag == "td":
+            self.in_td = True
+            self.current_cell_text = []
+        elif tag == "br" and self.in_td:
+            self.current_cell_text.append(" ")
+
+    def handle_endtag(self, tag):
+        if tag == "td":
+            self.in_td = False
+            text = re.sub(r"\s+", " ", "".join(self.current_cell_text)).strip()
+            self.current_cells.append(text)
+        elif tag == "tr":
+            self.in_tr = False
+            if not self.row_has_nested_table and len(self.current_cells) >= 2:
+                k, v = self.current_cells[0].strip(), self.current_cells[1].strip()
+                if k and v:
+                    self.pairs[k] = v
+
+    def handle_data(self, data):
+        if self.in_td:
+            self.current_cell_text.append(data)
+
+
 def _parse_params_table(html_str: str) -> dict[str, str]:
-    pairs: dict[str, str] = {}
-    for m in re.finditer(
-        r"<tr[^>]*>\s*<td[^>]*>(.*?)</td>\s*<td[^>]*>(.*?)</td>",
-        html_str, re.DOTALL | re.IGNORECASE,
-    ):
-        k = re.sub(r"<[^>]+>", "", m.group(1)).strip()
-        v = re.sub(r"<[^>]+>", "", m.group(2)).strip()
-        if k and v:
-            pairs[k] = v
-    return pairs
+    parser = _SpecTableParser()
+    try:
+        parser.feed(html_str)
+    except Exception:
+        pass
+    return parser.pairs
 
 
 def _get_raw(product: dict) -> dict:
