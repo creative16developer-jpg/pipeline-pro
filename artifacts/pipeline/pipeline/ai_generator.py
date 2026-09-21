@@ -104,6 +104,27 @@ def _extract_variant_info(product: dict) -> str:
     at all. Same parsing pattern as job_tasks.py's own variant-
     attribute handling, reused here rather than reimplemented
     separately to avoid the two ever silently drifting apart.
+
+    BUG FIX (found live during real testing, SPA3331B): confirmed
+    directly against real data that optionList's items are NOT always
+    selectable variants of THIS SAME product listing -- each item
+    carries its own itemNo, and when that itemNo differs from the
+    current product's own SKU, that item is a genuinely DIFFERENT,
+    separate product (a sibling SKU cross-linked on Sunsky's own site
+    under a shared modelLabel), not an option a buyer picks on this
+    listing. Confirmed live: SPA3331B (a Samsung Galaxy Tab S2 8.0
+    replacement button) listed "For Samsung Galaxy Tab S2 9.7" as an
+    "option" under modelLabel "Color" -- but that 9.7" version is
+    itemNo SPA3332B, an entirely separate product with its own
+    listing, not a size you can pick when buying SPA3331B. Including
+    it as if it were a genuine option of THIS product would have told
+    the AI something factually wrong about the specific SKU it's
+    writing content for. Now filters to only the item(s) whose itemNo
+    matches this product's own SKU (or has no itemNo at all, treated
+    as belonging to the current listing) -- a product with only
+    sibling-SKU entries and no genuine same-listing option correctly
+    returns no variant info at all, rather than fabricating a false
+    "this product has options" signal.
     """
     raw = product.get("rawData") or product.get("raw_data") or {}
     model_label = str(raw.get("modelLabel") or "").strip()
@@ -114,12 +135,25 @@ def _extract_variant_info(product: dict) -> str:
         except Exception:
             option_list = {}
     option_items = option_list.get("items", []) if isinstance(option_list, dict) else []
-    option_values = [
-        str(item.get("keywords") or item.get("value") or "").strip()
-        for item in option_items if isinstance(item, dict)
-    ]
-    option_values = [v for v in option_values if v][:10]
-    if not model_label or not option_values:
+    own_sku = str(product.get("site_sku") or product.get("sku") or "").strip().lower()
+    option_values = []
+    for item in option_items:
+        if not isinstance(item, dict):
+            continue
+        item_no = str(item.get("itemNo") or "").strip().lower()
+        if item_no and own_sku and item_no != own_sku:
+            continue  # a genuinely different, separate sibling SKU -- not an option of this listing
+        v = str(item.get("keywords") or item.get("value") or "").strip()
+        if v:
+            option_values.append(v)
+    option_values = option_values[:10]
+    # A single remaining value isn't a genuine choice to present as
+    # "variant options" -- it's just restating something already
+    # implicit in the product itself (e.g. after filtering out sibling
+    # SKUs above, SPA3331B is left with only "For Samsung Galaxy Tab S2
+    # 8.0", which isn't an option a buyer picks, just a fact about this
+    # one listing). Requires at least 2 genuine same-listing values.
+    if not model_label or len(option_values) < 2:
         return ""
     return f"{model_label}: {', '.join(option_values)}"
 
