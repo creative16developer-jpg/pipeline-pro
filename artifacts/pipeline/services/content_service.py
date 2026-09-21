@@ -397,6 +397,31 @@ def _validate(field: str, value: str, rules: dict) -> tuple[bool, str]:
 # Logic generators
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Client feedback confirmed live via a real generated product
+# (SYA002283914A): "russian or chinese words in the text" -- and the
+# client's own follow-up test confirmed the raw Sunsky source data
+# for that exact product was 100% clean English, ruling out a
+# source-language leak. The model generated entire fields (Description,
+# Short Description, Meta Description) fully in Russian from scratch,
+# despite an explicit Bulgarian instruction. Chinese characters occupy
+# a distinct, easily and reliably detectable Unicode range. Russian
+# and Bulgarian both use Cyrillic, so no simple character-set check
+# can tell them apart in general -- BUT Bulgarian's alphabet is
+# missing three letters Russian has (Ы, Э, Ё) -- confirmed directly
+# against the client's own real leaked text ("Это защитный чехол...")
+# containing "Э" -- so their presence in text meant to be Bulgarian is
+# a reliable, zero-false-positive signal specifically for Russian,
+# without needing a full language-detection library.
+def _has_wrong_language(text: str, target_language: str) -> bool:
+    if target_language == "en":
+        return False
+    if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+        return True
+    if any(ch in "ыЫэЭёЁ" for ch in text):
+        return True
+    return False
+
+
 def _truncate_no_mid_word(value: str, max_chars: int, boundary: str = " ") -> str:
     """Never cut a word (or hyphen-token, for slugs) in half: if the cut
     point at max_chars doesn't already land on `boundary`, extend forward
@@ -1480,21 +1505,39 @@ async def run_field(
                 # copied verbatim into otherwise-Bulgarian output
                 # instead of translated (see _language_instruction's
                 # own strengthened wording for the actual prompt-side
-                # fix). Chinese characters occupy a distinct, easily
-                # and reliably detectable Unicode range, unlike
-                # Russian vs. Bulgarian (both Cyrillic, no simple
-                # character-set check can tell them apart) -- this is
-                # a lightweight, log-only safety net specifically for
-                # the Chinese case, not a full flag/block mechanism
-                # (which would need its own UI/schema work), so a
-                # leak is at least visible in the pipeline log even if
-                # the strengthened prompt doesn't catch every case.
-                if options.get("target_language", "bg") != "en" and any("\u4e00" <= ch <= "\u9fff" for ch in text_or_error):
+                # fix).
+                #
+                # UPGRADE (confirmed live via a real generated product,
+                # SYA002283914A): this specific product's raw Sunsky
+                # source data was 100% clean English -- nothing to copy
+                # or leak from. The model still generated ENTIRE
+                # fields (Description, Short Description, Meta
+                # Description) fully in Russian from scratch, despite
+                # a clean English source and an explicit Bulgarian
+                # instruction -- a genuine language-consistency
+                # failure, not a source-language leak. A silent,
+                # log-only warning isn't enough for a failure this
+                # severe (a whole field in the wrong language reaching
+                # the client's actual store); this now retries once,
+                # live, via generate_with_ai directly, before falling
+                # back to accepting the result.
+                if _has_wrong_language(text_or_error, options.get("target_language", "bg")):
                     logger.warning(
-                        f"[{field}] Generated text contains Chinese characters despite "
-                        f"target_language={options.get('target_language', 'bg')!r} -- likely "
-                        f"untranslated source data leaked through: {text_or_error[:200]!r}"
+                        f"[{field}] Generated text is in the wrong language despite "
+                        f"target_language={options.get('target_language', 'bg')!r} -- "
+                        f"retrying once: {text_or_error[:200]!r}"
                     )
+                    try:
+                        from pipeline.ai_generator import generate_with_ai
+                        retry_text = await generate_with_ai(field, product, ai_provider, ai_model, options)
+                        retry_text = _fix_brand_spelling(retry_text, product)
+                        if not _has_wrong_language(retry_text, options.get("target_language", "bg")):
+                            text_or_error = retry_text
+                        else:
+                            logger.warning(f"[{field}] Retry still in the wrong language -- using it anyway, no further retries")
+                            text_or_error = retry_text
+                    except Exception as _lang_retry_err:
+                        logger.warning(f"[{field}] Language retry failed ({_lang_retry_err}) -- using original result")
                 return {"field": field, "value": text_or_error,
                          "source": "ai:anthropic:batch", "status": "ok"}
             # Batch request failed for this field -- apply the same
@@ -1514,6 +1557,29 @@ async def run_field(
                 value = await _run_ai_with_retry(field, product, ai_provider, ai_model, options)
                 value = _fix_brand_spelling(value, product)
                 source = f"ai:{ai_provider}"
+
+                # Client feedback confirmed live via a real generated
+                # product (SYA002283914A, generated through THIS exact
+                # live path via "Re-generate content"): entire fields
+                # generated fully in Russian from scratch, despite
+                # clean English source data and an explicit Bulgarian
+                # instruction. Same fix as the batch path's equivalent
+                # check just above -- retries once, live, before
+                # accepting the result.
+                if _has_wrong_language(value, options.get("target_language", "bg")):
+                    logger.warning(
+                        f"[{field}] Generated text is in the wrong language despite "
+                        f"target_language={options.get('target_language', 'bg')!r} -- "
+                        f"retrying once: {value[:200]!r}"
+                    )
+                    try:
+                        retry_value = await _run_ai_with_retry(field, product, ai_provider, ai_model, options)
+                        retry_value = _fix_brand_spelling(retry_value, product)
+                        if _has_wrong_language(retry_value, options.get("target_language", "bg")):
+                            logger.warning(f"[{field}] Retry still in the wrong language -- using it anyway, no further retries")
+                        value = retry_value
+                    except Exception as _lang_retry_err:
+                        logger.warning(f"[{field}] Language retry failed ({_lang_retry_err}) -- using original result")
 
                 # Sanity check independent of prompt-following: an AI title
                 # response that's suspiciously short is worse than no AI
