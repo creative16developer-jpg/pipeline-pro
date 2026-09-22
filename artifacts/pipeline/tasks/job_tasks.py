@@ -2507,6 +2507,29 @@ async def _run_sync(db, job):
 
         needed_cat_ids: set[str] = set()
         for prod in target_products:
+            # Client feedback confirmed live via screenshot: a
+            # product with a deliberate, per-product manual category
+            # override ("Protection & Cases" -> "Рамки и Кейджове")
+            # still ended up with a brand-new, unwanted WooCommerce
+            # category literally named after the raw Sunsky category
+            # ("Protection & Cases") -- confirmed the actual product
+            # assignment itself was correct (this loop's own sibling,
+            # the assignment step below, already correctly checks
+            # manual overrides first) but this EARLIER step, deciding
+            # what needs auto-creating at all, had no awareness of
+            # manual overrides whatsoever: it queued up every single
+            # product's raw Sunsky category for resolution/creation
+            # regardless of whether that product actually needed it.
+            # A product with a manual override needs no Sunsky-
+            # category-based resolution at all -- its category is
+            # already, deliberately decided -- so it's skipped here
+            # entirely, the same check the assignment step already
+            # performs, just applied earlier so the unwanted category
+            # is never even considered for creation in the first
+            # place.
+            _cat_listing = await _get_listing(db, prod.id, store.id)
+            if _cat_listing and _cat_listing.cat_source == "manual" and _cat_listing.manual_woo_cats_json:
+                continue
             cid = _get_sunsky_cat_id(prod)
             if cid:
                 needed_cat_ids.add(cid)
