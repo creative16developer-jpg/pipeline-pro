@@ -1401,6 +1401,31 @@ def _prepare_field_context(field: str, product: dict, template: dict) -> tuple[s
     if override is not None:
         return "override", {}, product, {"field": field, "value": str(override), "source": "override", "status": "ok"}
 
+    # Client feedback confirmed live via screenshot: "The system
+    # instead to keep the product name same as in the CSV it change
+    # it... There must have a rule even in content generation
+    # settings the title is set to AI or other option if we use CSV
+    # import to use the product title from the file. So CSV is with
+    # priority." Confirmed the root cause directly: _logic_title
+    # already correctly prioritized csv_title, but only when the
+    # Title field's own mode is "logic"/"derive" -- if it's set to
+    # "ai" (the client's own screenshot's Content Generation settings
+    # strongly suggested this), the AI-generation path never checked
+    # csv_title at all, regenerating a brand-new title from the raw
+    # Sunsky name regardless of what the operator explicitly supplied
+    # via CSV. Applied here, at the single shared setup both the
+    # live-call and batch-prompt-building paths go through, so a
+    # CSV-supplied title now wins over ANY configured mode for this
+    # field -- not just "logic" -- while an explicit manual override
+    # (checked immediately above) still takes priority over even
+    # this, since that's a still-more-deliberate, still-more-recent
+    # operator choice.
+    if field == "title":
+        csv_title = (product.get("csv_title") or "").strip()
+        if csv_title:
+            csv_title = _truncate_no_mid_word(csv_title, 120)
+            return "csv", {}, product, {"field": field, "value": csv_title, "source": "csv", "status": "ok"}
+
     field_cfg = (template.get("fields") or {}).get(field, {})
     options = field_cfg.get("options", {})
     mode = field_cfg.get("mode") or FIELD_DEFAULT_MODE.get(field, "logic")
