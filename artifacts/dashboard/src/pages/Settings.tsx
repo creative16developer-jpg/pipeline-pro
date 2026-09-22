@@ -2930,6 +2930,34 @@ function AttrMappingModal({
   const [storeCatOptions, setStoreCatOptions] = useState<{ id: string; name: string }[]>([]);
   const { data: modalStores } = useStores();
 
+  // Client feedback confirmed live via screenshot: "if I write делти
+  // instead of делта for example this will override wrong value...
+  // Once select attribute click on the value field and you can see
+  // only values for the following attribute." Fetches the REAL,
+  // existing terms for whichever WooCommerce attribute is currently
+  // selected, so the Fixed Value picker below can offer genuine
+  // options instead of a free-text box that risks a typo silently
+  // creating a new, wrong, never-matching term.
+  const [availableTerms, setAvailableTerms] = useState<{ id: number; name: string }[]>([]);
+  const [termsLoading, setTermsLoading] = useState(false);
+  const [termSearch, setTermSearch] = useState("");
+  const [termPickerOpen, setTermPickerOpen] = useState(false);
+
+  useEffect(() => {
+    if (!storeId || !form.woo_attr_name.trim() || form.rule_type !== "fixed_value") {
+      setAvailableTerms([]);
+      return;
+    }
+    let cancelled = false;
+    setTermsLoading(true);
+    fetch(`/api/attr-mapping/attribute-terms?store_id=${storeId}&attribute_name=${encodeURIComponent(form.woo_attr_name.trim())}`)
+      .then(r => r.json())
+      .then(data => { if (!cancelled) setAvailableTerms(data.terms ?? []); })
+      .catch(() => { if (!cancelled) setAvailableTerms([]); })
+      .finally(() => { if (!cancelled) setTermsLoading(false); });
+    return () => { cancelled = true; };
+  }, [storeId, form.woo_attr_name, form.rule_type]);
+
   // Client feedback (Review_4.docx, item #5): "When start typing in
   // Woocommerce Attribute Name it stop on each letter and need to
   // click again and again." Both comboboxes below previously passed
@@ -3170,19 +3198,109 @@ function AttrMappingModal({
               <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1.5 block">
                 Fixed Value
               </label>
-              <input
-                className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
-                placeholder="e.g. In Stock, Waterproof, New — or combine with 'and'"
-                value={form.fixed_value}
-                onChange={e => set("fixed_value", e.target.value)}
-              />
-              {/* Client feedback: "in Source / Value field need to have
-                  'and', so we can define more than 1 value. For example
-                  for Наличност (Stock) we have 'in stock' and 'new
-                  item', so instead to create 2 separate rules, we can
-                  have 'and'." */}
+              {/* Client feedback confirmed live via screenshot,
+                  explicitly referencing the Category Mapping picker's
+                  own checkbox-tree pattern as the desired UI: "Once
+                  select attribute click on the value field and you
+                  can see only values for the following attribute...
+                  Then once select a specific value you see it in same
+                  way as categories." Replaces the previous free-text
+                  input (which risked a typo like "делти" instead of
+                  "делта" silently creating a new, wrong, never-
+                  matching WooCommerce term) with a picker offering
+                  only the REAL, already-existing terms for whichever
+                  attribute is selected above, shown as removable
+                  chips exactly like the category picker. Still allows
+                  typing and adding a genuinely new value -- e.g. for
+                  a brand-new attribute with no existing terms yet --
+                  since that's a real, legitimate need this can't
+                  block. */}
+              {(() => {
+                const selected = form.fixed_value
+                  ? form.fixed_value.split(/\s+and\s+/i).map(v => v.trim()).filter(Boolean)
+                  : [];
+                const selectedLower = new Set(selected.map(v => v.toLowerCase()));
+                const filteredTerms = availableTerms.filter(t =>
+                  !selectedLower.has(t.name.toLowerCase()) &&
+                  (termSearch.trim() === "" || t.name.toLowerCase().includes(termSearch.trim().toLowerCase()))
+                );
+                const exactMatchExists = availableTerms.some(t => t.name.toLowerCase() === termSearch.trim().toLowerCase());
+                const addValue = (v: string) => {
+                  const next = [...selected, v.trim()];
+                  set("fixed_value", next.join(" and "));
+                  setTermSearch("");
+                  setTermPickerOpen(false);
+                };
+                const removeValue = (v: string) => {
+                  set("fixed_value", selected.filter(s => s !== v).join(" and "));
+                };
+                return (
+                  <div>
+                    {selected.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {selected.map(v => (
+                          <span key={v} className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-primary/15 text-primary text-xs">
+                            {v}
+                            <button type="button" onClick={() => removeValue(v)} className="hover:text-red-400">×</button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="relative">
+                      <input
+                        className="w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
+                        placeholder={
+                          !form.woo_attr_name.trim()
+                            ? "Pick a WooCommerce attribute above first"
+                            : termsLoading
+                            ? "Loading existing values…"
+                            : availableTerms.length > 0
+                            ? "Search existing values, or type to add a new one…"
+                            : "No existing values yet — type to add one"
+                        }
+                        value={termSearch}
+                        disabled={!form.woo_attr_name.trim()}
+                        onChange={e => { setTermSearch(e.target.value); setTermPickerOpen(true); }}
+                        onFocus={() => setTermPickerOpen(true)}
+                        onBlur={() => setTimeout(() => setTermPickerOpen(false), 150)}
+                        onKeyDown={e => {
+                          if (e.key === "Enter" && termSearch.trim()) {
+                            e.preventDefault();
+                            addValue(termSearch.trim());
+                          }
+                        }}
+                      />
+                      {termPickerOpen && form.woo_attr_name.trim() && (filteredTerms.length > 0 || (termSearch.trim() && !exactMatchExists)) && (
+                        <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto rounded-lg border border-border bg-card shadow-lg">
+                          {filteredTerms.map(t => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              className="w-full text-left px-3 py-2 text-sm hover:bg-secondary/60"
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => addValue(t.name)}
+                            >
+                              {t.name}
+                            </button>
+                          ))}
+                          {termSearch.trim() && !exactMatchExists && (
+                            <button
+                              type="button"
+                              className="w-full text-left px-3 py-2 text-sm text-primary hover:bg-secondary/60 border-t border-border"
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => addValue(termSearch.trim())}
+                            >
+                              + Add "{termSearch.trim()}" as a new value
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
               <p className="text-[11px] text-muted-foreground mt-1">
-                Need more than one value on this attribute? Type them separated by <span className="font-mono text-foreground">and</span> — e.g. "in stock and new item" sets both values instead of needing two separate rules.
+                Pick as many existing values as apply — each one is added separately, the same as typing "in stock and new item" used to.
               </p>
             </div>
           )}

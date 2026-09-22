@@ -187,3 +187,62 @@ async def export_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=attribute_mapping_rules.csv"},
     )
+
+
+@router.get("/attr-mapping/attribute-terms")
+async def get_attribute_terms_for_picker(
+    store_id: int = Query(...),
+    attribute_name: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Client feedback confirmed live via screenshot: "if I write делти
+    instead of делта for example this will override wrong value and
+    in other hand I don't know all values. Which mean I need to copy
+    paste from Woo to Pipeline... Once select attribute click on the
+    value field and you can see only values for the following
+    attribute." Explicit reference to the existing Category Mapping
+    picker (a checkbox tree of REAL, existing WooCommerce categories)
+    as the exact UI pattern wanted here instead of a free-text Fixed
+    Value box, which risks a typo silently creating a new, wrong,
+    never-matching WooCommerce term rather than reusing an existing
+    one -- confirmed as a genuine, real risk, not a hypothetical one.
+
+    Returns the REAL terms already defined for this specific
+    WooCommerce attribute (by name, case-insensitive), so the
+    frontend's picker can offer only genuine, existing options --
+    matching get_attribute_terms, the exact same WooCommerce API
+    function job_tasks.py's own Upload/Sync attribute-assignment code
+    already relies on for this identical lookup, reused here rather
+    than reimplemented separately so the two can never drift apart.
+    """
+    from models.models import Store
+    from pipeline.woo_client import get_all_woo_attributes, get_attribute_terms
+
+    store = await db.get(Store, store_id)
+    if not store:
+        raise HTTPException(404, "Store not found")
+
+    try:
+        woo_attrs = await get_all_woo_attributes(store)
+    except Exception as e:
+        raise HTTPException(502, f"Could not load WooCommerce attributes: {e}")
+
+    target = attribute_name.strip().lower()
+    matched = next((a for a in woo_attrs if str(a.get("name", "")).strip().lower() == target), None)
+    if not matched:
+        # Not an error -- a genuinely new attribute (not yet created in
+        # WooCommerce at all) simply has no terms to offer yet. The
+        # frontend can fall back to free-text entry in this case.
+        return {"attribute_found": False, "terms": []}
+
+    try:
+        terms = await get_attribute_terms(store, matched["id"])
+    except Exception as e:
+        raise HTTPException(502, f"Could not load terms for attribute {attribute_name!r}: {e}")
+
+    return {
+        "attribute_found": True,
+        "attribute_id": matched["id"],
+        "terms": [{"id": t["id"], "name": t["name"]} for t in terms],
+    }
