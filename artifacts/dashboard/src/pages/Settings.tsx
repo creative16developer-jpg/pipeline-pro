@@ -3369,7 +3369,23 @@ function AttrMappingModal({
 
 function AttributeMappingTab() {
   const { data: storesData } = useStores();
-  const stores = storesData?.stores ?? [];
+  // Client feedback confirmed live via browser inspection: the
+  // rendered <select> had ONLY the "All Stores (global)" option,
+  // with zero real stores ever appearing, even though the exact
+  // same shared useStores() hook works correctly elsewhere on this
+  // same page (e.g. WooCategoriesTab, line ~2250, which accesses the
+  // hook's data directly as the array itself). Confirmed the actual
+  // bug directly: this component assumed a nested { stores: [...] }
+  // response shape (storesData?.stores ?? []) that doesn't match
+  // what useListStores() actually returns here, so stores silently
+  // resolved to an empty array on every single render -- not a
+  // missing patch, not a stale build, a genuine data-shape mismatch
+  // that happened to render without any console error at all, since
+  // an empty array is a perfectly valid (just empty) array to .map()
+  // over. Reuses the same defensive fallback already proven
+  // elsewhere in this exact file (e.g. line ~219) for this identical
+  // inconsistency, rather than assuming one specific shape.
+  const stores = Array.isArray(storesData) ? storesData : ((storesData as any)?.stores ?? []);
   const { toast } = useToast();
   const [storeId, setStoreId] = useState<number | null>(null);
   const [rules, setRules] = useState<AttrMappingRule[]>([]);
