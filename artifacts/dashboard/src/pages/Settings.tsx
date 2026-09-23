@@ -3513,19 +3513,20 @@ function AttributeMappingTab() {
               <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Rule</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Source / Value</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Condition</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Store</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground text-sm">
+                <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground text-sm">
                   <Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Loading rules…
                 </td>
               </tr>
             ) : rules.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground text-sm">
+                <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground text-sm">
                   <div className="flex flex-col items-center gap-3">
                     <Tag className="w-8 h-8 text-muted-foreground/40" />
                     <div>
@@ -3548,6 +3549,21 @@ function AttributeMappingTab() {
                   <td className="px-4 py-3"><AttrRuleBadge type={rule.rule_type} /></td>
                   <td className="px-4 py-3 text-muted-foreground text-xs max-w-[220px] truncate">{sourceLabel(rule)}</td>
                   <td className="px-4 py-3"><ConditionBadge type={rule.condition_type} value={rule.condition_value} /></td>
+                  <td className="px-4 py-3">
+                    {/* Client feedback: "add store name as new column so
+                        admin can know which rule is global and which
+                        rule is for which store." Matches Category
+                        Mapping's own existing visual pattern for this
+                        exact same distinction (a subtle "This store"-
+                        style badge next to each row). */}
+                    {rule.store_id === null ? (
+                      <span className="inline-flex px-2 py-0.5 rounded-md bg-secondary text-muted-foreground text-xs">Global</span>
+                    ) : (
+                      <span className="inline-flex px-2 py-0.5 rounded-md bg-primary/15 text-primary text-xs">
+                        {stores.find((s: any) => s.id === rule.store_id)?.name ?? `Store #${rule.store_id}`}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1 justify-end">
                       <button
