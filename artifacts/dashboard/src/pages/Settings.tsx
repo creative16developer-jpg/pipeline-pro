@@ -231,10 +231,20 @@ function SearchableCombobox({
   );
 }
 
+const GLOBAL_VIEW_STORE_ONLY_HINT = 'Switch to a store to use this. To add or edit a global rule, pick a store, then Add Mapping → "All stores".';
+
 function CategoryMappingDictionary() {
   const { toast } = useToast();
   const [stores, setStores] = useState<any[]>([]);
   const [storeId, setStoreId] = useState<number | null>(null);
+  // Client feedback: "in this dropdown we should add global then admin can
+  // see global rules". Global rules were only visible mixed into each
+  // store's list (Global badge). globalView lists ONLY global rules, via
+  // the existing GET /category-mappings/global. storeId is deliberately
+  // kept (not nulled) while in this view: the delete handler and the
+  // store-only actions below still key off it, and switching back
+  // returns to the same store.
+  const [globalView, setGlobalView] = useState(false);
   const [mappings, setMappings] = useState<CatMapping[]>([]);
   const [wooOpts, setWooOpts] = useState<WooOpt[]>([]);
   const [profiles, setProfiles] = useState<{ id: number; name: string }[]>([]);
@@ -276,11 +286,13 @@ function CategoryMappingDictionary() {
       .catch(() => {});
   }, []);
 
+  const mappingsUrl = globalView ? "/api/category-mappings/global" : `/api/stores/${storeId}/category-mappings`;
+
   const reloadAll = () => {
     if (!storeId) return;
     setLoading(true);
     Promise.all([
-      fetch(`/api/stores/${storeId}/category-mappings`).then(r => r.json()),
+      fetch(mappingsUrl).then(r => r.json()),
       fetch(`/api/stores/${storeId}/categories`).then(r => r.ok ? r.json() : []),
     ])
       .then(([mapData, catData]) => {
@@ -297,7 +309,7 @@ function CategoryMappingDictionary() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(reloadAll, [storeId]);
+  useEffect(reloadAll, [storeId, globalView]);
 
   const handleTranslateCategories = async () => {
     if (!storeId) return;
@@ -323,7 +335,7 @@ function CategoryMappingDictionary() {
   const reload = () => {
     if (!storeId) return;
     setLoading(true);
-    fetch(`/api/stores/${storeId}/category-mappings`)
+    fetch(mappingsUrl)
       .then(r => r.json())
       .then(d => setMappings(d.mappings ?? []))
       .catch(() => {})
@@ -482,10 +494,17 @@ function CategoryMappingDictionary() {
       {/* Store selector + search + actions */}
       <div className="flex flex-col sm:flex-row gap-3">
         <select
-          value={storeId ?? ""}
-          onChange={e => setStoreId(Number(e.target.value))}
+          value={globalView ? "global" : (storeId ?? "")}
+          onChange={e => {
+            setEditingId(null);
+            setAddingNew(false);
+            if (e.target.value === "global") { setGlobalView(true); return; }
+            setGlobalView(false);
+            setStoreId(Number(e.target.value));
+          }}
           className="bg-background border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-primary w-full sm:w-56 shrink-0"
         >
+          <option value="global">Global (all stores)</option>
           {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         <div className="relative flex-1">
@@ -503,8 +522,8 @@ function CategoryMappingDictionary() {
         </button>
         <button
           onClick={handleTranslateCategories}
-          disabled={translating || !storeId}
-          title="Translate WooCommerce category names to English for reference — doesn't change the actual categories"
+          disabled={translating || !storeId || globalView}
+          title={globalView ? GLOBAL_VIEW_STORE_ONLY_HINT : "Translate WooCommerce category names to English for reference — doesn't change the actual categories"}
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border bg-secondary/50 hover:bg-secondary text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50 shrink-0 transition-colors"
         >
           {translating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
@@ -512,8 +531,8 @@ function CategoryMappingDictionary() {
         </button>
         <button
           onClick={() => importRef.current?.click()}
-          disabled={importing || !storeId}
-          title="Import mappings from Excel or CSV"
+          disabled={importing || !storeId || globalView}
+          title={globalView ? GLOBAL_VIEW_STORE_ONLY_HINT : "Import mappings from Excel or CSV"}
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-border bg-secondary/50 hover:bg-secondary text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50 shrink-0 transition-colors"
         >
           {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
@@ -521,12 +540,21 @@ function CategoryMappingDictionary() {
         </button>
         <button
           onClick={() => { setAddingNew(true); setNewSunskyCat(""); setNewSel({ woo_cats: [], primary_id: null, profile_id: null }); }}
-          disabled={addingNew}
+          disabled={addingNew || globalView}
+          title={globalView ? GLOBAL_VIEW_STORE_ONLY_HINT : undefined}
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 shrink-0"
         >
           <Plus className="w-4 h-4" /> Add Mapping
         </button>
       </div>
+
+      {globalView && (
+        <div className="rounded-xl border border-violet-500/25 bg-violet-500/5 px-4 py-3 text-xs text-muted-foreground">
+          Showing <span className="text-foreground font-medium">global rules only</span>. A global rule applies to a store only when that store has
+          no rule of its own for the same Sunsky category, and only if the store has the same WooCommerce category names.
+          To add or edit a global rule, pick a store above, then use Add Mapping → "All stores" or Edit on the Global row.
+        </div>
+      )}
 
       {/* Import result banner */}
       {importResult && (
@@ -684,7 +712,7 @@ function CategoryMappingDictionary() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="bg-card border border-border/50 rounded-2xl p-8 text-center text-muted-foreground text-sm">
-          {search ? "No mappings match your search." : "No saved mappings yet. Run a pipeline to build up the dictionary."}
+          {search ? "No mappings match your search." : globalView ? "No global rules yet." : "No saved mappings yet. Run a pipeline to build up the dictionary."}
         </div>
       ) : (
         <div className="bg-card border border-border/50 rounded-2xl overflow-x-auto">
@@ -855,8 +883,9 @@ function CategoryMappingDictionary() {
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => startEdit(m)}
-                            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-                            title="Edit"
+                            disabled={globalView}
+                            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                            title={globalView ? "Switch to a store to edit (the category picker needs a store's category list)" : "Edit"}
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
