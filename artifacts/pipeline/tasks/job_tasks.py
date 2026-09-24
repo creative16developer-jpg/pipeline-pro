@@ -215,13 +215,55 @@ async def _resolve_category_path_for_store(db, store_id: int, name_path: list[di
                 root_opts.sort(key=lambda t: not t[0])  # stable: only-root names first
                 _, i, c = root_opts[0]
                 pick = (i, c)
+        # 3) Otherwise a name that exists EXACTLY ONCE in this store,
+        #    wherever it sits. Client feedback confirmed via DB: global
+        #    rule 229 was saved as [Батерии за GoPro (2617), Батерии и
+        #    Зарядни (2571)] -- a partial chain without the root
+        #    Аксесоари (15), since the Add Mapping form only saves what
+        #    was ticked. Steps 1-2 need a root to anchor on, so the rule
+        #    resolved to nothing on Test hdcam (PL-149 showed Protection
+        #    Frame as Unmapped). A unique name is unambiguous, so it's
+        #    safe to match directly; a name existing more than once with
+        #    nothing in the rule anchoring it still fails (never guessed).
+        if pick is None:
+            for i in pending:
+                cands = [c for c in by_name.get(names[i], []) if c.woo_id not in used]
+                if len(by_name.get(names[i], [])) == 1 and cands:
+                    pick = (i, cands[0])
+                    break
         if pick is None:
             return None
         i, c = pick
         pending.remove(i)
         used.add(c.woo_id)
-        resolved.append({"id": c.woo_id, "name": c.name})
-    return resolved
+        resolved.append({"id": c.woo_id, "name": c.name, "_parent": c.parent_id})
+
+    # Order parents-before-children by depth in THIS store's tree, so the
+    # [-1] every caller uses as primary is the deepest category -- step 3
+    # can match a child before its parent. Depth walks real parent_ids,
+    # fetching ancestors outside the rule level by level (bounded).
+    parent_of = {r["id"]: r["_parent"] for r in resolved}
+    frontier = {p for p in parent_of.values() if p is not None and p not in parent_of}
+    for _ in range(20):
+        if not frontier:
+            break
+        rows_up = (await db.execute(
+            _sel_wc(WooCategory).where(WooCategory.store_id == store_id, WooCategory.woo_id.in_(frontier))
+        )).scalars().all()
+        for r in rows_up:
+            parent_of[r.woo_id] = r.parent_id
+        frontier = {r.parent_id for r in rows_up if r.parent_id is not None and r.parent_id not in parent_of}
+
+    def _depth(cid):
+        d, seen = 0, set()
+        while parent_of.get(cid) is not None and cid not in seen:
+            seen.add(cid)
+            cid = parent_of[cid]
+            d += 1
+        return d
+
+    resolved.sort(key=lambda r: _depth(r["id"]))  # stable: equal depth keeps match order
+    return [{"id": r["id"], "name": r["name"]} for r in resolved]
 
 
 async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str) -> Optional[dict]:
