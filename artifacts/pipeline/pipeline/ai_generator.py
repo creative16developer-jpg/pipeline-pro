@@ -193,6 +193,19 @@ def _build_product_context(product: dict, category_name: str = "") -> str:
     # unavailable doesn't show a confusing "Category: " blank line.
     if category_name:
         lines.append(f"Category: {category_name}")
+    # Client feedback, exact spec: "If product have brand (for example
+    # MOFI) and we enable brand mapping from Sunsky the pipeline can
+    # use it for generation as context. If the product don't have
+    # brand or have but we disable brand mapping from Sunsky the
+    # pipeline can't use it for generation as context." The caller
+    # (pipeline_tasks.py's _run_generate) already resolves this
+    # correctly -- manual override, then the store's toggle, then
+    # Sunsky detection -- and passes "" when none applies, so this
+    # function only needs to check for a non-empty value, exactly
+    # like Category just above.
+    native_brand = product.get("native_brand", "")
+    if native_brand:
+        lines.append(f"Brand: {native_brand}")
     lines.append(f"Description: {desc or '(none)'}")
     lines.append(f"Specifications:\n{specs_text}")
     if variant_info:

@@ -1203,6 +1203,35 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   // an option to add manually in this step."
   const [editingAttr, setEditingAttr] = useState<{ pid: number; attrId: number | "new" } | null>(null);
   const [attrDraft, setAttrDraft] = useState<{ name: string; value: string }>({ name: "", value: "" });
+  // Client feedback, exact spec: "In any case I need to be able to
+  // manual editing in the steps and put whatever brand I want."
+  // Simple per-product draft map, matching the same shape/approach
+  // as the other single-field editors on this page rather than
+  // folding brand into the main content-fields draft system, since
+  // brand saves through its own dedicated endpoint (mirroring
+  // category's own "Set category" pattern), not the regular
+  // content-field save flow.
+  const [brandDraft, setBrandDraft] = useState<Record<number, string>>({});
+  const [savingBrand, setSavingBrand] = useState<Record<number, boolean>>({});
+
+  const saveBrand = async (p: any) => {
+    const value = (brandDraft[p.id] ?? p.brand ?? "").trim();
+    setSavingBrand(s => ({ ...s, [p.id]: true }));
+    try {
+      const r = await fetch(`/api/products/${p.id}/brand`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ store_id: pl.store_id, brand_name: value || null }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: value ? "Brand saved" : "Brand override cleared" });
+      setBrandDraft(d => ({ ...d, [p.id]: value }));
+    } catch (e: any) {
+      toast({ title: "Failed to save brand", description: e.message, variant: "destructive" });
+    } finally {
+      setSavingBrand(s => ({ ...s, [p.id]: false }));
+    }
+  };
   const [attrSaving, setAttrSaving] = useState(false);
 
   const handleSaveAttr = async (pid: number) => {
@@ -1652,28 +1681,43 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                         </div>
                         {/* Client feedback: "show in review step as
                             well that this will be brand same like we
-                            doing for all fields." Read-only, not an
-                            editable input like the fields above --
-                            Brand is computed fresh from raw_data.brandName
-                            (or the spec table as a fallback) every time
-                            Upload/Sync actually runs, not a stored,
-                            directly-editable column, so an editable
-                            box here would misleadingly suggest typing
-                            a different value and saving it would
-                            change what gets assigned -- it wouldn't.
-                            Shows exactly what will be used, computed
-                            the identical way real Upload/Sync will. */}
+                            doing for all fields." Brand is now
+                            genuinely editable and persists as a real
+                            per-store manual override (see
+                            ProductStoreListing.manual_brand_name/
+                            brand_source) that Upload/Sync actually
+                            respect -- the original read-only rationale
+                            (computed fresh every run, nothing to
+                            persist) no longer applies now that a
+                            manual choice is a real, saved column. */}
                         <div>
                           <label className="block text-[12px] font-medium text-foreground/70 mb-1">
-                            Brand <span className="font-normal text-foreground/40">(native WooCommerce field, auto-detected)</span>
+                            Brand{" "}
+                            <span className="font-normal text-foreground/40">
+                              {p.brand_source === "manual" ? "(manually set)" : "(auto-detected from Sunsky)"}
+                            </span>
                           </label>
-                          <div className="w-full px-3 py-2 border border-border rounded-lg text-[13px] bg-secondary/30">
-                            {p.brand ? (
-                              <span className="text-foreground">{p.brand}</span>
-                            ) : (
-                              <span className="text-foreground/40 italic">Not detected — Sunsky provided no brand/manufacturer for this product</span>
-                            )}
+                          <div className="flex gap-2">
+                            <input
+                              value={brandDraft[p.id] ?? p.brand ?? ""}
+                              onChange={e => setBrandDraft(d => ({ ...d, [p.id]: e.target.value }))}
+                              placeholder="No brand — type to set one manually"
+                              className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                            />
+                            <button
+                              type="button"
+                              disabled={!!savingBrand[p.id]}
+                              onClick={() => saveBrand(p)}
+                              className="px-3 py-2 rounded-lg text-[12px] font-medium bg-secondary hover:bg-secondary/80 text-foreground whitespace-nowrap disabled:opacity-50"
+                            >
+                              {savingBrand[p.id] ? "Saving…" : "Save"}
+                            </button>
                           </div>
+                          {p.brand_source === "manual" && (
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                              This overrides Sunsky's own detected brand for this product on this store. Clear the text and save to go back to automatic detection.
+                            </p>
+                          )}
                         </div>
                         <div>
                           <label className="block text-[12px] font-medium text-foreground/70 mb-1">Meta Title</label>

@@ -55,6 +55,12 @@ class StoreOut(BaseModel):
     # written endpoint, not routed through the generated API client,
     # to avoid needing a full client regeneration for one new field).
     allow_auto_create_taxonomy: bool = True
+    # Client feedback, exact spec: "Need to have an option to map
+    # brand from Sunsky or not." Same reasoning/pattern as
+    # allow_auto_create_taxonomy just above: read here so the Store
+    # Edit modal can show the current setting, changed via the
+    # dedicated PATCH /stores/{id}/brand-settings endpoint.
+    map_brand_from_sunsky: bool = True
     last_tested_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime

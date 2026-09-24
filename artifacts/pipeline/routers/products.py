@@ -219,6 +219,66 @@ async def update_product_categories(
     return out
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Manual brand override
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ProductBrandUpdate(BaseModel):
+    store_id: int
+    brand_name: Optional[str] = None
+
+
+@router.patch("/{product_id}/brand")
+async def update_product_brand(
+    product_id: int,
+    body: ProductBrandUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Client feedback, exact spec: "In any case I need to be able to
+    manual editing in the steps and put whatever brand I want."
+    Mirrors update_product_categories just above exactly -- brand,
+    like category, is scoped per (product, store) via
+    ProductStoreListing, since a manually-chosen brand name (a
+    WooCommerce Brand taxonomy term) is specific to one store's own
+    WooCommerce installation.
+
+    A blank/None brand_name clears the manual override (reverting to
+    "auto" -- the store's map_brand_from_sunsky toggle and Sunsky
+    detection decide the brand again), rather than setting an actual
+    empty-string manual brand, since "no manual override" and "a
+    manual override of empty string" are meaningfully different
+    states worth keeping distinct.
+    """
+    product = await db.get(Product, product_id)
+    if not product:
+        raise HTTPException(404, "Product not found")
+
+    from models.models import ProductStoreListing
+    listing = (await db.execute(
+        select(ProductStoreListing).where(
+            ProductStoreListing.product_id == product_id,
+            ProductStoreListing.store_id == body.store_id,
+        )
+    )).scalar_one_or_none()
+    if listing is None:
+        listing = ProductStoreListing(product_id=product_id, store_id=body.store_id)
+        db.add(listing)
+
+    cleaned = (body.brand_name or "").strip()
+    if cleaned:
+        listing.manual_brand_name = cleaned
+        listing.brand_source = "manual"
+    else:
+        listing.manual_brand_name = None
+        listing.brand_source = "auto"
+    await db.commit()
+    await db.refresh(product)
+
+    out = ProductOut.model_validate(product)
+    return out
+
+
 @router.delete("/{product_id}/categories/override")
 async def clear_product_category_override(
     product_id: int,

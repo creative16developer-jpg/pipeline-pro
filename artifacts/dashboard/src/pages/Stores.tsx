@@ -178,6 +178,8 @@ function EditStoreModal({ store, isOpen, onClose }: { store: any, isOpen: boolea
   // own success/error handling.
   const [allowAutoCreate, setAllowAutoCreate] = useState(store.allowAutoCreateTaxonomy ?? true);
   const [savingTaxonomySetting, setSavingTaxonomySetting] = useState(false);
+  const [mapBrandFromSunsky, setMapBrandFromSunsky] = useState(store.mapBrandFromSunsky ?? true);
+  const [savingBrandSetting, setSavingBrandSetting] = useState(false);
 
   // Re-sync form when a different store's modal is opened (store prop
   // changes identity between cards) -- otherwise stale values from a
@@ -191,6 +193,7 @@ function EditStoreModal({ store, isOpen, onClose }: { store: any, isOpen: boolea
       wpUsername: store.wpUsername || '', wpAppPassword: '',
     });
     setAllowAutoCreate(store.allowAutoCreateTaxonomy ?? true);
+    setMapBrandFromSunsky(store.mapBrandFromSunsky ?? true);
   }
 
   const handleTaxonomyToggle = async (next: boolean) => {
@@ -209,6 +212,32 @@ function EditStoreModal({ store, isOpen, onClose }: { store: any, isOpen: boolea
       toast({ title: "Failed to save setting", description: e.message, variant: "destructive" });
     } finally {
       setSavingTaxonomySetting(false);
+    }
+  };
+
+  // Client feedback, exact spec: "Need to have an option to map
+  // brand from Sunsky or not... If select brand option and Sunsky
+  // product have brand - mapping. If don't select brand option -
+  // empty field." Same independent-save pattern as
+  // handleTaxonomyToggle just above, and the same reasoning: this
+  // toggle's save action stays independent of the main store-edit
+  // form's own save/error handling.
+  const handleBrandMappingToggle = async (next: boolean) => {
+    setMapBrandFromSunsky(next);
+    setSavingBrandSetting(true);
+    try {
+      const r = await fetch(`/api/stores/${store.id}/brand-settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ map_brand_from_sunsky: next }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      toast({ title: next ? "Brand mapping enabled" : "Brand mapping disabled" });
+    } catch (e: any) {
+      setMapBrandFromSunsky(!next); // revert on failure
+      toast({ title: "Failed to save setting", description: e.message, variant: "destructive" });
+    } finally {
+      setSavingBrandSetting(false);
     }
   };
 
@@ -306,6 +335,29 @@ function EditStoreModal({ store, isOpen, onClose }: { store: any, isOpen: boolea
             <div className="font-medium">Allow auto-creating categories &amp; attributes</div>
             <div className="text-muted-foreground text-xs mt-0.5">
               When a product needs a category, attribute, or attribute value that doesn't already exist in this store's WooCommerce, the pipeline creates it automatically. Turn this off to only ever use taxonomy you've already set up yourself — anything missing will be skipped and flagged in the pipeline log instead.
+            </div>
+          </label>
+        </div>
+
+        {/* Client feedback, exact spec: "Need to have an option to
+            map brand from Sunsky or not... In any case I need to be
+            able to manual editing in the steps and put whatever
+            brand I want." A manual brand set in Content Review
+            always wins regardless of this toggle — this only
+            controls Sunsky-based auto-detection. */}
+        <div className="flex items-start gap-3 rounded-xl border border-border p-4">
+          <input
+            type="checkbox"
+            id="map-brand-from-sunsky"
+            checked={mapBrandFromSunsky}
+            disabled={savingBrandSetting}
+            onChange={e => handleBrandMappingToggle(e.target.checked)}
+            className="mt-1 w-4 h-4 accent-primary"
+          />
+          <label htmlFor="map-brand-from-sunsky" className="text-sm cursor-pointer">
+            <div className="font-medium">Map brand from Sunsky</div>
+            <div className="text-muted-foreground text-xs mt-0.5">
+              When on, the pipeline reads the manufacturer brand (e.g. "MOFI") from Sunsky's product data and sets it as the WooCommerce Brand, also using it as context when generating content. Turn this off to always leave the Brand field empty and unused in generation — you can still set a brand manually per product in Content Review either way, and a manual choice always takes priority over this setting.
             </div>
           </label>
         </div>

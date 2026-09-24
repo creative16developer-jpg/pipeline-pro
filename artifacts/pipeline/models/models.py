@@ -79,6 +79,17 @@ class Store(Base):
     # operator who wants strict "only ever use what I've already set
     # up in WooCommerce" behavior can turn this off per store.
     allow_auto_create_taxonomy = Column(Boolean, nullable=False, default=True, server_default="true")
+    # Client feedback, exact spec: "Need to have an option to map
+    # brand from Sunsky or not... If select brand option and Sunsky
+    # product have brand - mapping. If don't select brand option -
+    # empty field... If product have brand and we enable brand
+    # mapping from Sunsky the pipeline can use it for generation as
+    # context. If the product don't have brand or have but we disable
+    # brand mapping from Sunsky the pipeline can't use it for
+    # generation as context." Default True matches current behavior
+    # (brand detection/mapping already happens today; this makes it
+    # an explicit, disable-able choice rather than always-on).
+    map_brand_from_sunsky = Column(Boolean, nullable=False, default=True, server_default="true")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -694,6 +705,15 @@ class ProductStoreListing(Base):
     manual_woo_cats_json      = Column(Text, nullable=True)
     manual_primary_woo_cat_id = Column(Integer, nullable=True)
     cat_source                = Column(String(20), nullable=False, default="auto")
+    # Client feedback, exact spec: "In any case I need to be able to
+    # manual editing in the steps and put whatever brand I want."
+    # Mirrors cat_source's existing manual/auto pattern exactly --
+    # brand, like category, is genuinely per-store (a different
+    # WooCommerce installation has its own, separate Brand taxonomy
+    # terms), so this lives here rather than on Product directly, for
+    # the same reason manual_woo_cats_json does.
+    manual_brand_name         = Column(String(255), nullable=True)
+    brand_source              = Column(String(20), nullable=False, default="auto")
     created_at                = Column(DateTime(timezone=True), server_default=func.now())
     updated_at                = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

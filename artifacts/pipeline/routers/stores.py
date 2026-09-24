@@ -47,6 +47,31 @@ async def update_taxonomy_settings(store_id: int, body: TaxonomySettingsUpdate, 
     return StoreOut.from_orm_masked(store)
 
 
+class BrandSettingsUpdate(_BaseModel):
+    map_brand_from_sunsky: bool
+
+
+@router.patch("/{store_id}/brand-settings", response_model=StoreOut)
+async def update_brand_settings(store_id: int, body: BrandSettingsUpdate, db: AsyncSession = Depends(get_db)):
+    """
+    Client feedback, exact spec: "Need to have an option to map brand
+    from Sunsky or not... If select brand option and Sunsky product
+    have brand - mapping. If don't select brand option - empty
+    field." A separate, dedicated endpoint (not folded into
+    taxonomy-settings above) since brand mapping is a conceptually
+    distinct setting from taxonomy auto-creation, even though both are
+    a single store-level boolean saved independently -- same pattern,
+    same reasoning as taxonomy-settings' own docstring.
+    """
+    store = await db.get(Store, store_id)
+    if not store:
+        raise HTTPException(404, "Store not found")
+    store.map_brand_from_sunsky = body.map_brand_from_sunsky
+    await db.commit()
+    await db.refresh(store)
+    return StoreOut.from_orm_masked(store)
+
+
 @router.post("", response_model=StoreOut)
 async def create_store(body: StoreCreate, db: AsyncSession = Depends(get_db)):
     store = Store(**body.model_dump())

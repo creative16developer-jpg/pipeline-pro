@@ -260,6 +260,16 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     if not pl:
         raise HTTPException(404, f"Pipeline #{pl_id} not found")
 
+    # Client feedback, exact spec: "If product have brand... and we
+    # enable brand mapping from Sunsky the pipeline can use it for
+    # generation as context. If the product don't have brand or have
+    # but we disable brand mapping from Sunsky the pipeline can't use
+    # it for generation as context." Loaded once here, reused for
+    # every product's brand computation below -- same store, no need
+    # to re-fetch per product.
+    from models.models import Store as _Store_cd
+    _cd_store = await db.get(_Store_cd, pl.store_id)
+
     products = (
         await db.execute(
             select(Product)
@@ -569,15 +579,26 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
 
         # Client feedback: "show in review step as well that this
         # will be brand same like we doing for all fields." Computed
-        # the exact same way real Upload/Sync will resolve it
-        # (raw_data.brandName first, spec-table Brand/Manufacturer as
-        # fallback), so what an operator sees here in review always
-        # matches what actually gets assigned later -- not a second,
-        # separately-implemented guess.
+        # the exact same way real Upload/Sync will resolve it --
+        # updated to the identical priority as job_tasks.py's own
+        # brand-handling fix: a manual override (via _listing_cd,
+        # already loaded above for category) always wins; otherwise
+        # the store's own map_brand_from_sunsky toggle decides whether
+        # Sunsky's detected brand is used at all -- so what an
+        # operator sees here in review always matches what actually
+        # gets assigned later, not a second, separately-implemented
+        # guess.
         from services.content_service import _get_manufacturer_brand as _cd_get_brand, _parse_params_table as _cd_parse_specs
         _cd_raw = p.raw_data or {}
-        _cd_specs = _cd_parse_specs(str(_cd_raw.get("paramsTable") or "")) if _cd_raw.get("paramsTable") else {}
-        _cd_brand_name = _cd_get_brand(_cd_raw, _cd_specs)
+        _cd_brand_source = "auto"
+        if _listing_cd is not None and _listing_cd.brand_source == "manual" and _listing_cd.manual_brand_name:
+            _cd_brand_name = _listing_cd.manual_brand_name
+            _cd_brand_source = "manual"
+        elif _cd_store is not None and _cd_store.map_brand_from_sunsky:
+            _cd_specs = _cd_parse_specs(str(_cd_raw.get("paramsTable") or "")) if _cd_raw.get("paramsTable") else {}
+            _cd_brand_name = _cd_get_brand(_cd_raw, _cd_specs)
+        else:
+            _cd_brand_name = ""
 
         product_list.append({
             "id": p.id,
@@ -626,6 +647,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             "image_caption": p.image_caption or "",
             "image_description": p.image_description or "",
             "brand": _cd_brand_name or "",
+            "brand_source": _cd_brand_source,
             "focus_keyword": p.focus_keyword or "",
             "tags": p.tags or "",
             "status": p.status.value if hasattr(p.status, "value") else str(p.status),

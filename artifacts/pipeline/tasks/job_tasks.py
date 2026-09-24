@@ -2100,7 +2100,22 @@ async def _run_upload(db, job):
             # would still have been available. Moved out so brand
             # extraction runs regardless of whether a spec table exists.
             from services.content_service import _get_manufacturer_brand
-            _p2_brand_name = _get_manufacturer_brand(raw, _p2_specs)
+            # Client feedback, exact spec: "Need to have an option to
+            # map brand from Sunsky or not... In any case I need to be
+            # able to manual editing in the steps and put whatever
+            # brand I want." Confirmed the prior code had NO awareness
+            # of a manually-set brand at all -- this ran unconditionally
+            # every single run, silently overwriting any manual choice
+            # the operator had made. Priority, mirroring category's
+            # existing manual/auto pattern exactly: a manual override
+            # always wins; otherwise, the store's own toggle decides
+            # whether Sunsky's detected brand gets used at all.
+            if _prod_listing.brand_source == "manual" and _prod_listing.manual_brand_name:
+                _p2_brand_name = _prod_listing.manual_brand_name
+            elif store.map_brand_from_sunsky:
+                _p2_brand_name = _get_manufacturer_brand(raw, _p2_specs)
+            else:
+                _p2_brand_name = None
             if _p2_brand_name:
                 _p2_brand = await _p2_get_or_create_brand(_p2_brand_name)
                 if _p2_brand:
@@ -3316,7 +3331,15 @@ async def _run_sync(db, job):
             # runs regardless of whether a spec table exists, since
             # brandName is independent of paramsTable.
             from services.content_service import _get_manufacturer_brand as _sync_get_brand
-            _s_brand_name = _sync_get_brand(raw, _s_specs)
+            # Same priority as Phase 2's identical fix: a manual
+            # override always wins; otherwise the store's own toggle
+            # decides whether Sunsky's detected brand gets used at all.
+            if _attr_listing.brand_source == "manual" and _attr_listing.manual_brand_name:
+                _s_brand_name = _attr_listing.manual_brand_name
+            elif store.map_brand_from_sunsky:
+                _s_brand_name = _sync_get_brand(raw, _s_specs)
+            else:
+                _s_brand_name = None
             if _s_brand_name:
                 _s_brand = await get_or_create_brand(_s_brand_name)
                 if _s_brand:

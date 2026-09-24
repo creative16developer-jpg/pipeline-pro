@@ -559,6 +559,47 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
     from services.enrich_service import extract_sunsky_category, get_effective_category_name_map
     _gen_category_name_map = await get_effective_category_name_map(db)
 
+    # Client feedback, exact spec: "If product have brand (for example
+    # MOFI) and we enable brand mapping from Sunsky the pipeline can
+    # use it for generation as context. If the product don't have
+    # brand or have but we disable brand mapping from Sunsky the
+    # pipeline can't use it for generation as context." Confirmed via
+    # direct code investigation that native brand was never passed
+    # into AI generation context at all before this -- this is a new
+    # addition, not a removal of something that was causing confusion,
+    # since it simply wasn't there yet. Resolved once, for the whole
+    # batch, matching category's own established pattern for the
+    # identical kind of lookup -- a per-product query inside the main
+    # generation loop below would be a real N+1 query problem.
+    from models.models import Store, ProductStoreListing
+    _gen_store = await db.get(Store, pl.store_id)
+    _gen_listings_by_product: dict[int, ProductStoreListing] = {}
+    if products:
+        _gen_listing_rows = (
+            await db.execute(
+                select(ProductStoreListing).where(
+                    ProductStoreListing.store_id == pl.store_id,
+                    ProductStoreListing.product_id.in_([p.id for p in products]),
+                )
+            )
+        ).scalars().all()
+        _gen_listings_by_product = {l.product_id: l for l in _gen_listing_rows}
+
+    def _gen_resolve_brand(product) -> str:
+        """Same priority as job_tasks.py's identical Upload/Sync fix:
+        a manual override always wins; otherwise the store's own
+        toggle decides whether Sunsky's detected brand is used at all.
+        """
+        _l = _gen_listings_by_product.get(product.id)
+        if _l is not None and _l.brand_source == "manual" and _l.manual_brand_name:
+            return _l.manual_brand_name
+        if _gen_store is not None and _gen_store.map_brand_from_sunsky:
+            from services.content_service import _get_manufacturer_brand, _parse_params_table
+            _raw = product.raw_data or {}
+            _specs = _parse_params_table(str(_raw.get("paramsTable") or "")) if _raw.get("paramsTable") else {}
+            return _get_manufacturer_brand(_raw, _specs) or ""
+        return ""
+
     # Client feedback: full-pipeline batch processing for Claude, at
     # Anthropic's 50% batch-rate discount, in exchange for asynchronous
     # turnaround. Confirmed via the reviewed build plan: opt-in per
@@ -581,6 +622,7 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
                 "description": product.description or "", "price": product.price or "0",
                 "site_sku": product.site_sku or "",
                 "category_name": extract_sunsky_category(raw, _gen_category_name_map),
+                "native_brand": _gen_resolve_brand(product),
                 **raw,
             }
             product_template = template
@@ -650,6 +692,7 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
                 "csv_title":   csv_title,
                 "site_sku":    site_sku,
                 "category_name": extract_sunsky_category(raw, _gen_category_name_map),
+                "native_brand": _gen_resolve_brand(product),
                 **raw,
             }
 
