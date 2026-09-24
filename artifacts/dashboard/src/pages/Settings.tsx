@@ -115,6 +115,51 @@ interface CatMapping {
   is_overridden?: boolean;
 }
 
+// Attribute Mapping "If category" suggestions. Client feedback confirmed
+// live: "protection frame category is missing" -- "Protection Frame" is a
+// SUNSKY category (left column of Category Mapping), but this dropdown was
+// only ever fed WooCommerce category names, so no Sunsky name could ever
+// appear. enrich_service._rule_matches_product accepts EITHER vocabulary
+// (exact, case-insensitive match against the raw Sunsky category OR the
+// resolved WooCommerce category), so both are legitimate values here.
+// Merged case-insensitively: a name present in both lists is shown once,
+// labelled with both sources, since either match path fires on it.
+// "CSV Import" / "Uncategorised Products" are synthetic labels
+// map_step.py uses for products with no Sunsky category, not real
+// category names, so they're excluded.
+const _SYNTHETIC_SUNSKY_LABELS = new Set(["csv import", "uncategorised products"]);
+function buildCategoryConditionOptions(
+  wooCats: { id: string; name: string }[],
+  sunskyNames: string[],
+): { id: string; label: string; sublabel: string; key: string }[] {
+  const byKey = new Map<string, { label: string; woo: boolean; sunsky: boolean }>();
+  for (const c of wooCats) {
+    const name = (c.name || "").trim();
+    const k = name.toLowerCase();
+    if (!k) continue;
+    const e = byKey.get(k);
+    if (e) e.woo = true; else byKey.set(k, { label: name, woo: true, sunsky: false });
+  }
+  for (const raw of sunskyNames) {
+    const name = (raw || "").trim();
+    const k = name.toLowerCase();
+    if (!k || _SYNTHETIC_SUNSKY_LABELS.has(k)) continue;
+    const e = byKey.get(k);
+    if (e) e.sunsky = true; else byKey.set(k, { label: name, woo: false, sunsky: true });
+  }
+  return Array.from(byKey.entries())
+    .sort((a, b) => a[1].label.localeCompare(b[1].label))
+    .map(([k, e]) => ({
+      // id is also searched by SearchableCombobox's filter, so it's the
+      // name itself (never a prefix like "sunsky:" that would make every
+      // Sunsky entry match a query like "sun").
+      id: e.label,
+      label: e.label,
+      sublabel: e.woo && e.sunsky ? "Sunsky + Woo" : e.sunsky ? "Sunsky" : "Woo",
+      key: k,
+    }));
+}
+
 // Searchable combobox: free-text input (still supports typing a raw ID or a
 // brand-new/unlisted value -- some fields legitimately need that) PLUS a
 // filtered dropdown of known options underneath, so a typo doesn't silently
@@ -126,7 +171,7 @@ function SearchableCombobox({
 }: {
   value: string;
   onChange: (v: string) => void;
-  options: { id: string; label: string; sublabel?: string }[];
+  options: { id: string; label: string; sublabel?: string; key?: string }[];
   placeholder?: string;
   emptyHint?: string;
 }) {
@@ -169,7 +214,7 @@ function SearchableCombobox({
           ) : (
             filtered.map(o => (
               <button
-                key={o.id}
+                key={o.key ?? o.id}
                 type="button"
                 onMouseDown={e => e.preventDefault()}
                 onClick={() => { onChange(o.label); setOpen(false); }}
@@ -2928,7 +2973,30 @@ function AttrMappingModal({
   const [saving, setSaving] = useState(false);
   const [wooAttrOptions, setWooAttrOptions] = useState<{ id: string; name: string }[]>([]);
   const [storeCatOptions, setStoreCatOptions] = useState<{ id: string; name: string }[]>([]);
+  const [sunskyCatNames, setSunskyCatNames] = useState<string[]>([]);
   const { data: modalStores } = useStores();
+
+  // Sunsky category names for the "If category" suggestions -- see
+  // buildCategoryConditionOptions. Sources: every Sunsky category that
+  // already has a Category Mapping rule (store-scoped: this store's rules
+  // + global rules, which /stores/{id}/category-mappings already merges;
+  // global rule: global rules + every store's rules), plus starred
+  // Sunsky categories. All are local DB reads, no Sunsky API calls.
+  useEffect(() => {
+    let cancelled = false;
+    const getJson = (url: string) => fetch(url).then(r => r.ok ? r.json() : null).catch(() => null);
+    const mappingUrls = storeId
+      ? [`/api/stores/${storeId}/category-mappings`]
+      : ["/api/category-mappings/global", ...((modalStores ?? []) as any[]).map(s => `/api/stores/${s.id}/category-mappings`)];
+    Promise.all([getJson("/api/sunsky/starred-categories"), ...mappingUrls.map(getJson)]).then(([starred, ...maps]) => {
+      if (cancelled) return;
+      const names: string[] = [];
+      for (const c of (Array.isArray(starred) ? starred : [])) if (c?.name) names.push(c.name);
+      for (const m of maps) for (const r of (m?.mappings ?? [])) if (r?.sunsky_cat) names.push(r.sunsky_cat);
+      setSunskyCatNames(names);
+    });
+    return () => { cancelled = true; };
+  }, [storeId, modalStores]);
 
   // Client feedback confirmed live via screenshot: "if I write делти
   // instead of делта for example this will override wrong value...
@@ -2979,8 +3047,8 @@ function AttrMappingModal({
     [wooAttrOptions]
   );
   const storeCatComboOptions = useMemo(
-    () => storeCatOptions.map(c => ({ id: c.id, label: c.name })),
-    [storeCatOptions]
+    () => buildCategoryConditionOptions(storeCatOptions, sunskyCatNames),
+    [storeCatOptions, sunskyCatNames]
   );
 
   useEffect(() => {
@@ -3332,11 +3400,14 @@ function AttrMappingModal({
                   onChange={v => set("condition_value", v)}
                   options={storeCatComboOptions}
                   placeholder="Category name, e.g. Waterproof Cases"
-                  emptyHint={storeCatOptions.length === 0
+                  emptyHint={storeCatComboOptions.length === 0
                     ? "No categories synced yet — type the name freely."
                     : "No matches — you can still type a category name freely."}
                 />
-                {!storeId && storeCatOptions.length > 0 && (
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Matches either the product's Sunsky category or its mapped WooCommerce category.
+                </p>
+                {!storeId && storeCatComboOptions.length > 0 && (
                   <p className="text-[11px] text-muted-foreground mt-1">
                     This is a global rule — suggestions are merged from all your stores. A name may not exist in every store's category list.
                   </p>
