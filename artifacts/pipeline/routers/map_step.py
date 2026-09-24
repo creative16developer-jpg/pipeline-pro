@@ -210,16 +210,46 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
     # (client's explicit choice): only ever matches an EXISTING
     # WooCommerce category, never creates one here.
     woo_cat_by_name = {c.name.strip().lower(): c for c in woo_cats}
+    woo_name_by_id = {c.woo_id: c.name for c in woo_cats}
+    # Global (store_id IS NULL) rules -- see the global fallback below.
+    global_rows = (
+        await db.execute(
+            select(SunskyCategoryMapping).where(SunskyCategoryMapping.store_id.is_(None))
+        )
+    ).scalars().all()
+    global_saved: dict[str, SunskyCategoryMapping] = {r.sunsky_cat: r for r in global_rows}
+    from tasks.job_tasks import _resolve_category_mapping
     from pipeline.sunsky_client import build_category_path as _build_sunsky_path
     for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1]):
         m = saved.get(cat)
         woo_cat_list = _mapping_woo_cats(m) if m else []
         primary_id = m.primary_woo_cat_id if m else (woo_cat_list[0]["id"] if woo_cat_list else None)
+        # Client feedback confirmed via DB: PL-148 (hdcam.bg) showed
+        # "Protection Frame" as Unmapped although a GLOBAL rule for it
+        # (id 219, store_id NULL) already existed -- `saved` above only
+        # holds this store's own rows. Same gap Content Review
+        # (pipeline.py content-data) already had fixed; reuses the exact
+        # resolver Upload uses, so this screen matches what Upload does:
+        # a global rule counts only if its category path exists by name
+        # in THIS store's tree, and is shown with this store's real IDs.
+        source = "store" if m else None
+        g = None
+        if m is None:
+            try:
+                g_res = await _resolve_category_mapping(db, pl.store_id, cat)
+            except Exception as _g_e:
+                g_res = None
+                logger.warning(f"[map-data] global category resolution failed for {cat!r}: {_g_e}")
+            if g_res and g_res.get("source") == "global":
+                g = global_saved.get(cat)
+                woo_cat_list = [{"id": i, "name": woo_name_by_id.get(i, "")} for i in g_res["woo_cat_ids"]]
+                primary_id = g_res["primary_woo_cat_id"]
+                source = "global"
         # Only for a genuinely new (unmapped) category -- an already-
         # saved rule reflects a deliberate, possibly-edited choice the
         # operator already made, which this must never silently alter.
         sunsky_ancestor_matches: list[dict] = []
-        if m is None and cat_raw_id.get(cat):
+        if m is None and source is None and cat_raw_id.get(cat):
             try:
                 sunsky_path = _build_sunsky_path(cat_raw_id[cat])
                 # Exclude the last entry -- that's the leaf itself (this
@@ -238,10 +268,11 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             "sample_skus":        cat_skus.get(cat, [])[:10],
             "woo_cats":           woo_cat_list,
             "primary_woo_cat_id": primary_id,
-            "profile_id":         m.profile_id if m else None,
-            "is_new":             m is None,
-            "times_used":         m.times_used if m else 0,
+            "profile_id":         m.profile_id if m else (g.profile_id if g else None),
+            "is_new":             source is None,
+            "times_used":         m.times_used if m else (g.times_used if g else 0),
             "sunsky_ancestor_matches": sunsky_ancestor_matches,
+            "source":             source,
         })
 
     # Client feedback confirmed this exact bug live: "I selected 3
@@ -335,9 +366,33 @@ async def map_confirm(
         if resolved_name and cat_id:
             name_to_cat_id.setdefault(resolved_name.strip().lower(), cat_id)
 
+    # Store rows that already exist for this store -- used below to leave
+    # categories covered ONLY by a global rule untouched.
+    store_rule_cats = set((
+        await db.execute(
+            select(SunskyCategoryMapping.sunsky_cat).where(SunskyCategoryMapping.store_id == pl.store_id)
+        )
+    ).scalars().all())
+    from tasks.job_tasks import _resolve_category_mapping
+
     for entry in req.mappings:
         if not entry.sunsky_cat or not entry.woo_cats:
             continue
+        # The frontend sends EVERY category back on confirm, including
+        # already-mapped ones (save_as_rule defaults to true), and both
+        # branches below upsert a STORE row. Now that map-data shows
+        # global-rule categories as mapped, confirming would otherwise
+        # silently copy each global rule into a store-specific override --
+        # after which edits to the global rule would stop applying to this
+        # store. Upload already applies the global rule itself, so there's
+        # nothing to save for these.
+        if entry.sunsky_cat not in store_rule_cats:
+            try:
+                _g = await _resolve_category_mapping(db, pl.store_id, entry.sunsky_cat)
+            except Exception:
+                _g = None
+            if _g and _g.get("source") == "global":
+                continue
 
         # Resolve primary category
         primary_id = entry.primary_woo_cat_id or (entry.woo_cats[0].id if entry.woo_cats else None)

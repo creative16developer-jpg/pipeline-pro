@@ -72,7 +72,29 @@ async def _unmapped_sunsky_categories(db, pl) -> list[str]:
     ).scalars().all()
     mapped = set(mapped_rows)
 
-    return sorted(categories - mapped)
+    # Client feedback confirmed via DB: a GLOBAL "Protection Frame" rule
+    # (sunsky_category_mappings id 219, store_id NULL) was created at
+    # 11:56:26, yet PL-148 (hdcam.bg, store 6) still paused at 12:44:29
+    # with "1 Sunsky category need mapping (Protection Frame)". The query
+    # above only ever looked at store_id == pl.store_id, so global rules
+    # never counted -- even though Upload itself honours them via
+    # _resolve_category_mapping. Fall back to that SAME resolver for
+    # anything without a store row, so the pause decision always agrees
+    # with what Upload will actually do (including its rule that a global
+    # rule only applies if its category path exists in this store).
+    unmapped = sorted(categories - mapped)
+    if unmapped:
+        from tasks.job_tasks import _resolve_category_mapping
+        still_unmapped = []
+        for cat in unmapped:
+            try:
+                if await _resolve_category_mapping(db, pl.store_id, cat):
+                    continue
+            except Exception:
+                pass
+            still_unmapped.append(cat)
+        unmapped = still_unmapped
+    return unmapped
 
 
 async def _confirm_all_enrich_attrs(db, pl_id: int) -> None:

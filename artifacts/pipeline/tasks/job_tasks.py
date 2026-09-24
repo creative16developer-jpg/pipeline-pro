@@ -155,32 +155,72 @@ async def _get_or_create_listing(db, product_id: int, store_id: int):
 # other on exactly how global-rule resolution should behave.
 
 async def _resolve_category_path_for_store(db, store_id: int, name_path: list[dict]) -> Optional[list[dict]]:
-    """Walks an ordered root-to-leaf category NAME path (as stored in a
-    global mapping's woo_cats_json, captured from whichever store
-    originally created the rule) against a DIFFERENT target store's own
-    WooCategory tree, matching each level by (name, parent's real
-    WooCommerce id) to correctly disambiguate repeated category names
-    across different branches. Returns a NEW [{id, name}, ...] list
-    using the target store's own real IDs, or None if any level of the
-    path doesn't exist by name on this store -- the global rule simply
-    doesn't apply there, falling through to normal "needs mapping"
-    handling exactly as if no rule existed at all.
+    """Resolves a global mapping's woo_cats_json (category NAMES captured
+    from whichever store originally created the rule) against a target
+    store's own WooCategory tree, matching by (name, parent) so repeated
+    names in different branches are disambiguated. Returns [{id, name}, ...]
+    with the target store's real IDs, ordered parents-before-children (so
+    [-1], which every caller uses as the primary, is the deepest category),
+    or None if any entry doesn't exist in this store -- the global rule
+    then simply doesn't apply there.
+
+    Client feedback confirmed via DB: global rule id 219 ("Protection
+    Frame") was saved as [Аксесоари (15), Рамки и Кейджове (2676),
+    Защита и Съхранение (2669)] -- NOT root-to-leaf; the leaf sits in the
+    middle. The previous version walked the list strictly in stored order,
+    requiring each entry to be a child of the one before it, so it looked
+    for "Рамки и Кейджове" directly under Аксесоари, failed, and returned
+    None: the rule was ignored everywhere (Upload, Sync, Cat. Review),
+    even though every one of its categories exists in hdcam.bg. Now
+    order-independent: repeatedly match any entry whose name exists here
+    as a child of an already-matched category, else as a root category.
+    A correctly ordered path resolves exactly as before.
     """
     from models.models import WooCategory
     from sqlalchemy import select as _sel_wc
+    names = [(e or {}).get("name") for e in (name_path or [])]
+    if not names or any(not n for n in names):
+        return None
+    rows = (await db.execute(
+        _sel_wc(WooCategory).where(WooCategory.store_id == store_id, WooCategory.name.in_(set(names)))
+    )).scalars().all()
+    by_name: dict = {}
+    for r in rows:
+        by_name.setdefault(r.name, []).append(r)
+
     resolved: list[dict] = []
-    parent_woo_id: Optional[int] = None
-    for entry in name_path:
-        name = entry.get("name")
-        if not name:
+    used: set = set()
+    pending = list(range(len(names)))
+    while pending:
+        pick = None
+        # 1) Prefer a child of a category already matched.
+        for i in pending:
+            c = next((c for c in by_name.get(names[i], [])
+                      if c.woo_id not in used and c.parent_id is not None and c.parent_id in used), None)
+            if c:
+                pick = (i, c)
+                break
+        # 2) Otherwise a root category -- preferring names that exist ONLY
+        #    as a root here, so a name that also exists deeper in the tree
+        #    (e.g. "Others") isn't grabbed as a root before its real parent
+        #    has been matched.
+        if pick is None:
+            root_opts = []
+            for i in pending:
+                cands = [c for c in by_name.get(names[i], []) if c.woo_id not in used]
+                roots = [c for c in cands if c.parent_id is None]
+                if roots:
+                    root_opts.append((len(roots) == len(cands), i, roots[0]))
+            if root_opts:
+                root_opts.sort(key=lambda t: not t[0])  # stable: only-root names first
+                _, i, c = root_opts[0]
+                pick = (i, c)
+        if pick is None:
             return None
-        q = _sel_wc(WooCategory).where(WooCategory.store_id == store_id, WooCategory.name == name)
-        q = q.where(WooCategory.parent_id.is_(None) if parent_woo_id is None else WooCategory.parent_id == parent_woo_id)
-        match = (await db.execute(q)).scalars().first()
-        if not match:
-            return None
-        resolved.append({"id": match.woo_id, "name": match.name})
-        parent_woo_id = match.woo_id
+        i, c = pick
+        pending.remove(i)
+        used.add(c.woo_id)
+        resolved.append({"id": c.woo_id, "name": c.name})
     return resolved
 
 
