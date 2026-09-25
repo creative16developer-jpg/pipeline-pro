@@ -480,6 +480,38 @@ def _template_skipping_generated_fields(product, template: dict) -> tuple[dict, 
     return filtered, skipped
 
 
+def _apply_csv_entry(product, csv_entry) -> str:
+    """Applies a CSV import row (Site SKU + Product Title) directly onto
+    the product, exactly like _run_generate's synchronous loop always
+    has, and returns the CSV title ("" if none) for prod_dict["csv_title"].
+
+    Client feedback confirmed live on PL-148 (hdcam.bg): all 10 products
+    from the client's CSV import (e.g. DOP4080B -> "Рамка за DJI Osmo
+    Action 6, Метална, Черна") showed AI-generated titles in Content
+    Review instead of the CSV titles. PL-148 used Claude batch mode
+    ("Batch submitted to Claude -- 18 request(s)"). Root cause: only the
+    synchronous path ever looked up the CSV row -- the batch SUBMIT
+    loop and the batch RESULT-APPLY loop (_poll_batch_pipelines) both
+    built prod_dict with no "csv_title", so _prepare_field_context's
+    "CSV title wins over any mode" check (earlier CSV-title fix) never
+    saw a CSV title: the title was sent to Claude and the AI result was
+    written into product.name, with nothing re-asserting the CSV title.
+    Writing the title onto product.name BEFORE the already-generated
+    skip is computed matters too: a previously generated title becomes
+    an "override" of product.name, checked before the CSV title, so
+    this makes that override the CSV title (same as the sync path).
+    """
+    if not csv_entry:
+        return ""
+    csv_title = (csv_entry.csv_title or "").strip()
+    site_sku = csv_entry.site_sku or ""
+    if site_sku:
+        product.site_sku = site_sku
+    if csv_title:
+        product.name = csv_title
+    return csv_title
+
+
 async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regenerate: bool = False) -> dict:
     """
     Content generation step — DAG-aware field generation via services.content_service.
@@ -639,10 +671,12 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
         total_skipped_fields = 0
         for product in products:
             raw = product.raw_data or {}
+            csv_title = _apply_csv_entry(product, csv_lookup.get(product.sku))
             prod_dict = {
                 "name": product.name or "", "sku": product.sku or "",
                 "description": product.description or "", "price": product.price or "0",
                 "site_sku": product.site_sku or "",
+                "csv_title": csv_title,
                 "category_name": extract_sunsky_category(raw, _gen_category_name_map),
                 "native_brand": _gen_resolve_brand(product),
                 **raw,
@@ -1209,6 +1243,7 @@ async def _poll_batch_pipelines():
                 template: dict = gen_cfg if isinstance(gen_cfg, dict) else {}
 
                 from services.content_service import FIELD_ATTR
+                from models.models import CsvMapping as _CsvMapping
 
                 applied = 0
                 for product_id, field_results in by_product.items():
@@ -1216,10 +1251,14 @@ async def _poll_batch_pipelines():
                     if not product:
                         continue
                     raw = product.raw_data or {}
+                    _csv_entry = (await db.execute(
+                        select(_CsvMapping).where(_CsvMapping.sunsky_sku == product.sku)
+                    )).scalars().first()
+                    csv_title = _apply_csv_entry(product, _csv_entry)
                     prod_dict = {
                         "name": product.name or "", "sku": product.sku or "",
                         "description": product.description or "", "price": product.price or "0",
-                        "site_sku": product.site_sku or "", **raw,
+                        "site_sku": product.site_sku or "", "csv_title": csv_title, **raw,
                     }
                     field_results_out = await generate_product(prod_dict, template, precomputed_ai=field_results)
                     sources = product.content_source or {}
@@ -1247,6 +1286,10 @@ async def _poll_batch_pipelines():
                             setattr(product, attr, value)
                             sources[field] = result.get("source", "logic")
                     product.content_source = sources
+                    # CSV title always wins -- same re-assert as the
+                    # synchronous path (see _apply_csv_entry).
+                    if csv_title:
+                        product.name = csv_title
                     applied += 1
                 await db.commit()
 
