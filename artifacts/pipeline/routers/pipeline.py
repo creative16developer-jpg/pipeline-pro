@@ -365,6 +365,8 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     by_cat_id: dict[str, str] = {}
     cats_json_by_cat_id: dict[str, str] = {}
     cats_json_by_name: dict[str, str] = {}
+    broken_by_name: dict[str, list[int]] = {}
+    broken_by_cat_id: dict[str, list[int]] = {}
     sunsky_name_by_product: dict[int, str] = {}
     sunsky_id_by_product: dict[int, str] = {}
     try:
@@ -482,6 +484,17 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
                 m.sunsky_cat.strip().lower(): m.woo_cats_json
                 for m in map_rows if m.woo_cat_id and m.woo_cats_json
             }
+            # Store rules pointing at WooCommerce categories that no
+            # longer exist in this store (PL-151: rule 129 -> missing
+            # 3065, shown as a green "mapped" badge with nothing ticked).
+            # Keyed both ways, like the lookups above.
+            from tasks.job_tasks import _broken_store_rules as _cd_broken_rules
+            _cd_broken = await _cd_broken_rules(db, pl.store_id, map_rows)
+            broken_by_name = {k.strip().lower(): v for k, v in _cd_broken.items()}
+            broken_by_cat_id = {
+                m.sunsky_cat_id: _cd_broken[m.sunsky_cat]
+                for m in map_rows if m.sunsky_cat_id and m.sunsky_cat in _cd_broken
+            }
             logger.info(f"[content-data] pl={pl_id} store_id={pl.store_id} "
                         f"loaded {len(by_name)} category mappings, "
                         f"looking for: {sorted(cat_names_present)}")
@@ -526,6 +539,19 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         ) or (
             cats_json_by_name.get(sunsky_cat_name.strip().lower()) if sunsky_cat_name else None
         )
+
+        # The store rule exists but points at WooCommerce categories this
+        # store no longer has: NOT mapped (no green badge, nothing to
+        # tick). Deliberately not sent through the global fallback below
+        # (_mapped_val stays set): Upload would still use this store rule.
+        category_missing_ids = (
+            (broken_by_cat_id.get(sunsky_cat_id) if sunsky_cat_id else None)
+            or (broken_by_name.get(sunsky_cat_name.strip().lower()) if sunsky_cat_name else None)
+        ) if _mapped_val is not None else None
+        if category_missing_ids:
+            is_mapped = False
+            resolved_woo_cat = None
+            mapped_cats_json = None
 
         # Client feedback (Review_4.docx, item #8): "In some products,
         # last review step doesn't mark categories." Confirmed: the
@@ -656,6 +682,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             "category_id": p.category_id or "",
             "category_name": resolved_woo_cat or sunsky_cat_name or "",
             "category_mapped": is_mapped,
+            "category_missing_ids": category_missing_ids or [],
             "attributes": attrs_by_product.get(p.id, []),
             "error_message": p.error_message or "",
             "content_source": p.content_source or {},

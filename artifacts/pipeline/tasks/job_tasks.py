@@ -266,6 +266,63 @@ async def _resolve_category_path_for_store(db, store_id: int, name_path: list[di
     return [{"id": r["id"], "name": r["name"]} for r in resolved]
 
 
+def _rule_woo_cat_ids(m) -> list[int]:
+    """Every WooCommerce category ID a saved SunskyCategoryMapping row
+    points to: woo_cats_json IDs, else woo_cat_id, plus primary."""
+    ids: list[int] = []
+    if getattr(m, "woo_cats_json", None):
+        try:
+            for c in json.loads(m.woo_cats_json) or []:
+                cid = c.get("id") if isinstance(c, dict) else c
+                if isinstance(cid, int) and cid not in ids:
+                    ids.append(cid)
+        except Exception:
+            pass
+    for cid in (getattr(m, "woo_cat_id", None), getattr(m, "primary_woo_cat_id", None)):
+        if isinstance(cid, int) and cid not in ids:
+            ids.append(cid)
+    return ids
+
+
+async def _broken_store_rules(db, store_id: int, rules) -> dict[str, list[int]]:
+    """{sunsky_cat: [missing woo IDs]} for store rules pointing at one or
+    more WooCommerce categories that are NOT in this store's synced
+    category list (woo_categories).
+
+    Client feedback confirmed via DB (PL-151, hdcam.bg): "the pipeline
+    doesn't ask me for non-mapped categories" -- IN-X4-WH-1 /
+    INS-X5-WH-1 (Sunsky "Protection & Cases") showed a green "mapped"
+    badge with nothing ticked. Store rule 129 points to woo category 3065
+    (no name saved), and store 6 has no category 3065 at all (its only
+    "Protection & Cases" is 3126). Every check only asked "does a rule
+    exist", never "does its category exist", so a rule pointing at a
+    missing category silently counted as mapped.
+
+    Every rule-creating path (map_step.py) picks categories from this
+    same synced list, so a missing ID means the category was removed
+    since, not merely never synced. Safeguard: a store with NO synced
+    categories at all returns {} -- nothing to check against, so no
+    rule is ever flagged just because the list is empty.
+    """
+    from models.models import WooCategory
+    from sqlalchemy import select as _sel_b
+    rules = [r for r in rules if r is not None]
+    if not rules:
+        return {}
+    existing = set((await db.execute(
+        _sel_b(WooCategory.woo_id).where(WooCategory.store_id == store_id)
+    )).scalars().all())
+    if not existing:
+        return {}
+    broken: dict[str, list[int]] = {}
+    for r in rules:
+        ids = _rule_woo_cat_ids(r)
+        missing = [i for i in ids if i not in existing]
+        if missing:
+            broken[r.sunsky_cat] = missing
+    return broken
+
+
 async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str) -> Optional[dict]:
     """Resolves a Sunsky category name to WooCommerce category ID(s) for
     a specific store. Checks a store-specific SunskyCategoryMapping row

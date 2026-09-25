@@ -198,6 +198,7 @@ interface CategoryRow {
   primary_woo_cat_id: number | null;
   profile_id: number | null;
   is_new: boolean;
+  broken_missing_ids?: number[];
   times_used: number;
 }
 interface RowSel {
@@ -697,6 +698,12 @@ function CategoryMapPanel({ pl, onResumed }: { pl: Pipeline; onResumed: () => vo
                 {/* Row header */}
                 <div className="flex items-center gap-2 px-3 py-2 bg-secondary/30">
                   <span className="font-mono text-xs text-foreground flex-1 min-w-0 truncate">{cat.sunsky_cat}</span>
+                  {(cat.broken_missing_ids?.length ?? 0) > 0 && (
+                    <span
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20 shrink-0"
+                      title={`The saved rule points to WooCommerce category ID ${cat.broken_missing_ids!.join(", ")}, which no longer exists in this store. Choose a category to repair it.`}
+                    >mapped category missing</span>
+                  )}
                   <span className="text-xs text-muted-foreground shrink-0">{cat.product_count} products</span>
                   <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer shrink-0">
                     <input

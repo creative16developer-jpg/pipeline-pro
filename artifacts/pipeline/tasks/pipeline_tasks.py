@@ -62,15 +62,23 @@ async def _unmapped_sunsky_categories(db, pl) -> list[str]:
     if not categories:
         return []
 
-    mapped_rows = (
+    store_rules = (
         await db.execute(
-            select(SunskyCategoryMapping.sunsky_cat).where(
+            select(SunskyCategoryMapping).where(
                 SunskyCategoryMapping.store_id == pl.store_id,
                 SunskyCategoryMapping.sunsky_cat.in_(categories),
             )
         )
     ).scalars().all()
-    mapped = set(mapped_rows)
+    # A store rule whose WooCommerce category no longer exists in this
+    # store (see job_tasks._broken_store_rules -- PL-151 / rule 129 ->
+    # missing category 3065) must pause like a missing rule: Upload would
+    # still use that broken store rule (it wins over any global rule), so
+    # it is NOT sent through the global fallback below either.
+    from tasks.job_tasks import _broken_store_rules
+    broken = await _broken_store_rules(db, pl.store_id, store_rules)
+    mapped = {r.sunsky_cat for r in store_rules}
+    broken_cats = sorted(c for c in broken if c in categories)
 
     # Client feedback confirmed via DB: a GLOBAL "Protection Frame" rule
     # (sunsky_category_mappings id 219, store_id NULL) was created at
@@ -94,7 +102,7 @@ async def _unmapped_sunsky_categories(db, pl) -> list[str]:
                 pass
             still_unmapped.append(cat)
         unmapped = still_unmapped
-    return unmapped
+    return sorted(set(unmapped) | set(broken_cats))
 
 
 async def _confirm_all_enrich_attrs(db, pl_id: int) -> None:

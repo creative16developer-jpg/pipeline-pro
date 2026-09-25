@@ -696,10 +696,22 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
         return (
           <div key={c.sunsky_cat} className="bg-card border border-border rounded-[10px] p-5">
             <div className="flex items-center gap-3 mb-1 flex-wrap">
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[12px] font-medium bg-amber-500/15 text-amber-400">Unmapped</span>
+              {c.broken_missing_ids?.length > 0 ? (
+                <span
+                  className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[12px] font-medium bg-red-500/15 text-red-400"
+                  title="The saved Category Mapping rule points to WooCommerce category ID(s) that no longer exist in this store's category list. Choose a category -- confirming with 'Save as permanent rule' repairs the rule."
+                >Mapped category missing</span>
+              ) : (
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[12px] font-medium bg-amber-500/15 text-amber-400">Unmapped</span>
+              )}
               <strong className="text-[15px]">{c.sunsky_cat}</strong>
               <span className="text-[12px] text-muted-foreground/60">{c.product_count} product{c.product_count !== 1 ? "s" : ""} in this batch</span>
             </div>
+            {c.broken_missing_ids?.length > 0 && (
+              <div className="mb-1 text-[12px] text-red-400/90">
+                A rule exists, but its WooCommerce categor{c.broken_missing_ids.length === 1 ? "y" : "ies"} (ID {c.broken_missing_ids.join(", ")}) no longer exist{c.broken_missing_ids.length === 1 ? "s" : ""} in this store. Choose a category below.
+              </div>
+            )}
             {c.sample_skus && c.sample_skus.length > 0 && (
               <div className="mb-4 text-[11px] text-muted-foreground/70 font-mono">
                 {c.sample_skus.join(", ")}
@@ -1908,6 +1920,11 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                               <span className="text-sm">{p.category_name}</span>
                               {p.cat_source === "manual" ? (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/10 text-violet-400 border border-violet-500/20" title="Manually overridden — this exact category will be used at upload, regardless of the batch's Sunsky category mapping">manual</span>
+                              ) : p.category_missing_ids?.length > 0 ? (
+                                <span
+                                  className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/20"
+                                  title={`The Category Mapping rule for this Sunsky category points to WooCommerce category ID ${p.category_missing_ids.join(", ")}, which no longer exists in this store. Pick a category below and click Set category, or fix the rule in Category Mapping.`}
+                                >mapped category missing</span>
                               ) : p.category_mapped ? (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">mapped</span>
                               ) : (

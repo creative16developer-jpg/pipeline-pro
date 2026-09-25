@@ -218,12 +218,19 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         )
     ).scalars().all()
     global_saved: dict[str, SunskyCategoryMapping] = {r.sunsky_cat: r for r in global_rows}
-    from tasks.job_tasks import _resolve_category_mapping
+    from tasks.job_tasks import _resolve_category_mapping, _broken_store_rules
     from pipeline.sunsky_client import build_category_path as _build_sunsky_path
+    # Store rules whose WooCommerce category no longer exists in this
+    # store (PL-151: rule 129 -> missing category 3065). Shown as a card
+    # needing a category, like a missing rule, so the operator is asked;
+    # confirming upserts the store rule, which repairs it permanently.
+    broken_map = await _broken_store_rules(db, pl.store_id, saved_rows)
     for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1]):
         m = saved.get(cat)
-        woo_cat_list = _mapping_woo_cats(m) if m else []
-        primary_id = m.primary_woo_cat_id if m else (woo_cat_list[0]["id"] if woo_cat_list else None)
+        broken_ids = broken_map.get(cat) if m else None
+        woo_cat_list = _mapping_woo_cats(m) if m and not broken_ids else []
+        primary_id = (m.primary_woo_cat_id if m and not broken_ids
+                      else (woo_cat_list[0]["id"] if woo_cat_list else None))
         # Client feedback confirmed via DB: PL-148 (hdcam.bg) showed
         # "Protection Frame" as Unmapped although a GLOBAL rule for it
         # (id 219, store_id NULL) already existed -- `saved` above only
@@ -232,7 +239,7 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         # resolver Upload uses, so this screen matches what Upload does:
         # a global rule counts only if its category path exists by name
         # in THIS store's tree, and is shown with this store's real IDs.
-        source = "store" if m else None
+        source = "store" if m and not broken_ids else None
         g = None
         if m is None:
             try:
@@ -249,7 +256,7 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         # saved rule reflects a deliberate, possibly-edited choice the
         # operator already made, which this must never silently alter.
         sunsky_ancestor_matches: list[dict] = []
-        if m is None and source is None and cat_raw_id.get(cat):
+        if (m is None or broken_ids) and source is None and cat_raw_id.get(cat):
             try:
                 sunsky_path = _build_sunsky_path(cat_raw_id[cat])
                 # Exclude the last entry -- that's the leaf itself (this
@@ -273,6 +280,7 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             "times_used":         m.times_used if m else (g.times_used if g else 0),
             "sunsky_ancestor_matches": sunsky_ancestor_matches,
             "source":             source,
+            "broken_missing_ids": broken_ids or [],
         })
 
     # Client feedback confirmed this exact bug live: "I selected 3
@@ -290,8 +298,12 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         is_csv = fetch_job and fetch_job.type == JobType.csv_import
         label = "CSV Import" if is_csv else "Uncategorised Products"
         m = saved.get(label)
-        woo_cat_list = _mapping_woo_cats(m) if m else []
-        primary_id = m.primary_woo_cat_id if m else (woo_cat_list[0]["id"] if woo_cat_list else None)
+        label_broken = broken_map.get(label) if m else None
+        if label_broken is None and m is not None:
+            label_broken = (await _broken_store_rules(db, pl.store_id, [m])).get(label)
+        woo_cat_list = _mapping_woo_cats(m) if m and not label_broken else []
+        primary_id = (m.primary_woo_cat_id if m and not label_broken
+                      else (woo_cat_list[0]["id"] if woo_cat_list else None))
         categories.append({
             "sunsky_cat":         label,
             "product_count":      uncategorized_count,
@@ -299,8 +311,9 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             "woo_cats":           woo_cat_list,
             "primary_woo_cat_id": primary_id,
             "profile_id":         m.profile_id if m else None,
-            "is_new":             m is None,
+            "is_new":             m is None or bool(label_broken),
             "times_used":         m.times_used if m else 0,
+            "broken_missing_ids": label_broken or [],
         })
 
     return {
