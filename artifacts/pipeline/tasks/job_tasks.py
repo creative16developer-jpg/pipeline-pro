@@ -266,6 +266,22 @@ async def _resolve_category_path_for_store(db, store_id: int, name_path: list[di
     return [{"id": r["id"], "name": r["name"]} for r in resolved]
 
 
+# Client feedback (PL-151, INS-X5-WH-1 in WooCommerce): "Unwanted and non
+# existing attribute again" -- "Compatible with". Upload Phase 2 and Sync
+# (each its own copy) added EVERY row of Sunsky's raw spec table as a
+# WooCommerce attribute (only shipping rows filtered), plus Sunsky's raw
+# modelLabel/optionList dump as a variation attribute. Neither goes
+# through Enrich, so neither is ever shown in Content Review: operators
+# could not see, edit or remove them, and in this catalogue optionList
+# lists sibling SKUs, not real variants. Only reviewed attributes
+# (ProductEnrichAttr, confirmed -- which already include "From Sunsky"
+# Attribute Mapping rules) are uploaded now. The spec table is still
+# parsed (brand detection and content generation use it); only these
+# raw attribute dumps are switched off. Set True to restore the old
+# behaviour in both Upload and Sync at once.
+_UPLOAD_RAW_SUNSKY_ATTRIBUTES = False
+
+
 def _rule_woo_cat_ids(m) -> list[int]:
     """Every WooCommerce category ID a saved SunskyCategoryMapping row
     points to: woo_cats_json IDs, else woo_cat_id, plus primary."""
@@ -2199,7 +2215,7 @@ async def _run_upload(db, job):
             ]
             option_values = [v for v in option_values if v]
 
-            if model_label and option_values:
+            if _UPLOAD_RAW_SUNSKY_ATTRIBUTES and model_label and option_values:
                 if model_label.strip().lower() in p2_protected_attr_names:
                     await _log(db, job.id, LogLevel.info,
                                f"  {prod.sku}: skipping Sunsky's raw '{model_label}' variant "
@@ -2270,7 +2286,7 @@ async def _run_upload(db, job):
                                    f"  {prod.sku}: could not set brand "
                                    f"{_p2_brand_name!r}: {_p2_be}")
 
-            if params_html:
+            if _UPLOAD_RAW_SUNSKY_ATTRIBUTES and params_html:
                 for spec_key, spec_val in _p2_specs.items():
                     if not spec_key or not spec_val:
                         continue
@@ -2530,6 +2546,59 @@ def _parse_params_table(html: str) -> dict[str, str]:
     return parser.pairs
 
 
+async def _sync_rule_category_ids(db, store_id: int, raw_p: dict, sunsky_cat_id, display_name: str):
+    """Sync's Category Mapping rule lookup, extracted verbatim from the
+    Sync assignment step so Step A can ask the SAME question before
+    creating anything. Returns (woo_cat_ids, primary_woo_cat_id, source)
+    -- ([], None, "") when no rule gives any category.
+
+    Order (unchanged): store rule, matched case-insensitively against
+    raw catName / categoryName / categoryId / catId, the Sunsky category
+    ID, then its resolved display name; else a global rule with the same
+    candidates, resolved against this store's own tree.
+    """
+    import json as _j
+    from models.models import SunskyCategoryMapping as _SSCM
+    from sqlalchemy import select as _ssel_scm
+    raw_p = raw_p or {}
+    candidates: list[str] = []
+    for _f in ("catName", "categoryName", "categoryId", "catId"):
+        _v = str(raw_p.get(_f) or "").strip()
+        if _v and _v not in candidates:
+            candidates.append(_v)
+    if sunsky_cat_id and sunsky_cat_id not in candidates:
+        candidates.append(sunsky_cat_id)
+    if display_name and display_name not in candidates:
+        candidates.append(display_name)
+
+    for cand in candidates:
+        m = (await db.execute(
+            _ssel_scm(_SSCM).where(_SSCM.store_id == store_id, _SSCM.sunsky_cat.ilike(cand))
+        )).scalar_one_or_none()
+        if m:
+            ids: list[int] = []
+            if m.woo_cats_json:
+                ids = [c["id"] for c in _j.loads(m.woo_cats_json) if c.get("id")]
+            elif m.woo_cat_id:
+                ids = [m.woo_cat_id]
+            primary = m.primary_woo_cat_id or (ids[-1] if ids else None)
+            return (ids, primary, f"SunskyCategoryMapping ({cand!r})") if ids else ([], None, "")
+
+    for cand in candidates:
+        g = (await db.execute(
+            _ssel_scm(_SSCM).where(_SSCM.store_id.is_(None), _SSCM.sunsky_cat.ilike(cand))
+        )).scalar_one_or_none()
+        if g:
+            resolved = None
+            if g.woo_cats_json:
+                resolved = await _resolve_category_path_for_store(db, store_id, _j.loads(g.woo_cats_json))
+            if resolved:
+                ids = [c["id"] for c in resolved]
+                return ids, ids[-1], f"SunskyCategoryMapping ({cand!r}, global)"
+            return [], None, ""
+    return [], None, ""
+
+
 async def _run_sync(db, job):
     """
     Sync job: push Sunsky categories and/or product attributes into WooCommerce.
@@ -2660,6 +2729,8 @@ async def _run_sync(db, job):
         await db.commit()
 
         needed_cat_ids: set[str] = set()
+        products_by_cat_id: dict[str, list] = {}
+        bfs_meta: dict[str, dict] = {}  # filled below; defined up front so later steps never hit a NameError
         for prod in target_products:
             # Client feedback confirmed live via screenshot: a
             # product with a deliberate, per-product manual category
@@ -2687,6 +2758,7 @@ async def _run_sync(db, job):
             cid = _get_sunsky_cat_id(prod)
             if cid:
                 needed_cat_ids.add(cid)
+                products_by_cat_id.setdefault(cid, []).append(prod)
 
         if not needed_cat_ids:
             await _log(db, job.id, LogLevel.warn,
@@ -3008,11 +3080,48 @@ async def _run_sync(db, job):
                     woo_id_cache[alias] = woo_id
                 return woo_id
 
+            # Client feedback confirmed via PL-151's log: Sync created
+            # "Protective Film & Stickers" (#3140) and "Protection Frame"
+            # (#3141) -- English categories named after the raw Sunsky
+            # category -- although every product in those categories
+            # already had a hdcam.bg Category Mapping rule, and the new
+            # categories were then not assigned to anything (assignment
+            # below prefers the rule). The earlier fix only skipped
+            # manual overrides here; products covered by a store or global
+            # rule still had a category resolved/CREATED for them. Skip a
+            # Sunsky category when EVERY product using it gets categories
+            # from a rule -- asked through the very same
+            # _sync_rule_category_ids the assignment step uses, so the two
+            # can't disagree. Any product without a rule keeps the
+            # existing fallback exactly as before.
+            covered_by_rule: set[str] = set()
+            if store_id:
+                for _cid, _prods in products_by_cat_id.items():
+                    _cname = (bfs_meta.get(_cid) or {}).get("name", "")
+                    try:
+                        _all = True
+                        for _pp in _prods:
+                            _ids, _, _ = await _sync_rule_category_ids(db, store_id, _pp.raw_data or {}, _cid, _cname)
+                            if not _ids:
+                                _all = False
+                                break
+                        if _all:
+                            covered_by_rule.add(_cid)
+                    except Exception as _cov_e:
+                        await _log(db, job.id, LogLevel.warn,
+                                   f"  Category {_cid}: rule check failed ({_cov_e}) — resolving as before")
+            if covered_by_rule:
+                await _log(db, job.id, LogLevel.info,
+                           f"  {len(covered_by_rule)} category ID(s) already covered by Category Mapping "
+                           f"rules — not creating anything for them: {', '.join(sorted(covered_by_rule))}")
+
             await _log(db, job.id, LogLevel.info,
-                       f"  Resolving {len(needed_cat_ids) - len(remaining)} "
+                       f"  Resolving {len(set(bfs_meta) & (needed_cat_ids - covered_by_rule))} "
                        f"found category ID(s) in WooCommerce…")
 
             for cat_id in needed_cat_ids:
+                if cat_id in covered_by_rule:
+                    continue
                 if cat_id in bfs_meta:
                     woo_id = await _resolve_woo_cat(cat_id)
                     if woo_id:
@@ -3144,79 +3253,17 @@ async def _run_sync(db, job):
                 # Priority 1: SunskyCategoryMapping — user's explicit mapping always wins
                 if store_id and not woo_cat_ids:
                     try:
-                        from models.models import SunskyCategoryMapping as _SSCM
-                        from sqlalchemy import select as _ssel_scm
-                        _sync_candidates: list[str] = []
-                        for _f in ("catName", "categoryName", "categoryId", "catId"):
-                            _v = str(raw_p.get(_f) or "").strip()
-                            if _v and _v not in _sync_candidates:
-                                _sync_candidates.append(_v)
-                        if sunsky_cat_id and sunsky_cat_id not in _sync_candidates:
-                            _sync_candidates.append(sunsky_cat_id)
-                        # Also try the human-readable name from the disk cache for this ID
-                        if sunsky_cat_id:
-                            _dcname = (bfs_meta.get(sunsky_cat_id) or {}).get("name", "")
-                            if not _dcname:
-                                _dcname = (p2_cat_cache.get(sunsky_cat_id) if 'p2_cat_cache' in dir() else None or {}).get("name", "")
-                            if _dcname and _dcname not in _sync_candidates:
-                                _sync_candidates.append(_dcname)
-
-                        _smapping = None
-                        _skey = None
-                        for _cand in _sync_candidates:
-                            # Case-insensitive match so "mobile accessories" == "Mobile Accessories"
-                            _smapping = (await db.execute(
-                                _ssel_scm(_SSCM).where(
-                                    _SSCM.store_id == store_id,
-                                    _SSCM.sunsky_cat.ilike(_cand),
-                                )
-                            )).scalar_one_or_none()
-                            if _smapping:
-                                _skey = _cand
-                                break
-
-                        if _smapping:
-                            if _smapping.woo_cats_json:
-                                import json as _sjson
-                                _sm_cats = _sjson.loads(_smapping.woo_cats_json)
-                                woo_cat_ids = [c["id"] for c in _sm_cats if c.get("id")]
-                            elif _smapping.woo_cat_id:
-                                woo_cat_ids = [_smapping.woo_cat_id]
-                            primary_woo_cat_id = _smapping.primary_woo_cat_id or (woo_cat_ids[-1] if woo_cat_ids else None)
-                            if woo_cat_ids:
-                                woo_cat_source = f"SunskyCategoryMapping ({_skey!r})"
-                        else:
-                            # Client feedback: "lets do whichever is
-                            # necessary to do for per store thing...
-                            # global and per store both rules options
-                            # are there." No store-specific rule matched
-                            # -- try a GLOBAL rule (store_id IS NULL)
-                            # with the same candidates, resolved against
-                            # THIS store's own category tree (mirrors
-                            # the identical fallback added to Phase 1's
-                            # upload category resolution above).
-                            _sync_global = None
-                            _sync_global_key = None
-                            for _cand in _sync_candidates:
-                                _sync_global = (await db.execute(
-                                    _ssel_scm(_SSCM).where(
-                                        _SSCM.store_id.is_(None),
-                                        _SSCM.sunsky_cat.ilike(_cand),
-                                    )
-                                )).scalar_one_or_none()
-                                if _sync_global:
-                                    _sync_global_key = _cand
-                                    break
-                            _sync_resolved_global = None
-                            if _sync_global and _sync_global.woo_cats_json:
-                                import json as _sjson_g
-                                _sync_resolved_global = await _resolve_category_path_for_store(
-                                    db, store_id, _sjson_g.loads(_sync_global.woo_cats_json)
-                                )
-                            if _sync_resolved_global:
-                                woo_cat_ids = [c["id"] for c in _sync_resolved_global]
-                                primary_woo_cat_id = woo_cat_ids[-1]
-                                woo_cat_source = f"SunskyCategoryMapping ({_sync_global_key!r}, global)"
+                        # Rule lookup (store rule, then global) moved into
+                        # _sync_rule_category_ids so Step A can use the
+                        # exact same logic -- see that function.
+                        _rule_ids, _rule_primary, _rule_source = await _sync_rule_category_ids(
+                            db, store_id, raw_p, sunsky_cat_id,
+                            (bfs_meta.get(sunsky_cat_id) or {}).get("name", "") if sunsky_cat_id else "",
+                        )
+                        if _rule_ids:
+                            woo_cat_ids = _rule_ids
+                            primary_woo_cat_id = _rule_primary
+                            woo_cat_source = _rule_source
                     except Exception as _sme:
                         await _log(db, job.id, LogLevel.warn,
                                    f"  {prod.sku}: SunskyCategoryMapping lookup failed — {_sme}")
@@ -3439,7 +3486,7 @@ async def _run_sync(db, job):
             ]
             option_values = [v for v in option_values if v]
 
-            if model_label and option_values:
+            if _UPLOAD_RAW_SUNSKY_ATTRIBUTES and model_label and option_values:
                 if model_label.strip().lower() in p2_protected_attr_names_b:
                     await _log(db, job.id, LogLevel.info,
                                f"  {prod.sku}: skipping Sunsky's raw '{model_label}' variant "
@@ -3494,7 +3541,7 @@ async def _run_sync(db, job):
                                    f"  {prod.sku}: could not set brand "
                                    f"{_s_brand_name!r}: {_sbe3}")
 
-            if params_html:
+            if _UPLOAD_RAW_SUNSKY_ATTRIBUTES and params_html:
                 spec_pairs = _s_specs
                 for spec_key, spec_val in list(spec_pairs.items())[:15]:
                     if len(spec_key) > 60 or len(spec_val) > 100:
