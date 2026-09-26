@@ -99,6 +99,20 @@ async def list_rules(
 
 @router.post("/attr-mapping", status_code=201)
 async def create_rule(body: RuleIn, db: AsyncSession = Depends(get_db)):
+    # A new rule for an attribute that already has rules goes LAST in that
+    # attribute's priority order (first match wins), rather than jumping
+    # ahead of rules the operator has already ordered. Only when the caller
+    # didn't ask for a specific position (sort_order 0 = default).
+    sort_order = body.sort_order
+    if not sort_order:
+        from sqlalchemy import func as _f
+        _max = (await db.execute(
+            select(_f.max(AttributeMappingRule.sort_order)).where(
+                _f.lower(_f.trim(AttributeMappingRule.woo_attr_name)) == body.woo_attr_name.strip().lower()
+            )
+        )).scalar()
+        if _max is not None:
+            sort_order = _max + 10
     rule = AttributeMappingRule(
         store_id=body.store_id,
         woo_attr_name=body.woo_attr_name.strip(),
@@ -108,7 +122,7 @@ async def create_rule(body: RuleIn, db: AsyncSession = Depends(get_db)):
         instruction=body.instruction,
         condition_type=body.condition_type,
         condition_value=body.condition_value,
-        sort_order=body.sort_order,
+        sort_order=sort_order,
     )
     db.add(rule)
     await db.commit()
@@ -135,6 +149,36 @@ async def update_rule(rule_id: int, body: RuleIn, db: AsyncSession = Depends(get
     await db.commit()
     await db.refresh(rule)
     return RuleOut.from_orm(rule)
+
+
+class ReorderIn(BaseModel):
+    rule_ids: list[int]
+
+
+@router.post("/attr-mapping/reorder")
+async def reorder_rules(body: ReorderIn, db: AsyncSession = Depends(get_db)):
+    """Set the priority order of an attribute's rules: the given ids get
+    sort_order 10, 20, 30, ... in that order. Enrich evaluates rules in
+    sort_order, id order and the first matching rule per attribute wins,
+    so this is the order shown (and edited) in the attribute's screen.
+    All ids must exist and belong to the same attribute."""
+    if not body.rule_ids or len(set(body.rule_ids)) != len(body.rule_ids):
+        raise HTTPException(400, "rule_ids must be a non-empty list without duplicates")
+    rows = (await db.execute(
+        select(AttributeMappingRule).where(AttributeMappingRule.id.in_(body.rule_ids))
+    )).scalars().all()
+    by_id = {r.id: r for r in rows}
+    missing = [i for i in body.rule_ids if i not in by_id]
+    if missing:
+        raise HTTPException(404, f"Rules not found: {missing}")
+    if len({r.woo_attr_name.strip().lower() for r in rows}) != 1:
+        raise HTTPException(400, "All rules must belong to the same attribute")
+    now = datetime.now(timezone.utc)
+    for i, rid in enumerate(body.rule_ids):
+        by_id[rid].sort_order = (i + 1) * 10
+        by_id[rid].updated_at = now
+    await db.commit()
+    return {"rules": [RuleOut.from_orm(by_id[i]) for i in body.rule_ids]}
 
 
 @router.delete("/attr-mapping/{rule_id}", status_code=204)

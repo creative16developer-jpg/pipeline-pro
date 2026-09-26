@@ -1,0 +1,11 @@
+-- Allow several Attribute Mapping rules for the same attribute in the same
+-- store (e.g. hdcam.bg "Характеристики" with one rule per category
+-- condition). Client feedback: group all rules of one attribute under a
+-- single setting and manage them there -- which only works if a store can
+-- have more than one rule per attribute. The model's
+-- UniqueConstraint(store_id, woo_attr_name) made a second store rule fail
+-- with an unhandled IntegrityError (global rules were never limited:
+-- NULL store_id values are distinct in Postgres). Enrich already evaluates
+-- rules in sort_order, id order with the first match per attribute
+-- winning, so nothing depends on uniqueness. Idempotent.
+ALTER TABLE attribute_mapping_rules DROP CONSTRAINT IF EXISTS uq_attr_mapping_store_attr;

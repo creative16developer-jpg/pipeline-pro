@@ -4,7 +4,8 @@ import {
   Settings as SettingsIcon, Key, Eye, EyeOff, CheckCircle2,
   XCircle, Save, Trash2, Loader2, Info, Sparkles, ExternalLink,
   RefreshCw, Tag, Search, ChevronDown, ChevronRight, Edit2, X, Plus,
-  Upload, FileSpreadsheet, AlertCircle, Wrench, ImageIcon, Copy
+  Upload, FileSpreadsheet, AlertCircle, Wrench, ImageIcon, Copy,
+  ArrowUp, ArrowDown
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useStores } from "@/hooks/use-stores";
@@ -2960,12 +2961,16 @@ function ConditionBadge({ type, value }: { type: string; value: string | null })
 function AttrMappingModal({
   rule,
   seedFrom,
+  presetAttrName,
   onClose,
   onSaved,
   storeId,
 }: {
   rule: AttrMappingRule | null;
   seedFrom?: AttrMappingRule | null;
+  // Pre-fills the attribute name for a NEW rule (adding / duplicating a
+  // rule from inside one attribute's grouped screen).
+  presetAttrName?: string;
   onClose: () => void;
   onSaved: (r: AttrMappingRule) => void;
   storeId: number | null;
@@ -2989,7 +2994,7 @@ function AttrMappingModal({
           // collide on save. Blank forces picking a new one, which matches
           // the actual use case anyway (a same-shaped rule for a
           // DIFFERENT attribute, not an exact clone of an existing one).
-          woo_attr_name: "",
+          woo_attr_name: presetAttrName ?? "",
           rule_type: seedFrom.rule_type,
           source_field: seedFrom.source_field ?? "",
           fixed_value: seedFrom.fixed_value ?? "",
@@ -2997,7 +3002,7 @@ function AttrMappingModal({
           condition_type: seedFrom.condition_type,
           condition_value: seedFrom.condition_value ?? "",
         }
-      : { ...EMPTY_FORM }
+      : { ...EMPTY_FORM, woo_attr_name: presetAttrName ?? EMPTY_FORM.woo_attr_name }
   );
   const [saving, setSaving] = useState(false);
   const [wooAttrOptions, setWooAttrOptions] = useState<{ id: string; name: string }[]>([]);
@@ -3156,7 +3161,12 @@ function AttrMappingModal({
     setSaving(true);
     try {
       const body = {
-        store_id: storeId,
+        // Editing keeps the rule's OWN store. Previously this always sent
+        // the tab's current store filter, so editing a store rule from the
+        // "All Stores" view silently turned it into a global rule -- and
+        // the grouped attribute screen shows rules of several stores
+        // together. New rules still use the selected store (null = global).
+        store_id: rule ? rule.store_id : storeId,
         woo_attr_name: form.woo_attr_name.trim(),
         rule_type: form.rule_type,
         source_field: form.rule_type === "from_sunsky" ? (form.source_field || null) : null,
@@ -3164,7 +3174,9 @@ function AttrMappingModal({
         instruction: form.rule_type === "ai_extract" ? (form.instruction || null) : null,
         condition_type: form.condition_type,
         condition_value: form.condition_type === "if_category" ? (form.condition_value || null) : null,
-        sort_order: 0,
+        // Editing keeps the rule's priority position; a new rule sends 0 and
+        // the backend places it last within its attribute.
+        sort_order: rule ? rule.sort_order : 0,
       };
       const url = rule ? `/api/attr-mapping/${rule.id}` : "/api/attr-mapping";
       const method = rule ? "PUT" : "POST";
@@ -3467,6 +3479,128 @@ function AttrMappingModal({
   );
 }
 
+// Client feedback (point 1, last milestone): "Unite same attribution in one
+// setting ... Instead to have record for the different value in main
+// screen, we need to have just one record характеристики and inside this
+// settings to be able to manage all options for this attribute like rules,
+// source/value, condition, store and action (action need to be visible on
+// main screen and inner screen)."
+// Rules are grouped by attribute name (trimmed, case-insensitive -- the same
+// key Enrich uses: apply_mapping_rules keys on woo_attr_name.strip().lower()).
+// Within a group, rules are in EVALUATION order -- sort_order, then id, as
+// _load_mapping_rules loads them -- because the first rule whose condition
+// matches a product wins for that attribute.
+type AttrRuleGroup = { key: string; name: string; rules: AttrMappingRule[] };
+function groupAttrRules(rules: AttrMappingRule[]): AttrRuleGroup[] {
+  const byKey = new Map<string, AttrRuleGroup>();
+  for (const r of rules) {
+    const key = (r.woo_attr_name || "").trim().toLowerCase();
+    if (!key) continue;
+    const g = byKey.get(key);
+    if (g) g.rules.push(r); else byKey.set(key, { key, name: r.woo_attr_name.trim(), rules: [r] });
+  }
+  const groups = Array.from(byKey.values());
+  for (const g of groups) g.rules.sort((a, b) => (a.sort_order - b.sort_order) || (a.id - b.id));
+  groups.sort((a, b) => a.name.localeCompare(b.name));
+  return groups;
+}
+
+function AttrGroupModal({
+  group, stores, busyId, onClose, onEdit, onDuplicate, onDelete, onAdd, onMove,
+}: {
+  group: AttrRuleGroup;
+  stores: any[];
+  busyId: number | null;
+  onClose: () => void;
+  onEdit: (r: AttrMappingRule) => void;
+  onDuplicate: (r: AttrMappingRule) => void;
+  onDelete: (r: AttrMappingRule) => void;
+  onAdd: () => void;
+  onMove: (index: number, dir: -1 | 1) => void;
+}) {
+  const sourceLabel = (r: AttrMappingRule) => {
+    if (r.rule_type === "from_sunsky") return r.source_field || "—";
+    if (r.rule_type === "fixed_value") return r.fixed_value || "—";
+    if (r.rule_type === "ai_extract") return r.instruction || "—";
+    return "—";
+  };
+  const btn = "p-2 rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-30 disabled:pointer-events-none";
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border/50">
+          <div>
+            <h2 className="text-base font-semibold">{group.name}</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {group.rules.length} rule{group.rules.length !== 1 ? "s" : ""} · checked top to bottom — the first rule whose condition matches a product sets this attribute.
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-secondary text-muted-foreground"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="overflow-auto flex-1">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border/40 bg-secondary/30">
+                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider w-10">#</th>
+                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Rule</th>
+                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Source / Value</th>
+                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Condition</th>
+                <th className="px-3 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Store</th>
+                <th className="px-3 py-2.5 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {group.rules.map((rule, i) => (
+                <tr key={rule.id} className="border-b border-border/30">
+                  <td className="px-3 py-2.5 text-xs text-muted-foreground">{i + 1}</td>
+                  <td className="px-3 py-2.5"><AttrRuleBadge type={rule.rule_type} /></td>
+                  <td className="px-3 py-2.5 text-muted-foreground text-xs max-w-[260px] break-words">{sourceLabel(rule)}</td>
+                  <td className="px-3 py-2.5"><ConditionBadge type={rule.condition_type} value={rule.condition_value} /></td>
+                  <td className="px-3 py-2.5">
+                    {rule.store_id === null ? (
+                      <span className="inline-flex px-2 py-0.5 rounded-md bg-secondary text-muted-foreground text-xs">Global</span>
+                    ) : (
+                      <span className="inline-flex px-2 py-0.5 rounded-md bg-primary/15 text-primary text-xs">
+                        {stores.find((s: any) => s.id === rule.store_id)?.name ?? `Store #${rule.store_id}`}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-1 justify-end">
+                      <button onClick={() => onMove(i, -1)} disabled={i === 0 || busyId !== null} title="Move up (checked earlier)" className={btn}><ArrowUp className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => onMove(i, 1)} disabled={i === group.rules.length - 1 || busyId !== null} title="Move down (checked later)" className={btn}><ArrowDown className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => onEdit(rule)} title="Edit" className={btn}><Edit2 className="w-3.5 h-3.5" /></button>
+                      <button onClick={() => onDuplicate(rule)} title="Duplicate as a new rule for this attribute" className={btn}><Copy className="w-3.5 h-3.5" /></button>
+                      <button
+                        onClick={() => onDelete(rule)}
+                        disabled={busyId === rule.id}
+                        title="Delete"
+                        className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors disabled:opacity-50"
+                      >
+                        {busyId === rule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center justify-between px-6 py-3 border-t border-border/50">
+          <span className="text-[11px] text-muted-foreground">Store rules and Global rules of this attribute share one order.</span>
+          <button
+            onClick={onAdd}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            <Plus className="w-4 h-4" /> Add rule for {group.name}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function AttributeMappingTab() {
   const { data: storesData } = useStores();
   // Client feedback confirmed live via browser inspection: the
@@ -3493,6 +3627,13 @@ function AttributeMappingTab() {
   const [modalRule, setModalRule] = useState<AttrMappingRule | "new" | null>(null);
   const [duplicateSeed, setDuplicateSeed] = useState<AttrMappingRule | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
+  // Grouped view: which attribute's screen is open (by group key), and the
+  // attribute name to pre-fill when adding/duplicating from inside it.
+  const [openGroupKey, setOpenGroupKey] = useState<string | null>(null);
+  const [presetName, setPresetName] = useState<string | undefined>(undefined);
+  const [busyGroupKey, setBusyGroupKey] = useState<string | null>(null);
+  const groups = useMemo(() => groupAttrRules(rules), [rules]);
+  const openGroup = groups.find(g => g.key === openGroupKey) ?? null;
 
   const fetchRules = async (sid: number | null) => {
     setLoading(true);
@@ -3521,15 +3662,52 @@ function AttributeMappingTab() {
     setDeleting(null);
   };
 
-  const handleDuplicate = (rule: AttrMappingRule) => {
-    // Client feedback item #11 (doc): "We need to have an option to copy
-    // rows in Attribute Mapping ... like Baselinker has, to speed up
-    // creating similar rules." Opens the modal in create-new mode
-    // (modalRule="new" -> rule=null -> POST on save, never overwrites the
-    // original), pre-filled from this rule via seedFrom.
-    setDuplicateSeed(rule);
+  const handleMove = async (group: AttrRuleGroup, index: number, dir: -1 | 1) => {
+    const j = index + dir;
+    if (j < 0 || j >= group.rules.length) return;
+    const ids = group.rules.map(r => r.id);
+    [ids[index], ids[j]] = [ids[j], ids[index]];
+    setDeleting(-1);
+    try {
+      const r = await fetch("/api/attr-mapping/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rule_ids: ids }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const d = await r.json();
+      const updated: Record<number, AttrMappingRule> = {};
+      for (const u of (d.rules ?? [])) updated[u.id] = u;
+      setRules(prev => prev.map(x => updated[x.id] ?? x));
+    } catch (e: any) {
+      toast({ title: "Reorder failed", description: e.message, variant: "destructive" });
+    }
+    setDeleting(null);
+  };
+
+  const handleDeleteGroup = async (group: AttrRuleGroup) => {
+    if (!confirm(`Delete all ${group.rules.length} rule(s) for "${group.name}" shown here? This cannot be undone.`)) return;
+    setBusyGroupKey(group.key);
+    let failed = 0;
+    for (const rule of group.rules) {
+      try {
+        const r = await fetch(`/api/attr-mapping/${rule.id}`, { method: "DELETE" });
+        if (!r.ok && r.status !== 404) throw new Error(await r.text());
+        setRules(prev => prev.filter(x => x.id !== rule.id));
+      } catch { failed++; }
+    }
+    setBusyGroupKey(null);
+    toast(failed
+      ? { title: `${failed} rule(s) could not be deleted`, variant: "destructive" }
+      : { title: `Deleted all rules for "${group.name}"` });
+  };
+
+  const handleAddToGroup = (group: AttrRuleGroup) => {
+    setDuplicateSeed(null);
+    setPresetName(group.name);
     setModalRule("new");
   };
+
 
   const handleSaved = (saved: AttrMappingRule) => {
     setRules(prev => {
@@ -3550,15 +3728,6 @@ function AttributeMappingTab() {
     window.open(url, "_blank");
   };
 
-  const sourceLabel = (r: AttrMappingRule) => {
-    if (r.rule_type === "from_sunsky") return r.source_field || "—";
-    if (r.rule_type === "fixed_value") return r.fixed_value || "—";
-    if (r.rule_type === "ai_extract") {
-      const instr = r.instruction || "";
-      return instr.length > 50 ? instr.slice(0, 50) + "…" : instr || "—";
-    }
-    return "—";
-  };
 
   return (
     <div className="space-y-4">
@@ -3584,7 +3753,7 @@ function AttributeMappingTab() {
             <Upload className="w-3.5 h-3.5" /> Export CSV
           </button>
           <button
-            onClick={() => setModalRule("new")}
+            onClick={() => { setPresetName(undefined); setDuplicateSeed(null); setModalRule("new"); }}
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
           >
             <Plus className="w-4 h-4" /> Add Rule
@@ -3600,19 +3769,19 @@ function AttributeMappingTab() {
           <strong className="text-foreground"> From Sunsky</strong> copies a Sunsky field directly,{" "}
           <strong className="text-foreground">AI extract</strong> uses AI to pull values from titles/descriptions, and{" "}
           <strong className="text-foreground">Fixed value</strong> always sets a static value.
-          Global rules apply to all stores; per-store rules override globals.
+          Rules for the same attribute are grouped — open an attribute to manage all its rules. They are checked
+          top to bottom (store and Global rules together) and the first rule whose condition matches a product wins.
         </span>
       </div>
 
-      {/* Table */}
+      {/* Table: one row per attribute */}
       <div className="bg-card border border-border/50 rounded-2xl overflow-x-auto shadow-sm">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border/40 bg-secondary/30">
               <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">WooCommerce Attribute</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Rule</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Source / Value</th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Condition</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Rules</th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Conditions</th>
               <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Store</th>
               <th className="px-4 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
             </tr>
@@ -3620,13 +3789,13 @@ function AttributeMappingTab() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground text-sm">
+                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground text-sm">
                   <Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Loading rules…
                 </td>
               </tr>
-            ) : rules.length === 0 ? (
+            ) : groups.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-12 text-center text-muted-foreground text-sm">
+                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground text-sm">
                   <div className="flex flex-col items-center gap-3">
                     <Tag className="w-8 h-8 text-muted-foreground/40" />
                     <div>
@@ -3634,7 +3803,7 @@ function AttributeMappingTab() {
                       <p className="text-xs mt-1">Add rules to define how WooCommerce attributes are populated during upload.</p>
                     </div>
                     <button
-                      onClick={() => setModalRule("new")}
+                      onClick={() => { setPresetName(undefined); setModalRule("new"); }}
                       className="px-4 py-2 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90"
                     >
                       + Add First Rule
@@ -3643,72 +3812,101 @@ function AttributeMappingTab() {
                 </td>
               </tr>
             ) : (
-              rules.map(rule => (
-                <tr key={rule.id} className="border-b border-border/30 hover:bg-secondary/10 transition-colors">
-                  <td className="px-4 py-3 font-semibold text-foreground">{rule.woo_attr_name}</td>
-                  <td className="px-4 py-3"><AttrRuleBadge type={rule.rule_type} /></td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs max-w-[220px] truncate">{sourceLabel(rule)}</td>
-                  <td className="px-4 py-3"><ConditionBadge type={rule.condition_type} value={rule.condition_value} /></td>
-                  <td className="px-4 py-3">
-                    {/* Client feedback: "add store name as new column so
-                        admin can know which rule is global and which
-                        rule is for which store." Matches Category
-                        Mapping's own existing visual pattern for this
-                        exact same distinction (a subtle "This store"-
-                        style badge next to each row). */}
-                    {rule.store_id === null ? (
-                      <span className="inline-flex px-2 py-0.5 rounded-md bg-secondary text-muted-foreground text-xs">Global</span>
-                    ) : (
-                      <span className="inline-flex px-2 py-0.5 rounded-md bg-primary/15 text-primary text-xs">
-                        {stores.find((s: any) => s.id === rule.store_id)?.name ?? `Store #${rule.store_id}`}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-1 justify-end">
-                      <button
-                        onClick={() => setModalRule(rule)}
-                        title="Edit"
-                        className="p-2 rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
+              groups.map(group => {
+                const types = Array.from(new Set(group.rules.map(r => r.rule_type)));
+                const storeIds = Array.from(new Set(group.rules.map(r => r.store_id)));
+                const nCond = group.rules.filter(r => r.condition_type === "if_category").length;
+                return (
+                  <tr key={group.key} className="border-b border-border/30 hover:bg-secondary/10 transition-colors">
+                    <td className="px-4 py-3">
+                      <button onClick={() => setOpenGroupKey(group.key)} className="font-semibold text-foreground hover:text-primary text-left">
+                        {group.name}
                       </button>
-                      <button
-                        onClick={() => handleDuplicate(rule)}
-                        title="Duplicate this rule as a starting point for a new attribute"
-                        className="p-2 rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(rule.id)}
-                        disabled={deleting === rule.id}
-                        title="Delete"
-                        className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors disabled:opacity-50"
-                      >
-                        {deleting === rule.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs text-muted-foreground">{group.rules.length} ×</span>
+                        {types.map(t => <AttrRuleBadge key={t} type={t} />)}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">
+                      {nCond === 0 ? "Always" : nCond === group.rules.length ? `${nCond} by category` : `${nCond} by category, ${group.rules.length - nCond} always`}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {storeIds.map(sid => sid === null ? (
+                          <span key="global" className="inline-flex px-2 py-0.5 rounded-md bg-secondary text-muted-foreground text-xs">Global</span>
+                        ) : (
+                          <span key={sid} className="inline-flex px-2 py-0.5 rounded-md bg-primary/15 text-primary text-xs">
+                            {stores.find((s: any) => s.id === sid)?.name ?? `Store #${sid}`}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1 justify-end">
+                        <button
+                          onClick={() => setOpenGroupKey(group.key)}
+                          title="Open — manage all rules of this attribute"
+                          className="p-2 rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleAddToGroup(group)}
+                          title={`Add a rule for ${group.name}`}
+                          className="p-2 rounded-lg bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteGroup(group)}
+                          disabled={busyGroupKey === group.key}
+                          title="Delete all rules of this attribute shown here"
+                          className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-colors disabled:opacity-50"
+                        >
+                          {busyGroupKey === group.key ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
       </div>
 
-      {/* Rule count */}
+      {/* Count */}
       {rules.length > 0 && (
-        <p className="text-xs text-muted-foreground text-right">{rules.length} rule{rules.length !== 1 ? "s" : ""}</p>
+        <p className="text-xs text-muted-foreground text-right">
+          {groups.length} attribute{groups.length !== 1 ? "s" : ""} · {rules.length} rule{rules.length !== 1 ? "s" : ""}
+        </p>
       )}
 
-      {/* Add/Edit modal */}
+      {/* One attribute's rules */}
+      {openGroup && (
+        <AttrGroupModal
+          group={openGroup}
+          stores={stores}
+          busyId={deleting}
+          onClose={() => setOpenGroupKey(null)}
+          onEdit={r => { setPresetName(undefined); setDuplicateSeed(null); setModalRule(r); }}
+          onDuplicate={r => { setPresetName(openGroup.name); setDuplicateSeed(r); setModalRule("new"); }}
+          onDelete={r => handleDelete(r.id)}
+          onAdd={() => handleAddToGroup(openGroup)}
+          onMove={(i, dir) => handleMove(openGroup, i, dir)}
+        />
+      )}
+
+      {/* Add/Edit modal (renders above the attribute screen: z-50 vs z-40) */}
       {modalRule !== null && (
         <AttrMappingModal
           rule={modalRule === "new" ? null : modalRule}
           seedFrom={modalRule === "new" ? duplicateSeed : null}
+          presetAttrName={modalRule === "new" ? presetName : undefined}
           storeId={storeId}
-          onClose={() => { setModalRule(null); setDuplicateSeed(null); }}
+          onClose={() => { setModalRule(null); setDuplicateSeed(null); setPresetName(undefined); }}
           onSaved={handleSaved}
         />
       )}

@@ -593,7 +593,10 @@ class AttributeMappingRule(Base):
     store_id=None means the rule applies globally to all stores.
     """
     __tablename__ = "attribute_mapping_rules"
-    __table_args__ = (UniqueConstraint("store_id", "woo_attr_name", name="uq_attr_mapping_store_attr"),)
+    # No uniqueness on (store_id, woo_attr_name): a store may have several
+    # rules for one attribute (e.g. one per category condition), evaluated
+    # in sort_order, id order -- first match per attribute wins. The old
+    # constraint is dropped by migrations/allow_multiple_attr_mapping_rules.sql.
 
     id             = Column(Integer, primary_key=True, index=True)
     store_id       = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=True, index=True)
