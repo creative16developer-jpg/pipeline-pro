@@ -925,6 +925,29 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
                         "flagged": True,
                     })
 
+        # Client feedback confirmed live (PL-152, Test hdcam): after the
+        # operator deleted Attribute Mapping rule 12 ("Product Line" =
+        # fixed "X5", Always) and went Back to Fetch, the re-run
+        # extraction no longer produced "Product Line" (log 13:52:57) --
+        # yet the Details -> Attributes tab still listed "Product Line:
+        # X5" for PL-152, and the Upload click (content_confirm's bulk
+        # confirm) would have uploaded it. Saving was insert-or-update
+        # only, so an attribute a previous run of THIS pipeline produced
+        # but the new run doesn't was never removed. Remove it now --
+        # except rows the operator added by hand (source "manual", from
+        # the Content Review "add attribute" endpoint), which must
+        # survive a re-extraction.
+        from sqlalchemy import delete as _sa_delete
+        _new_attr_names = [a["attribute"] for a in attrs]
+        await db.execute(
+            _sa_delete(ProductEnrichAttr).where(
+                ProductEnrichAttr.pipeline_job_id == pl.id,
+                ProductEnrichAttr.product_id == product.id,
+                ProductEnrichAttr.source != "manual",
+                ProductEnrichAttr.attribute.notin_(_new_attr_names),
+            )
+        )
+
         for a in attrs:
             stmt = (
                 pg_insert(ProductEnrichAttr)
@@ -946,6 +969,9 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
                         "source":     a.get("source", "rule_based"),
                         "flagged":    a.get("flagged", False),
                     },
+                    # A value the operator typed by hand is not
+                    # overwritten by a re-extraction of the same attribute.
+                    where=(ProductEnrichAttr.source != "manual"),
                 )
             )
             await db.execute(stmt)
