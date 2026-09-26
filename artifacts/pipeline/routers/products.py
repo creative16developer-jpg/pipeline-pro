@@ -363,21 +363,29 @@ async def reorder_product_images(
 
 @router.get("/{product_id}/attributes")
 async def get_product_attributes(product_id: int, db: AsyncSession = Depends(get_db)):
-    """Read-only: the attributes confirmed for this product in the review
-    step, grouped by pipeline, newest pipeline first.
+    """Read-only: every attribute extracted/entered for this product,
+    grouped by pipeline, newest pipeline first, each with its approval
+    state.
 
     Client feedback: in Products -> Details "I can't see the selected
     attributes so I can't check if any of them was selected or missing"
-    -- for INS-X5-WH-1 the only way to check was reading the pipeline
-    log. Upload sends the CONFIRMED ProductEnrichAttr rows of the
-    pipeline doing the upload (falling back to other pipelines only if
-    that one has none); Sync takes the newest per attribute across
-    pipelines. Showing each pipeline's confirmed set separately, newest
-    first, lets the operator see exactly what each run approved without
-    this endpoint guessing between those two rules. Values: the
-    normalised value if set, else the raw value (same as Upload/Sync);
-    name: woo_attr_name override if set, else the attribute name.
-    Unconfirmed rows were never uploaded -- only counted.
+    (INS-X5-WH-1 -- the only way to check was the pipeline log).
+
+    Follow-up (live test, PL-152): the first version listed only
+    confirmed=True rows, and showed "No attributes were confirmed" for a
+    pipeline still in review. But "Confirm extraction" does NOT set
+    confirmed: content_confirm (the Upload click) and /resume mark ALL of
+    a pipeline's attributes confirmed at once. So before upload every
+    attribute is legitimately unconfirmed, and the client wants to see
+    them then. Now every row is returned with its own "confirmed" flag,
+    plus a per-pipeline "state":
+      approved -- at least one row confirmed (upload was started)
+      awaiting -- none confirmed, pipeline still in progress: approved
+                  when Upload is clicked
+      stopped  -- none confirmed, pipeline cancelled/failed before upload
+      none     -- none confirmed, pipeline completed anyway (edge case)
+    Name = woo_attr_name override else attribute; value = normalised
+    value else raw value -- the same choices Upload/Sync make.
     """
     from models.models import PipelineJob, ProductEnrichAttr, Store
 
@@ -399,14 +407,26 @@ async def get_product_attributes(product_id: int, db: AsyncSession = Depends(get
             "store_name": store.name if store else None,
             "pipeline_status": pl.status,
             "attributes": [],
-            "unconfirmed_count": 0,
         })
-        if not attr.confirmed:
-            g["unconfirmed_count"] += 1
-            continue
         name = (attr.woo_attr_name or "").strip() or (attr.attribute or "").strip()
         value = (attr.normalised_value or "").strip() or (attr.raw_value or "").strip()
         if not name or not value:
             continue
-        g["attributes"].append({"name": name, "value": value, "source": attr.source})
+        g["attributes"].append({
+            "name": name, "value": value, "source": attr.source,
+            "confirmed": bool(attr.confirmed),
+        })
+
+    for g in groups.values():
+        n_ok = sum(1 for a in g["attributes"] if a["confirmed"])
+        g["confirmed_count"] = n_ok
+        g["unconfirmed_count"] = len(g["attributes"]) - n_ok
+        if n_ok:
+            g["state"] = "approved"
+        elif g["pipeline_status"] in ("cancelled", "failed"):
+            g["state"] = "stopped"
+        elif g["pipeline_status"] == "completed":
+            g["state"] = "none"
+        else:
+            g["state"] = "awaiting"
     return {"product_id": product_id, "pipelines": list(groups.values())}

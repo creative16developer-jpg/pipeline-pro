@@ -362,8 +362,9 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
   // (GET /api/products/{id}/attributes).
   type AttrGroup = {
     pipeline_id: number; store_name: string | null; pipeline_status: string | null;
-    attributes: { name: string; value: string; source: string | null }[];
-    unconfirmed_count: number;
+    attributes: { name: string; value: string; source: string | null; confirmed: boolean }[];
+    confirmed_count: number; unconfirmed_count: number;
+    state: "approved" | "awaiting" | "stopped" | "none";
   };
   const [attrGroups, setAttrGroups] = useState<AttrGroup[] | null>(null);
   const [attrLoading, setAttrLoading] = useState(false);
@@ -562,8 +563,8 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
           ) : tab === "attributes" ? (
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground">
-                Attributes confirmed in the review step, per pipeline (newest first). An upload sends the
-                confirmed attributes of the pipeline doing the upload — anything not listed here was not approved.
+                Every attribute extracted or entered for this product, per pipeline (newest first).
+                Attributes are approved when you click Upload — an upload sends the approved attributes of that pipeline.
               </p>
               {attrLoading || attrGroups === null ? (
                 <div className="py-8 flex justify-center">
@@ -571,43 +572,58 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
                 </div>
               ) : attrGroups.length === 0 ? (
                 <div className="text-sm text-muted-foreground bg-secondary/20 border border-border/50 rounded-xl p-4">
-                  No attributes were extracted or confirmed for this product in any pipeline.
+                  No attributes were extracted for this product in any pipeline.
                 </div>
               ) : (
-                attrGroups.map((g, gi) => (
-                  <div key={g.pipeline_id} className="bg-secondary/20 border border-border/50 rounded-xl p-3">
-                    <div className="flex items-center gap-2 mb-2 flex-wrap">
-                      <span className="text-sm font-semibold">PL-{g.pipeline_id}</span>
-                      {g.store_name && <span className="text-xs text-muted-foreground">· {g.store_name}</span>}
-                      {g.pipeline_status && <span className="text-xs text-muted-foreground">· {g.pipeline_status}</span>}
-                      {gi === 0 && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">latest</span>
+                attrGroups.map((g, gi) => {
+                  const stateBadge =
+                    g.state === "approved" ? { text: "approved", cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" } :
+                    g.state === "awaiting" ? { text: "awaiting approval", cls: "bg-amber-500/10 text-amber-400 border-amber-500/20" } :
+                    g.state === "stopped"  ? { text: "never approved", cls: "bg-secondary text-muted-foreground border-border" } :
+                                             { text: "not approved", cls: "bg-secondary text-muted-foreground border-border" };
+                  return (
+                    <div key={g.pipeline_id} className="bg-secondary/20 border border-border/50 rounded-xl p-3">
+                      <div className="flex items-center gap-2 mb-2 flex-wrap">
+                        <span className="text-sm font-semibold">PL-{g.pipeline_id}</span>
+                        {g.store_name && <span className="text-xs text-muted-foreground">· {g.store_name}</span>}
+                        {g.pipeline_status && <span className="text-xs text-muted-foreground">· {g.pipeline_status}</span>}
+                        <span className={cn("text-[10px] px-1.5 py-0.5 rounded border", stateBadge.cls)}>{stateBadge.text}</span>
+                        {gi === 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">latest</span>
+                        )}
+                      </div>
+                      {g.state === "awaiting" && (
+                        <div className="text-[11px] text-amber-400/90 mb-1">
+                          This pipeline hasn't reached upload yet. These attributes will be approved and uploaded when you click Upload in Content Review.
+                        </div>
                       )}
-                    </div>
-                    {g.attributes.length === 0 ? (
-                      <div className="text-xs text-amber-400">No attributes were confirmed in this pipeline.</div>
-                    ) : (
+                      {g.state === "stopped" && (
+                        <div className="text-[11px] text-muted-foreground mb-1">
+                          The pipeline stopped before upload ({g.pipeline_status}), so these attributes were never uploaded from it.
+                        </div>
+                      )}
                       <div className="divide-y divide-border/40">
-                        {g.attributes.map((a, ai) => (
-                          <div key={ai} className="flex items-start gap-3 py-1.5 text-sm">
-                            <span className="w-44 shrink-0 text-muted-foreground">{a.name}</span>
-                            <span className="flex-1 min-w-0 break-words">{a.value}</span>
-                            {a.source && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground shrink-0">
-                                {a.source === "mapping_rule" ? "rule" : a.source}
-                              </span>
-                            )}
-                          </div>
-                        ))}
+                        {g.attributes.map((a, ai) => {
+                          const faded = g.state === "approved" ? !a.confirmed : g.state !== "awaiting";
+                          return (
+                            <div key={ai} className={cn("flex items-start gap-3 py-1.5 text-sm", faded && "opacity-50")}>
+                              <span className="w-44 shrink-0 text-muted-foreground">{a.name}</span>
+                              <span className="flex-1 min-w-0 break-words">{a.value}</span>
+                              {g.state === "approved" && !a.confirmed && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground shrink-0">not approved</span>
+                              )}
+                              {a.source && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground shrink-0">
+                                  {a.source === "mapping_rule" ? "rule" : a.source}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
-                    )}
-                    {g.unconfirmed_count > 0 && (
-                      <div className="text-[11px] text-muted-foreground mt-2">
-                        {g.unconfirmed_count} extracted attribute(s) were not confirmed, so they were not uploaded.
-                      </div>
-                    )}
-                  </div>
-                ))
+                    </div>
+                  );
+                })
               )}
             </div>
           ) : tab === "raw" ? (
