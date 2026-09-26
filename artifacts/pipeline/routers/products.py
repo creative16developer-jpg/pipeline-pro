@@ -359,3 +359,54 @@ async def reorder_product_images(
 
     await db.commit()
     return {"ok": True}
+
+
+@router.get("/{product_id}/attributes")
+async def get_product_attributes(product_id: int, db: AsyncSession = Depends(get_db)):
+    """Read-only: the attributes confirmed for this product in the review
+    step, grouped by pipeline, newest pipeline first.
+
+    Client feedback: in Products -> Details "I can't see the selected
+    attributes so I can't check if any of them was selected or missing"
+    -- for INS-X5-WH-1 the only way to check was reading the pipeline
+    log. Upload sends the CONFIRMED ProductEnrichAttr rows of the
+    pipeline doing the upload (falling back to other pipelines only if
+    that one has none); Sync takes the newest per attribute across
+    pipelines. Showing each pipeline's confirmed set separately, newest
+    first, lets the operator see exactly what each run approved without
+    this endpoint guessing between those two rules. Values: the
+    normalised value if set, else the raw value (same as Upload/Sync);
+    name: woo_attr_name override if set, else the attribute name.
+    Unconfirmed rows were never uploaded -- only counted.
+    """
+    from models.models import PipelineJob, ProductEnrichAttr, Store
+
+    if not await db.get(Product, product_id):
+        raise HTTPException(status_code=404, detail="Product not found")
+    rows = (await db.execute(
+        select(ProductEnrichAttr, PipelineJob, Store)
+        .join(PipelineJob, PipelineJob.id == ProductEnrichAttr.pipeline_job_id)
+        .join(Store, Store.id == PipelineJob.store_id, isouter=True)
+        .where(ProductEnrichAttr.product_id == product_id)
+        .order_by(ProductEnrichAttr.pipeline_job_id.desc(), ProductEnrichAttr.id)
+    )).all()
+
+    groups: dict[int, dict] = {}
+    for attr, pl, store in rows:
+        g = groups.setdefault(pl.id, {
+            "pipeline_id": pl.id,
+            "store_id": pl.store_id,
+            "store_name": store.name if store else None,
+            "pipeline_status": pl.status,
+            "attributes": [],
+            "unconfirmed_count": 0,
+        })
+        if not attr.confirmed:
+            g["unconfirmed_count"] += 1
+            continue
+        name = (attr.woo_attr_name or "").strip() or (attr.attribute or "").strip()
+        value = (attr.normalised_value or "").strip() or (attr.raw_value or "").strip()
+        if not name or not value:
+            continue
+        g["attributes"].append({"name": name, "value": value, "source": attr.source})
+    return {"product_id": product_id, "pipelines": list(groups.values())}

@@ -354,7 +354,29 @@ export default function Products() {
 
 function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () => void }) {
   const { data: product, isLoading, refetch } = useProduct(id as number) as any;
-  const [tab, setTab] = useState<"content" | "raw" | "mapping">("content");
+  const [tab, setTab] = useState<"content" | "attributes" | "raw" | "mapping">("content");
+
+  // Client feedback: in Details "I can't see the selected attributes so I
+  // can't check if any of them was selected or missing" -- read-only view
+  // of what was CONFIRMED in the review step, per pipeline, newest first
+  // (GET /api/products/{id}/attributes).
+  type AttrGroup = {
+    pipeline_id: number; store_name: string | null; pipeline_status: string | null;
+    attributes: { name: string; value: string; source: string | null }[];
+    unconfirmed_count: number;
+  };
+  const [attrGroups, setAttrGroups] = useState<AttrGroup[] | null>(null);
+  const [attrLoading, setAttrLoading] = useState(false);
+  useEffect(() => { setAttrGroups(null); }, [id]);
+  useEffect(() => {
+    if (tab !== "attributes" || !id) return;
+    setAttrLoading(true);
+    fetch(`/api/products/${id}/attributes`)
+      .then(r => r.ok ? r.json() : { pipelines: [] })
+      .then(d => setAttrGroups(Array.isArray(d?.pipelines) ? d.pipelines : []))
+      .catch(() => setAttrGroups([]))
+      .finally(() => setAttrLoading(false));
+  }, [tab, id]);
 
   // Mapping tab state
   const [wooOpts, setWooOpts] = useState<WooOpt[]>([]);
@@ -489,7 +511,7 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
 
           {/* Tabs */}
           <div className="flex gap-1 p-1 bg-secondary/40 rounded-xl w-fit">
-            {(["content", "raw", "mapping"] as const).map((t) => (
+            {(["content", "attributes", "raw", "mapping"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -501,7 +523,7 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
                 )}
               >
                 {t === "mapping" && <Tag className="w-3.5 h-3.5" />}
-                {t === "content" ? "Generated Content" : t === "raw" ? "Raw Data" : "Mapping"}
+                {t === "content" ? "Generated Content" : t === "attributes" ? "Attributes" : t === "raw" ? "Raw Data" : "Mapping"}
               </button>
             ))}
           </div>
@@ -536,6 +558,57 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
                 <FieldRow label="Image Alt" value={(product as any).imageAlt} source={src?.image_alt} />
                 <FieldRow label="Image Names" value={(product as any).imageNames} source={src?.image_names} mono />
               </div>
+            </div>
+          ) : tab === "attributes" ? (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Attributes confirmed in the review step, per pipeline (newest first). An upload sends the
+                confirmed attributes of the pipeline doing the upload — anything not listed here was not approved.
+              </p>
+              {attrLoading || attrGroups === null ? (
+                <div className="py-8 flex justify-center">
+                  <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : attrGroups.length === 0 ? (
+                <div className="text-sm text-muted-foreground bg-secondary/20 border border-border/50 rounded-xl p-4">
+                  No attributes were extracted or confirmed for this product in any pipeline.
+                </div>
+              ) : (
+                attrGroups.map((g, gi) => (
+                  <div key={g.pipeline_id} className="bg-secondary/20 border border-border/50 rounded-xl p-3">
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                      <span className="text-sm font-semibold">PL-{g.pipeline_id}</span>
+                      {g.store_name && <span className="text-xs text-muted-foreground">· {g.store_name}</span>}
+                      {g.pipeline_status && <span className="text-xs text-muted-foreground">· {g.pipeline_status}</span>}
+                      {gi === 0 && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">latest</span>
+                      )}
+                    </div>
+                    {g.attributes.length === 0 ? (
+                      <div className="text-xs text-amber-400">No attributes were confirmed in this pipeline.</div>
+                    ) : (
+                      <div className="divide-y divide-border/40">
+                        {g.attributes.map((a, ai) => (
+                          <div key={ai} className="flex items-start gap-3 py-1.5 text-sm">
+                            <span className="w-44 shrink-0 text-muted-foreground">{a.name}</span>
+                            <span className="flex-1 min-w-0 break-words">{a.value}</span>
+                            {a.source && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground shrink-0">
+                                {a.source === "mapping_rule" ? "rule" : a.source}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {g.unconfirmed_count > 0 && (
+                      <div className="text-[11px] text-muted-foreground mt-2">
+                        {g.unconfirmed_count} extracted attribute(s) were not confirmed, so they were not uploaded.
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           ) : tab === "raw" ? (
             <div className="bg-black/40 border border-border rounded-xl p-4 overflow-x-auto max-h-96">
