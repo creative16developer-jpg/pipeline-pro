@@ -114,6 +114,9 @@ interface CatMapping {
   // resolve_category_path_for_store), not used as a direct ID list.
   is_global?: boolean;
   is_overridden?: boolean;
+  // "IF title contains" words (client milestone point 2); "" = ordinary
+  // rule for the whole Sunsky category.
+  title_contains?: string;
 }
 
 // Attribute Mapping "If category" suggestions. Client feedback confirmed
@@ -257,6 +260,8 @@ function CategoryMappingDictionary() {
   const [deleting, setDeleting] = useState<number | null>(null);
   const [addingNew, setAddingNew] = useState(false);
   const [newSunskyCat, setNewSunskyCat] = useState("");
+  const [newTitle, setNewTitle] = useState("");
+  const [editTitle, setEditTitle] = useState("");
   const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null; is_global: boolean }>({ woo_cats: [], primary_id: null, profile_id: null, is_global: false });
   const [starredCats, setStarredCats] = useState<{ id: string; name: string }[]>([]);
   const [translating, setTranslating] = useState(false);
@@ -372,6 +377,7 @@ function CategoryMappingDictionary() {
 
   const startEdit = (m: CatMapping) => {
     setEditingId(m.id);
+    setEditTitle(m.title_contains ?? "");
     setEditSel({ woo_cats: m.woo_cats, primary_id: m.primary_woo_cat_id ?? m.woo_cats[0]?.id ?? null, profile_id: m.profile_id ?? null, is_global: m.is_global ?? false });
   };
 
@@ -410,6 +416,7 @@ function CategoryMappingDictionary() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([{
           sunsky_cat: newSunskyCat.trim(),
+          title_contains: newTitle.trim(),
           woo_cats: newSel.woo_cats,
           primary_woo_cat_id: primary_id,
           profile_id: newSel.profile_id,
@@ -419,6 +426,7 @@ function CategoryMappingDictionary() {
       toast({ title: newSel.is_global ? "Global mapping added" : "Mapping added" });
       setAddingNew(false);
       setNewSunskyCat("");
+      setNewTitle("");
       setNewSel({ woo_cats: [], primary_id: null, profile_id: null, is_global: false });
       reload();
     } catch (e: any) {
@@ -438,6 +446,10 @@ function CategoryMappingDictionary() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([{
           sunsky_cat: m.sunsky_cat,
+          title_contains: editTitle.trim(),
+          // Same scope (store/global) -> edit this exact rule in place, so
+          // changing its title words doesn't create a second rule.
+          ...((m.is_global ?? false) === editSel.is_global ? { id: m.id } : {}),
           woo_cats: editSel.woo_cats,
           primary_woo_cat_id: editSel.primary_id,
           profile_id: editSel.profile_id,
@@ -600,6 +612,17 @@ function CategoryMappingDictionary() {
           </div>
 
           <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">If title contains (optional)</label>
+            <input
+              value={newTitle}
+              onChange={e => setNewTitle(e.target.value)}
+              placeholder="e.g. frame, cage — leave empty for the whole Sunsky category"
+              className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:border-primary"
+            />
+            <p className="text-[11px] text-muted-foreground">Optional. Only products whose title contains one of these words (comma-separated, any case) use this rule, e.g. frame, cage. Checked on the original Sunsky title and the current title. Rules with words are checked first; the rule without words covers the rest of the category.</p>
+          </div>
+
+          <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">WooCommerce Categories</label>
             {newSel.woo_cats.length > 0 && (
               <div className="flex flex-wrap gap-1 mb-2">
@@ -740,6 +763,15 @@ function CategoryMappingDictionary() {
                             <X className="w-4 h-4" />
                           </button>
                         </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-muted-foreground">If title contains (optional)</label>
+                          <input
+                            value={editTitle}
+                            onChange={e => setEditTitle(e.target.value)}
+                            placeholder="e.g. frame, cage — empty = whole Sunsky category"
+                            className="w-full px-3 py-2 rounded-lg bg-background border border-border text-sm focus:outline-none focus:border-primary"
+                          />
+                        </div>
 
                         {/* Selected chips */}
                         {editSel.woo_cats.length > 0 && (
@@ -827,8 +859,14 @@ function CategoryMappingDictionary() {
                   ) : (
                     <>
                       <td className="px-4 py-3 font-mono text-xs text-foreground">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           {m.sunsky_cat}
+                          {(m.title_contains ?? "").trim() && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 font-sans"
+                              title="Only products whose title contains one of these words use this rule"
+                            >title contains: {m.title_contains}</span>
+                          )}
                           {m.is_global ? (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-400" title="Resolved by name against every store's own category tree">Global</span>
                           ) : (

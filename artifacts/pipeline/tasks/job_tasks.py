@@ -339,28 +339,136 @@ async def _broken_store_rules(db, store_id: int, rules) -> dict[str, list[int]]:
     return broken
 
 
-async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str) -> Optional[dict]:
-    """Resolves a Sunsky category name to WooCommerce category ID(s) for
-    a specific store. Checks a store-specific SunskyCategoryMapping row
-    first (unchanged from before this change: its stored IDs are used
-    directly); if none exists (or has no usable IDs), falls back to a
-    global (store_id IS NULL) mapping for the same sunsky_cat, resolved
-    against THIS store's own category tree via
-    _resolve_category_path_for_store.
+def _title_terms(title_contains) -> list[str]:
+    """Words of an "IF title contains" rule: comma-separated, trimmed,
+    lower-cased; [] = no title condition (the ordinary rule)."""
+    return [t.strip().lower() for t in str(title_contains or "").split(",") if t.strip()]
 
-    Returns {"woo_cat_ids": [...], "primary_woo_cat_id": ..., "source": "store"|"global"}
-    or None if neither a store-specific nor an applicable global mapping exists.
+
+def _product_titles(product=None, raw: dict | None = None, current_name: str | None = None) -> list[str]:
+    """Titles an "IF title contains" rule is checked against: the ORIGINAL
+    Sunsky title (raw_data "name"/"title" -- English, never changed) and the
+    product's CURRENT title (CSV / generated, usually Bulgarian). A match in
+    either counts, so both "frame" and "рамка" work."""
+    if product is not None:
+        raw = raw if raw is not None else (getattr(product, "raw_data", None) or {})
+        current_name = current_name if current_name is not None else getattr(product, "name", None)
+    raw = raw or {}
+    out: list[str] = []
+    for v in (raw.get("name"), raw.get("title"), current_name):
+        v = str(v or "").strip()
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
+def _choose_cat_rule(rows, titles: list[str] | None):
+    """Pick which Category Mapping rule applies to ONE product, among the
+    rules of one Sunsky category (one store, or the global rules).
+
+    Client feedback (milestone point 2): a Sunsky category such as
+    "DJI & Insta360 Accessories » Insta360 X Series » Protection & Cases"
+    mixes waterproof cases, silicone cases, frames and tempered glass, which
+    belong in different WooCommerce categories -- "IF Sunsky category = X AND
+    product title contains Y -> map to WooCommerce category Z".
+    Rules WITH title words are checked first (creation order); the first
+    whose words (any of them, case-insensitive) appear in any of the
+    product's titles wins. Otherwise the rule WITHOUT title words (the
+    ordinary rule for the whole category) is the fallback. None = no rule
+    applies. With titles=None/[] only the ordinary rule can match -- exactly
+    the behaviour before this feature."""
+    titles_l = [t.lower() for t in (titles or []) if t]
+    ordered = sorted([r for r in rows if r is not None], key=lambda r: r.id or 0)
+    for r in ordered:
+        terms = _title_terms(getattr(r, "title_contains", ""))
+        if terms and any(term in t for term in terms for t in titles_l):
+            return r
+    for r in ordered:
+        if not _title_terms(getattr(r, "title_contains", "")):
+            return r
+    return None
+
+
+async def _broken_rule_ids(db, store_id: int, rules) -> dict[int, list[int]]:
+    """{rule_id: [missing woo IDs]} -- same check as _broken_store_rules,
+    keyed per RULE instead of per Sunsky category, since one category can
+    now have several rules ("IF title contains") that differ."""
+    from models.models import WooCategory
+    from sqlalchemy import select as _sel_bi
+    rules = [r for r in rules if r is not None]
+    if not rules:
+        return {}
+    existing = set((await db.execute(
+        _sel_bi(WooCategory.woo_id).where(WooCategory.store_id == store_id)
+    )).scalars().all())
+    if not existing:
+        return {}
+    out: dict[int, list[int]] = {}
+    for r in rules:
+        missing = [i for i in _rule_woo_cat_ids(r) if i not in existing]
+        if missing:
+            out[r.id] = missing
+    return out
+
+
+async def _cat_rule_for_product(db, store_id: int, sunsky_cat: str, titles: list[str] | None,
+                                store_rows=None, broken_ids: dict | None = None):
+    """Which Category Mapping rule covers ONE product -- the single
+    decision the pause check, Cat. Review and its Confirm all share.
+    Returns (status, store_rule, global_resolved):
+      "store"  -- a store rule applies (_choose_cat_rule)
+      "broken" -- a store rule applies but points at categories this store
+                  no longer has (Upload would still use it, so no global
+                  fallback)
+      "global" -- no store rule applies; a global rule resolves for this store
+      None     -- nothing applies: the operator must choose a category."""
+    from models.models import SunskyCategoryMapping
+    from sqlalchemy import select as _sel_cr
+    if store_rows is None:
+        store_rows = (await db.execute(
+            _sel_cr(SunskyCategoryMapping).where(
+                SunskyCategoryMapping.store_id == store_id,
+                SunskyCategoryMapping.sunsky_cat == sunsky_cat,
+            )
+        )).scalars().all()
+    rule = _choose_cat_rule(store_rows, titles)
+    if rule is not None:
+        if broken_ids is None:
+            broken_ids = await _broken_rule_ids(db, store_id, [rule])
+        if rule.id in broken_ids:
+            return "broken", rule, None
+        return "store", rule, None
+    g = await _resolve_category_mapping(db, store_id, sunsky_cat, titles)
+    if g and g.get("source") == "global":
+        return "global", None, g
+    return None, None, None
+
+
+async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str, titles: list[str] | None = None) -> Optional[dict]:
+    """Resolves a Sunsky category name to WooCommerce category ID(s) for
+    a specific store (and, when titles are given, a specific product).
+    Store rules first -- the rule applying to this product is picked by
+    _choose_cat_rule ("IF title contains" rules first, then the ordinary
+    rule); its stored IDs are used directly. If no store rule applies (or it
+    has no usable IDs), the global (store_id IS NULL) rules for the same
+    sunsky_cat are chosen the same way and resolved against THIS store's
+    own category tree via _resolve_category_path_for_store.
+
+    Returns {"woo_cat_ids": [...], "primary_woo_cat_id": ..., "source":
+    "store"|"global", "rule_id": ..., "title_contains": ...} or None.
+    titles=None keeps the pre-feature behaviour (ordinary rules only).
     """
     from models.models import SunskyCategoryMapping
     from sqlalchemy import select as _sel_cm
     import json as _json_cm
 
-    mapping = (await db.execute(
+    store_rows = (await db.execute(
         _sel_cm(SunskyCategoryMapping).where(
             SunskyCategoryMapping.store_id == store_id,
             SunskyCategoryMapping.sunsky_cat == sunsky_cat,
         )
-    )).scalar_one_or_none()
+    )).scalars().all()
+    mapping = _choose_cat_rule(store_rows, titles)
 
     if mapping:
         woo_cat_ids: list[int] = []
@@ -370,14 +478,16 @@ async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str) -> Optio
             woo_cat_ids = [mapping.woo_cat_id]
         if woo_cat_ids:
             primary = mapping.primary_woo_cat_id or woo_cat_ids[-1]
-            return {"woo_cat_ids": woo_cat_ids, "primary_woo_cat_id": primary, "source": "store"}
+            return {"woo_cat_ids": woo_cat_ids, "primary_woo_cat_id": primary, "source": "store",
+                    "rule_id": mapping.id, "title_contains": mapping.title_contains or ""}
 
-    global_mapping = (await db.execute(
+    global_rows = (await db.execute(
         _sel_cm(SunskyCategoryMapping).where(
             SunskyCategoryMapping.store_id.is_(None),
             SunskyCategoryMapping.sunsky_cat == sunsky_cat,
         )
-    )).scalar_one_or_none()
+    )).scalars().all()
+    global_mapping = _choose_cat_rule(global_rows, titles)
     if not global_mapping or not global_mapping.woo_cats_json:
         return None
 
@@ -386,7 +496,8 @@ async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str) -> Optio
     if not resolved:
         return None
     woo_cat_ids = [c["id"] for c in resolved]
-    return {"woo_cat_ids": woo_cat_ids, "primary_woo_cat_id": woo_cat_ids[-1], "source": "global"}
+    return {"woo_cat_ids": woo_cat_ids, "primary_woo_cat_id": woo_cat_ids[-1], "source": "global",
+            "rule_id": global_mapping.id, "title_contains": global_mapping.title_contains or ""}
 
 
 async def _execute_job(job_id: int):
@@ -1511,13 +1622,17 @@ async def _run_upload(db, job):
                         cat_id = str(raw_for_cat.get("categoryId") or raw_for_cat.get("catId") or "").strip()
                         sunsky_cat = upload_category_name_map.get(cat_id, cat_id)
                     if sunsky_cat and job.store_id:
-                        resolved_cat = await _resolve_category_mapping(db, job.store_id, sunsky_cat)
+                        resolved_cat = await _resolve_category_mapping(
+                            db, job.store_id, sunsky_cat, _product_titles(product)
+                        )
                         if resolved_cat:
                             woo_cat_ids = resolved_cat["woo_cat_ids"]
                             primary_woo_cat_id = resolved_cat["primary_woo_cat_id"]
+                            _tc_note = (f", title contains {resolved_cat['title_contains']!r}"
+                                        if resolved_cat.get("title_contains") else "")
                             await _log(db, job.id, LogLevel.info,
                                        f"  {product.sku}: category mapping {sunsky_cat!r} "
-                                       f"({resolved_cat['source']}) → woo ids {woo_cat_ids}")
+                                       f"({resolved_cat['source']}{_tc_note}) → woo ids {woo_cat_ids}")
                         else:
                             await _log(db, job.id, LogLevel.warn,
                                        f"  {product.sku}: no category mapping for {sunsky_cat!r} — product will have no category")
@@ -2078,16 +2193,21 @@ async def _run_upload(db, job):
                         if _resolved_name and _resolved_name not in _scm_candidates:
                             _scm_candidates.append(_resolved_name)
 
+                    # A Sunsky category can now have several rules (one per
+                    # "IF title contains" words + the ordinary rule), so
+                    # fetch all and let _choose_cat_rule pick the one for
+                    # THIS product -- the same choice every other step makes.
+                    _p2_titles = _product_titles(prod)
                     _mapping2 = None
                     _matched_key = None
                     for _cand in _scm_candidates:
                         # Case-insensitive match — handles "mobile accessories" vs "Mobile Accessories"
-                        _mapping2 = (await db.execute(
+                        _mapping2 = _choose_cat_rule((await db.execute(
                             _sel_scm(_SCM2).where(
                                 _SCM2.store_id == job.store_id,
                                 _SCM2.sunsky_cat.ilike(_cand),
                             )
-                        )).scalar_one_or_none()
+                        )).scalars().all(), _p2_titles)
                         if _mapping2:
                             _matched_key = _cand
                             break
@@ -2103,9 +2223,11 @@ async def _run_upload(db, job):
                             cat_names   = [_mapping2.woo_cat_name or _matched_key or ""]
                         p2_primary_woo_cat_id = _mapping2.primary_woo_cat_id or (cat_woo_ids[-1] if cat_woo_ids else None)
                         if cat_woo_ids:
+                            _tc2 = (f" [title contains {_mapping2.title_contains!r}]"
+                                    if (_mapping2.title_contains or "").strip() else "")
                             await _log(db, job.id, LogLevel.info,
                                        f"  {prod.sku}: SunskyCategoryMapping "
-                                       f"{_matched_key!r} → {cat_woo_ids}")
+                                       f"{_matched_key!r}{_tc2} → {cat_woo_ids}")
                     else:
                         # Client feedback: "lets do whichever is necessary
                         # to do for per store thing... global and per
@@ -2122,12 +2244,12 @@ async def _run_upload(db, job):
                         _global_mapping2 = None
                         _global_matched_key = None
                         for _cand in _scm_candidates:
-                            _global_mapping2 = (await db.execute(
+                            _global_mapping2 = _choose_cat_rule((await db.execute(
                                 _sel_scm(_SCM2).where(
                                     _SCM2.store_id.is_(None),
                                     _SCM2.sunsky_cat.ilike(_cand),
                                 )
-                            )).scalar_one_or_none()
+                            )).scalars().all(), _p2_titles)
                             if _global_mapping2:
                                 _global_matched_key = _cand
                                 break
@@ -2546,7 +2668,8 @@ def _parse_params_table(html: str) -> dict[str, str]:
     return parser.pairs
 
 
-async def _sync_rule_category_ids(db, store_id: int, raw_p: dict, sunsky_cat_id, display_name: str):
+async def _sync_rule_category_ids(db, store_id: int, raw_p: dict, sunsky_cat_id, display_name: str,
+                                  titles: list[str] | None = None):
     """Sync's Category Mapping rule lookup, extracted verbatim from the
     Sync assignment step so Step A can ask the SAME question before
     creating anything. Returns (woo_cat_ids, primary_woo_cat_id, source)
@@ -2572,9 +2695,9 @@ async def _sync_rule_category_ids(db, store_id: int, raw_p: dict, sunsky_cat_id,
         candidates.append(display_name)
 
     for cand in candidates:
-        m = (await db.execute(
+        m = _choose_cat_rule((await db.execute(
             _ssel_scm(_SSCM).where(_SSCM.store_id == store_id, _SSCM.sunsky_cat.ilike(cand))
-        )).scalar_one_or_none()
+        )).scalars().all(), titles)
         if m:
             ids: list[int] = []
             if m.woo_cats_json:
@@ -2585,9 +2708,9 @@ async def _sync_rule_category_ids(db, store_id: int, raw_p: dict, sunsky_cat_id,
             return (ids, primary, f"SunskyCategoryMapping ({cand!r})") if ids else ([], None, "")
 
     for cand in candidates:
-        g = (await db.execute(
+        g = _choose_cat_rule((await db.execute(
             _ssel_scm(_SSCM).where(_SSCM.store_id.is_(None), _SSCM.sunsky_cat.ilike(cand))
-        )).scalar_one_or_none()
+        )).scalars().all(), titles)
         if g:
             resolved = None
             if g.woo_cats_json:
@@ -3101,7 +3224,8 @@ async def _run_sync(db, job):
                     try:
                         _all = True
                         for _pp in _prods:
-                            _ids, _, _ = await _sync_rule_category_ids(db, store_id, _pp.raw_data or {}, _cid, _cname)
+                            _ids, _, _ = await _sync_rule_category_ids(db, store_id, _pp.raw_data or {}, _cid, _cname,
+                                                                       _product_titles(_pp))
                             if not _ids:
                                 _all = False
                                 break
@@ -3165,7 +3289,9 @@ async def _run_sync(db, job):
                                     woo_cats_json=_json_local.dumps([{"id": woo_id, "name": _cat_name}]),
                                     primary_woo_cat_id=woo_id,
                                 ).on_conflict_do_nothing(
-                                    index_elements=["store_id", "sunsky_cat"],
+                                    # the ordinary rule (title_contains '') --
+                                    # matches uq_category_mapping_store_title
+                                    index_elements=["store_id", "sunsky_cat", "title_contains"],
                                 )
                                 # Client feedback (live test, PL-115/116):
                                 # "which category it should assign in
@@ -3259,6 +3385,7 @@ async def _run_sync(db, job):
                         _rule_ids, _rule_primary, _rule_source = await _sync_rule_category_ids(
                             db, store_id, raw_p, sunsky_cat_id,
                             (bfs_meta.get(sunsky_cat_id) or {}).get("name", "") if sunsky_cat_id else "",
+                            _product_titles(prod),
                         )
                         if _rule_ids:
                             woo_cat_ids = _rule_ids

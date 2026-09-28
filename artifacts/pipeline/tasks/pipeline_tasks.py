@@ -62,6 +62,16 @@ async def _unmapped_sunsky_categories(db, pl) -> list[str]:
     if not categories:
         return []
 
+    # Decided PER PRODUCT (milestone point 2, "IF title contains"): one
+    # Sunsky category can have several rules, so it may be covered for some
+    # of its products (e.g. frames) but not others (e.g. silicone cases). A
+    # category needs mapping if ANY of its products is covered by no rule,
+    # or by a store rule whose WooCommerce category no longer exists
+    # (earlier broken-rule fix; Upload would use that rule, so no global
+    # fallback) -- via the same _cat_rule_for_product the Cat. Review
+    # screen and its Confirm use. A product with no applicable store rule
+    # falls back to global rules (earlier global-rule fix).
+    from tasks.job_tasks import _cat_rule_for_product, _broken_rule_ids, _product_titles
     store_rules = (
         await db.execute(
             select(SunskyCategoryMapping).where(
@@ -70,39 +80,25 @@ async def _unmapped_sunsky_categories(db, pl) -> list[str]:
             )
         )
     ).scalars().all()
-    # A store rule whose WooCommerce category no longer exists in this
-    # store (see job_tasks._broken_store_rules -- PL-151 / rule 129 ->
-    # missing category 3065) must pause like a missing rule: Upload would
-    # still use that broken store rule (it wins over any global rule), so
-    # it is NOT sent through the global fallback below either.
-    from tasks.job_tasks import _broken_store_rules
-    broken = await _broken_store_rules(db, pl.store_id, store_rules)
-    mapped = {r.sunsky_cat for r in store_rules}
-    broken_cats = sorted(c for c in broken if c in categories)
+    rules_by_cat: dict[str, list] = {}
+    for r in store_rules:
+        rules_by_cat.setdefault(r.sunsky_cat, []).append(r)
+    broken_ids = await _broken_rule_ids(db, pl.store_id, store_rules)
 
-    # Client feedback confirmed via DB: a GLOBAL "Protection Frame" rule
-    # (sunsky_category_mappings id 219, store_id NULL) was created at
-    # 11:56:26, yet PL-148 (hdcam.bg, store 6) still paused at 12:44:29
-    # with "1 Sunsky category need mapping (Protection Frame)". The query
-    # above only ever looked at store_id == pl.store_id, so global rules
-    # never counted -- even though Upload itself honours them via
-    # _resolve_category_mapping. Fall back to that SAME resolver for
-    # anything without a store row, so the pause decision always agrees
-    # with what Upload will actually do (including its rule that a global
-    # rule only applies if its category path exists in this store).
-    unmapped = sorted(categories - mapped)
-    if unmapped:
-        from tasks.job_tasks import _resolve_category_mapping
-        still_unmapped = []
-        for cat in unmapped:
-            try:
-                if await _resolve_category_mapping(db, pl.store_id, cat):
-                    continue
-            except Exception:
-                pass
-            still_unmapped.append(cat)
-        unmapped = still_unmapped
-    return sorted(set(unmapped) | set(broken_cats))
+    unmapped: set[str] = set()
+    for p in products:
+        cat = extract_sunsky_category(p.raw_data or {}, category_name_map)
+        if not cat or cat in unmapped:
+            continue
+        try:
+            status, _, _ = await _cat_rule_for_product(
+                db, pl.store_id, cat, _product_titles(p), rules_by_cat.get(cat, []), broken_ids
+            )
+        except Exception:
+            status = None
+        if status not in ("store", "global"):
+            unmapped.add(cat)
+    return sorted(unmapped)
 
 
 async def _confirm_all_enrich_attrs(db, pl_id: int) -> None:
@@ -912,7 +908,8 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
         # product's assigned profile expects, but that no rule or AI
         # extraction produced, is surfaced as an unresolved row requiring
         # manual entry in the Review step — rather than silently missing.
-        expected_attrs = await load_profile_attrs_for_category(db, pl.store_id, sunsky_cat)
+        from tasks.job_tasks import _product_titles as _ee_titles
+        expected_attrs = await load_profile_attrs_for_category(db, pl.store_id, sunsky_cat, _ee_titles(product))
         if expected_attrs:
             present_lower = {a["attribute"].strip().lower() for a in attrs}
             for exp_attr in expected_attrs:

@@ -62,6 +62,76 @@ class CategoryMappingUpdate(BaseModel):
     woo_cats: list[WooCatEntry] = []
     primary_woo_cat_id: Optional[int] = None
     profile_id: Optional[int] = None
+    # "IF title contains" words (milestone point 2); "" = ordinary rule.
+    title_contains: str = ""
+    # Set when editing an existing rule: that exact row is updated (so
+    # changing its title words edits it instead of adding a second rule).
+    id: Optional[int] = None
+
+
+def _norm_title_contains(value) -> str:
+    """'frame,  Cage ,' -> 'frame, Cage' (display form; matching is
+    case-insensitive -- job_tasks._title_terms)."""
+    return ", ".join(t.strip() for t in str(value or "").split(",") if t.strip())
+
+
+async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappingUpdate") -> None:
+    """Insert or update one Category Mapping rule (store rule, or global
+    when store_id is None). Rules are unique per (store, Sunsky category,
+    title words); with entry.id the given rule is edited in place."""
+    title = _norm_title_contains(entry.title_contains)
+    primary_id = entry.primary_woo_cat_id or (entry.woo_cats[0].id if entry.woo_cats else None)
+    primary_cat = next((c for c in entry.woo_cats if c.id == primary_id), entry.woo_cats[0] if entry.woo_cats else None)
+    fields = {
+        "woo_cat_id":         primary_cat.id if primary_cat else None,
+        "woo_cat_name":       primary_cat.name if primary_cat else None,
+        "woo_cats_json":      json.dumps([{"id": c.id, "name": c.name} for c in entry.woo_cats]),
+        "primary_woo_cat_id": primary_id,
+        "profile_id":         entry.profile_id,
+        "updated_at":         datetime.now(timezone.utc),
+    }
+    scope = (SunskyCategoryMapping.store_id.is_(None) if store_id is None
+             else SunskyCategoryMapping.store_id == store_id)
+    # Title words match case-insensitively (job_tasks._title_terms), so
+    # "Waterproof" and "waterproof" are the SAME rule -- compare lower-cased
+    # (the unique index itself is case-sensitive).
+    same_words = func.lower(SunskyCategoryMapping.title_contains) == title.lower()
+    edit_id = entry.id
+    if not edit_id:
+        # Adding words that an existing rule already has (any case) updates
+        # that rule instead of creating a duplicate.
+        edit_id = (await db.execute(select(SunskyCategoryMapping.id).where(
+            scope, SunskyCategoryMapping.sunsky_cat == entry.sunsky_cat, same_words,
+        ))).scalars().first()
+    if edit_id:
+        row = await db.get(SunskyCategoryMapping, edit_id)
+        if row is None or row.store_id != store_id:
+            raise HTTPException(404, "Rule not found")
+        clash = (await db.execute(select(SunskyCategoryMapping.id).where(
+            scope,
+            SunskyCategoryMapping.sunsky_cat == entry.sunsky_cat,
+            same_words,
+            SunskyCategoryMapping.id != row.id,
+        ))).first()
+        if clash:
+            raise HTTPException(409, "A rule for this Sunsky category with the same title words already exists")
+        row.sunsky_cat = entry.sunsky_cat
+        row.title_contains = title
+        for k, v in fields.items():
+            setattr(row, k, v)
+        return
+    stmt = pg_insert(SunskyCategoryMapping).values(
+        store_id=store_id, sunsky_cat=entry.sunsky_cat, title_contains=title, times_used=0, **fields,
+    )
+    if store_id is None:
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["sunsky_cat", "title_contains"],
+            index_where=SunskyCategoryMapping.store_id.is_(None),
+            set_=fields,
+        )
+    else:
+        stmt = stmt.on_conflict_do_update(index_elements=["store_id", "sunsky_cat", "title_contains"], set_=fields)
+    await db.execute(stmt)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -116,6 +186,48 @@ def _mapping_woo_cats(m: SunskyCategoryMapping) -> list[dict]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Pipeline-scoped endpoints
 # ─────────────────────────────────────────────────────────────────────────────
+
+async def _category_coverage(db, pl, products, category_name_map) -> dict:
+    """Per Sunsky category in this pipeline: which products are covered by a
+    Category Mapping rule and which are not -- decided per PRODUCT with
+    job_tasks._cat_rule_for_product (the same decision the pause check
+    makes), since one category can have several "IF title contains" rules
+    (milestone point 2). Returns {cat: {"products", "unresolved",
+    "rules_used": {key: {"rule", "global", "count"}}, "broken": [(rule,
+    missing_ids)], "store_rules": [...]}}."""
+    from tasks.job_tasks import _cat_rule_for_product, _broken_rule_ids, _product_titles
+    store_rules = (await db.execute(
+        select(SunskyCategoryMapping).where(SunskyCategoryMapping.store_id == pl.store_id)
+    )).scalars().all()
+    by_cat: dict[str, list] = {}
+    for r in store_rules:
+        by_cat.setdefault(r.sunsky_cat, []).append(r)
+    broken_ids = await _broken_rule_ids(db, pl.store_id, store_rules)
+    cov: dict[str, dict] = {}
+    for p in products:
+        cat = _extract_sunsky_cat(p.raw_data or {}, category_name_map)
+        if not cat:
+            continue
+        c = cov.setdefault(cat, {"products": [], "unresolved": [], "rules_used": {}, "broken": [],
+                                 "store_rules": by_cat.get(cat, [])})
+        c["products"].append(p)
+        try:
+            status, rule, g = await _cat_rule_for_product(
+                db, pl.store_id, cat, _product_titles(p), by_cat.get(cat, []), broken_ids
+            )
+        except Exception as _cov_e:
+            logger.warning(f"[map-data] rule check failed for {cat!r}: {_cov_e}")
+            status, rule, g = None, None, None
+        if status in ("store", "global"):
+            key = ("s", rule.id) if rule is not None else ("g", g.get("rule_id"))
+            u = c["rules_used"].setdefault(key, {"rule": rule, "global": g, "count": 0})
+            u["count"] += 1
+        else:
+            c["unresolved"].append(p)
+            if status == "broken":
+                c["broken"].append((rule, broken_ids.get(rule.id, [])))
+    return cov
+
 
 @router.get("/pipelines/{pipeline_id}/map-data")
 async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
@@ -178,7 +290,11 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             )
         )
     ).scalars().all()
-    saved: dict[str, SunskyCategoryMapping] = {r.sunsky_cat: r for r in saved_rows}
+    # Ordinary rules (no "IF title contains" words) by Sunsky category --
+    # used for the synthetic CSV Import / Uncategorised Products card.
+    saved: dict[str, SunskyCategoryMapping] = {
+        r.sunsky_cat: r for r in saved_rows if not (r.title_contains or "").strip()
+    }
 
     # Load WooCommerce categories — include parent_id for tree display
     woo_cats = (
@@ -217,52 +333,67 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             select(SunskyCategoryMapping).where(SunskyCategoryMapping.store_id.is_(None))
         )
     ).scalars().all()
-    global_saved: dict[str, SunskyCategoryMapping] = {r.sunsky_cat: r for r in global_rows}
-    from tasks.job_tasks import _resolve_category_mapping, _broken_store_rules
+
+    from tasks.job_tasks import _broken_store_rules, _title_terms
     from pipeline.sunsky_client import build_category_path as _build_sunsky_path
-    # Store rules whose WooCommerce category no longer exists in this
-    # store (PL-151: rule 129 -> missing category 3065). Shown as a card
-    # needing a category, like a missing rule, so the operator is asked;
-    # confirming upserts the store rule, which repairs it permanently.
-    broken_map = await _broken_store_rules(db, pl.store_id, saved_rows)
+    # Cards are built from per-PRODUCT coverage ("IF title contains" rules,
+    # milestone point 2): a category is "already mapped" only if every one
+    # of its products is covered by some rule (store, global, or a title
+    # rule); otherwise the card asks for a category for the UNCOVERED
+    # products only -- confirming saves the ordinary rule (no title words)
+    # for the category, which then covers them. Earlier fixes are kept:
+    # global rules count when no store rule applies; a store rule whose
+    # WooCommerce category no longer exists does not count.
+    coverage = await _category_coverage(db, pl, products, category_name_map)
+    global_saved: dict[int, SunskyCategoryMapping] = {r.id: r for r in global_rows}
     for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1]):
-        m = saved.get(cat)
-        broken_ids = broken_map.get(cat) if m else None
-        woo_cat_list = _mapping_woo_cats(m) if m and not broken_ids else []
-        primary_id = (m.primary_woo_cat_id if m and not broken_ids
-                      else (woo_cat_list[0]["id"] if woo_cat_list else None))
-        # Client feedback confirmed via DB: PL-148 (hdcam.bg) showed
-        # "Protection Frame" as Unmapped although a GLOBAL rule for it
-        # (id 219, store_id NULL) already existed -- `saved` above only
-        # holds this store's own rows. Same gap Content Review
-        # (pipeline.py content-data) already had fixed; reuses the exact
-        # resolver Upload uses, so this screen matches what Upload does:
-        # a global rule counts only if its category path exists by name
-        # in THIS store's tree, and is shown with this store's real IDs.
-        source = "store" if m and not broken_ids else None
-        g = None
-        if m is None:
-            try:
-                g_res = await _resolve_category_mapping(db, pl.store_id, cat)
-            except Exception as _g_e:
-                g_res = None
-                logger.warning(f"[map-data] global category resolution failed for {cat!r}: {_g_e}")
-            if g_res and g_res.get("source") == "global":
-                g = global_saved.get(cat)
-                woo_cat_list = [{"id": i, "name": woo_name_by_id.get(i, "")} for i in g_res["woo_cat_ids"]]
-                primary_id = g_res["primary_woo_cat_id"]
-                source = "global"
-        # Only for a genuinely new (unmapped) category -- an already-
-        # saved rule reflects a deliberate, possibly-edited choice the
-        # operator already made, which this must never silently alter.
+        cov = coverage.get(cat) or {"products": [], "unresolved": [], "rules_used": {}, "broken": [], "store_rules": []}
+        unresolved = cov["unresolved"]
+        used = list(cov["rules_used"].values())
+        ordinary = next((r for r in cov["store_rules"] if not _title_terms(r.title_contains)), None)
+        broken_ids: list[int] = []
+        broken_titles: list[str] = []
+        for _br, _missing in cov["broken"]:
+            broken_ids.extend(i for i in _missing if i not in broken_ids)
+            if (_br.title_contains or "").strip() and _br.title_contains not in broken_titles:
+                broken_titles.append(_br.title_contains)
+
+        def _cats_of(u):
+            if u["rule"] is not None:
+                return _mapping_woo_cats(u["rule"]), u["rule"].primary_woo_cat_id
+            ids = u["global"]["woo_cat_ids"]
+            return [{"id": i, "name": woo_name_by_id.get(i, "")} for i in ids], u["global"]["primary_woo_cat_id"]
+
+        title_rules = []
+        for u in used:
+            r = u["rule"] or global_saved.get(u["global"].get("rule_id"))
+            if r is not None and (r.title_contains or "").strip():
+                title_rules.append({"title_contains": r.title_contains, "product_count": u["count"],
+                                    "woo_cats": _cats_of(u)[0],
+                                    "source": "store" if u["rule"] is not None else "global"})
+
+        if not unresolved and used:
+            # shown: the ordinary rule if it was used, else the most-used rule
+            main = next((u for u in used if u["rule"] is not None and u["rule"] is ordinary), None) \
+                or max(used, key=lambda u: u["count"])
+            woo_cat_list, primary_id = _cats_of(main)
+            primary_id = primary_id or (woo_cat_list[-1]["id"] if woo_cat_list else None)
+            main_rule = main["rule"] or global_saved.get(main["global"].get("rule_id"))
+            source = "store" if main["rule"] is not None else "global"
+            profile_id = main_rule.profile_id if main_rule else None
+            times_used = main_rule.times_used if main_rule else 0
+            shown_count, shown_skus = count, cat_skus.get(cat, [])[:10]
+        else:
+            woo_cat_list, primary_id, source = [], None, None
+            profile_id = ordinary.profile_id if ordinary else None
+            times_used = ordinary.times_used if ordinary else 0
+            shown_count = len(unresolved) or count
+            shown_skus = [p.site_sku or p.sku or f"#{p.id}" for p in unresolved][:10] or cat_skus.get(cat, [])[:10]
+
         sunsky_ancestor_matches: list[dict] = []
-        if (m is None or broken_ids) and source is None and cat_raw_id.get(cat):
+        if source is None and cat_raw_id.get(cat):
             try:
                 sunsky_path = _build_sunsky_path(cat_raw_id[cat])
-                # Exclude the last entry -- that's the leaf itself (this
-                # same Sunsky category), which the operator picks a
-                # WooCommerce category for explicitly; only its
-                # ancestors are auto-matched here.
                 for ancestor in sunsky_path[:-1]:
                     match = woo_cat_by_name.get(str(ancestor.get("name", "")).strip().lower())
                     if match:
@@ -271,26 +402,22 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
                 logger.warning(f"[map-data] Sunsky ancestor match failed for {cat!r}: {_sap_e}")
         categories.append({
             "sunsky_cat":         cat,
-            "product_count":      count,
-            "sample_skus":        cat_skus.get(cat, [])[:10],
+            "product_count":      shown_count,
+            "sample_skus":        shown_skus,
             "woo_cats":           woo_cat_list,
             "primary_woo_cat_id": primary_id,
-            "profile_id":         m.profile_id if m else (g.profile_id if g else None),
+            "profile_id":         profile_id,
             "is_new":             source is None,
-            "times_used":         m.times_used if m else (g.times_used if g else 0),
+            "times_used":         times_used,
             "sunsky_ancestor_matches": sunsky_ancestor_matches,
             "source":             source,
-            "broken_missing_ids": broken_ids or [],
+            "broken_missing_ids": broken_ids,
+            "broken_title_contains": broken_titles,
+            "title_rules":        title_rules,
+            "covered_by_title_rules": sum(t["product_count"] for t in title_rules) if source is None else 0,
+            "total_in_category":  count,
         })
 
-    # Client feedback confirmed this exact bug live: "I selected 3
-    # products but it seems only 2 are available here." Previously this
-    # fallback only fired when categories was completely EMPTY (`not
-    # categories`) -- but a MIXED batch, where some products extract a
-    # real Sunsky category and one or more don't, left those uncategorized
-    # products silently missing from the response with no indication at
-    # all: sum(c['product_count'] for c in categories) could legitimately
-    # be less than total_products and nothing here ever surfaced the gap.
     categorized_count = sum(c["product_count"] for c in categories)
     uncategorized_count = total_products - categorized_count
     if uncategorized_count > 0:
@@ -298,9 +425,7 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         is_csv = fetch_job and fetch_job.type == JobType.csv_import
         label = "CSV Import" if is_csv else "Uncategorised Products"
         m = saved.get(label)
-        label_broken = broken_map.get(label) if m else None
-        if label_broken is None and m is not None:
-            label_broken = (await _broken_store_rules(db, pl.store_id, [m])).get(label)
+        label_broken = (await _broken_store_rules(db, pl.store_id, [m])).get(label) if m is not None else None
         woo_cat_list = _mapping_woo_cats(m) if m and not label_broken else []
         primary_id = (m.primary_woo_cat_id if m and not label_broken
                       else (woo_cat_list[0]["id"] if woo_cat_list else None))
@@ -381,30 +506,24 @@ async def map_confirm(
 
     # Store rows that already exist for this store -- used below to leave
     # categories covered ONLY by a global rule untouched.
-    store_rule_cats = set((
-        await db.execute(
-            select(SunskyCategoryMapping.sunsky_cat).where(SunskyCategoryMapping.store_id == pl.store_id)
-        )
-    ).scalars().all())
-    from tasks.job_tasks import _resolve_category_mapping
+    # Per-product coverage -- the same decision map-data showed. A category
+    # whose products are ALL covered (by "IF title contains" rules and/or a
+    # global rule) and that has no ordinary store rule is skipped: the
+    # frontend sends every category back on confirm, and saving here would
+    # create an ordinary store rule nobody chose (and, for global-only
+    # categories, silently override the global rule -- earlier fix).
+    # Otherwise the ordinary rule (title_contains '') is upserted: it covers
+    # the products no title rule matched, or repairs a broken ordinary rule.
+    coverage = await _category_coverage(db, pl, batch_products, category_name_map)
+    from tasks.job_tasks import _title_terms
 
     for entry in req.mappings:
         if not entry.sunsky_cat or not entry.woo_cats:
             continue
-        # The frontend sends EVERY category back on confirm, including
-        # already-mapped ones (save_as_rule defaults to true), and both
-        # branches below upsert a STORE row. Now that map-data shows
-        # global-rule categories as mapped, confirming would otherwise
-        # silently copy each global rule into a store-specific override --
-        # after which edits to the global rule would stop applying to this
-        # store. Upload already applies the global rule itself, so there's
-        # nothing to save for these.
-        if entry.sunsky_cat not in store_rule_cats:
-            try:
-                _g = await _resolve_category_mapping(db, pl.store_id, entry.sunsky_cat)
-            except Exception:
-                _g = None
-            if _g and _g.get("source") == "global":
+        _cov = coverage.get(entry.sunsky_cat)
+        if _cov is not None:
+            _has_ordinary = any(not _title_terms(r.title_contains) for r in _cov["store_rules"])
+            if not _cov["unresolved"] and not _has_ordinary:
                 continue
 
         # Resolve primary category
@@ -432,7 +551,7 @@ async def map_confirm(
                     updated_at=datetime.now(timezone.utc),
                 )
                 .on_conflict_do_update(
-                    index_elements=["store_id", "sunsky_cat"],
+                    index_elements=["store_id", "sunsky_cat", "title_contains"],
                     set_={
                         "sunsky_cat_id":      sunsky_cat_id,
                         "woo_cat_id":         primary_cat.id if primary_cat else None,
@@ -464,7 +583,7 @@ async def map_confirm(
                     updated_at=datetime.now(timezone.utc),
                 )
                 .on_conflict_do_update(
-                    index_elements=["store_id", "sunsky_cat"],
+                    index_elements=["store_id", "sunsky_cat", "title_contains"],
                     set_={
                         "sunsky_cat_id":      sunsky_cat_id,
                         "woo_cats_json":      cats_json,
@@ -535,7 +654,7 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
             .order_by(SunskyCategoryMapping.sunsky_cat)
         )
     ).scalars().all()
-    own_cats = {r.sunsky_cat for r in rows}
+    own_cats = {(r.sunsky_cat, r.title_contains or "") for r in rows}
     # Client feedback confirmed live: "why global not showing" (same
     # question, same underlying pattern, already fixed once for
     # Extraction Rules). Previously this hid a global rule entirely
@@ -571,7 +690,8 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
                 "last_used_at":       r.last_used_at.isoformat() if r.last_used_at else None,
                 "updated_at":         r.updated_at.isoformat() if r.updated_at else None,
                 "is_global":          r.store_id is None,
-                "is_overridden":      r.store_id is None and r.sunsky_cat in own_cats,
+                "is_overridden":      r.store_id is None and (r.sunsky_cat, r.title_contains or "") in own_cats,
+                "title_contains":     r.title_contains or "",
             }
             for r in merged
         ],
@@ -587,36 +707,7 @@ async def update_category_mappings(
     for entry in entries:
         if not entry.sunsky_cat:
             continue
-        primary_id = entry.primary_woo_cat_id or (entry.woo_cats[0].id if entry.woo_cats else None)
-        primary_cat = next((c for c in entry.woo_cats if c.id == primary_id), entry.woo_cats[0] if entry.woo_cats else None)
-        cats_json = json.dumps([{"id": c.id, "name": c.name} for c in entry.woo_cats])
-
-        stmt = (
-            pg_insert(SunskyCategoryMapping)
-            .values(
-                store_id=store_id,
-                sunsky_cat=entry.sunsky_cat,
-                woo_cat_id=primary_cat.id if primary_cat else None,
-                woo_cat_name=primary_cat.name if primary_cat else None,
-                woo_cats_json=cats_json,
-                primary_woo_cat_id=primary_id,
-                profile_id=entry.profile_id,
-                times_used=0,
-                updated_at=datetime.now(timezone.utc),
-            )
-            .on_conflict_do_update(
-                index_elements=["store_id", "sunsky_cat"],
-                set_={
-                    "woo_cat_id":         primary_cat.id if primary_cat else None,
-                    "woo_cat_name":       primary_cat.name if primary_cat else None,
-                    "woo_cats_json":      cats_json,
-                    "primary_woo_cat_id": primary_id,
-                    "profile_id":         entry.profile_id,
-                    "updated_at":         datetime.now(timezone.utc),
-                },
-            )
-        )
-        await db.execute(stmt)
+        await _save_category_rule(db, store_id, entry)
     await db.commit()
     return {"ok": True, "saved": len(entries)}
 
@@ -729,7 +820,7 @@ async def import_category_mappings_file(
                 updated_at=datetime.now(timezone.utc),
             )
             .on_conflict_do_update(
-                index_elements=["store_id", "sunsky_cat"],
+                index_elements=["store_id", "sunsky_cat", "title_contains"],
                 set_={
                     "woo_cat_id":         primary_cat.woo_id,
                     "woo_cat_name":       primary_cat.name,
@@ -815,6 +906,7 @@ async def list_global_category_mappings(db: AsyncSession = Depends(get_db)):
                 "last_used_at":       r.last_used_at.isoformat() if r.last_used_at else None,
                 "updated_at":         r.updated_at.isoformat() if r.updated_at else None,
                 "is_global":          True,
+                "title_contains":     r.title_contains or "",
             }
             for r in rows
         ],
@@ -829,44 +921,7 @@ async def update_global_category_mappings(
     for entry in entries:
         if not entry.sunsky_cat:
             continue
-        primary_id = entry.primary_woo_cat_id or (entry.woo_cats[0].id if entry.woo_cats else None)
-        primary_cat = next((c for c in entry.woo_cats if c.id == primary_id), entry.woo_cats[0] if entry.woo_cats else None)
-        cats_json = json.dumps([{"id": c.id, "name": c.name} for c in entry.woo_cats])
-
-        stmt = (
-            pg_insert(SunskyCategoryMapping)
-            .values(
-                store_id=None,
-                sunsky_cat=entry.sunsky_cat,
-                woo_cat_id=primary_cat.id if primary_cat else None,
-                woo_cat_name=primary_cat.name if primary_cat else None,
-                woo_cats_json=cats_json,
-                primary_woo_cat_id=primary_id,
-                profile_id=entry.profile_id,
-                times_used=0,
-                updated_at=datetime.now(timezone.utc),
-            )
-            .on_conflict_do_update(
-                # Confirmed via direct testing: unlike Inventory
-                # Mapping's global row (indexed on a constant
-                # expression, which ON CONFLICT can't target), this
-                # partial index IS on a real column (sunsky_cat), so
-                # ON CONFLICT's index_elements + index_where correctly
-                # targets it -- verified this performs a genuine
-                # UPDATE in place, not a duplicate insert, on re-save.
-                index_elements=["sunsky_cat"],
-                index_where=SunskyCategoryMapping.store_id.is_(None),
-                set_={
-                    "woo_cat_id":         primary_cat.id if primary_cat else None,
-                    "woo_cat_name":       primary_cat.name if primary_cat else None,
-                    "woo_cats_json":      cats_json,
-                    "primary_woo_cat_id": primary_id,
-                    "profile_id":         entry.profile_id,
-                    "updated_at":         datetime.now(timezone.utc),
-                },
-            )
-        )
-        await db.execute(stmt)
+        await _save_category_rule(db, None, entry)
     await db.commit()
     return {"ok": True, "saved": len(entries)}
 

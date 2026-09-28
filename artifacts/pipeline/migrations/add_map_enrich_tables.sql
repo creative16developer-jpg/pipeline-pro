@@ -8,8 +8,12 @@ CREATE TABLE IF NOT EXISTS sunsky_category_mappings (
   created_at   TIMESTAMPTZ DEFAULT now(),
   updated_at   TIMESTAMPTZ DEFAULT now()
 );
-CREATE UNIQUE INDEX IF NOT EXISTS ux_scm_store_cat
-  ON sunsky_category_mappings(store_id, sunsky_cat);
+-- (ux_scm_store_cat on (store_id, sunsky_cat) was replaced by
+-- uq_category_mapping_store_title on (store_id, sunsky_cat, title_contains)
+-- in add_category_mapping_title_contains.sql -- not re-created here, since
+-- migrations re-run on every startup and it would fail once a Sunsky
+-- category has several "title contains" rules.)
+SELECT 1;
 
 -- Enrich step: AI-extracted attributes per product per pipeline run
 CREATE TABLE IF NOT EXISTS product_enrich_attrs (

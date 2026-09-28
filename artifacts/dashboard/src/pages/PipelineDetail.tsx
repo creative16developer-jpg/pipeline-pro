@@ -707,6 +707,19 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
               <strong className="text-[15px]">{c.sunsky_cat}</strong>
               <span className="text-[12px] text-muted-foreground/60">{c.product_count} product{c.product_count !== 1 ? "s" : ""} in this batch</span>
             </div>
+            {c.covered_by_title_rules > 0 && (
+              <div className="mb-1 text-[12px] text-emerald-400/90">
+                {c.covered_by_title_rules} of {c.total_in_category} product(s) in this Sunsky category are already mapped by
+                "title contains" rules ({(c.title_rules ?? []).map((t: any) => `"${t.title_contains}"`).join(", ")}).
+                Choose a category for the {c.product_count} remaining product(s) below — it's saved as the rule for the rest of this category.
+              </div>
+            )}
+            {c.broken_title_contains?.length > 0 && (
+              <div className="mb-1 text-[12px] text-red-400/90">
+                The broken rule is a "title contains" rule ({c.broken_title_contains.map((t: string) => `"${t}"`).join(", ")}) —
+                fix or delete it in Settings → Category Mapping; confirming here only saves the rule for the rest of the category.
+              </div>
+            )}
             {c.broken_missing_ids?.length > 0 && (
               <div className="mb-1 text-[12px] text-red-400/90">
                 A rule exists, but its WooCommerce categor{c.broken_missing_ids.length === 1 ? "y" : "ies"} (ID {c.broken_missing_ids.join(", ")}) no longer exist{c.broken_missing_ids.length === 1 ? "s" : ""} in this store. Choose a category below.
@@ -794,7 +807,14 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
         <div className="bg-emerald-500/10 border border-emerald-500/30 border-l-[3px] border-l-emerald-500 rounded-lg px-4 py-3 text-[13px] text-emerald-300">
           <strong>✓ Already mapped — applied automatically</strong><br />
           <span className="text-[12px] mt-0.5 block">
-            {knownCats.map(c => `${c.sunsky_cat} (${c.product_count}) → ${c.woo_cats?.[0]?.name ?? "?"}`).join(" · ")}
+            {knownCats.map(c => {
+              // "IF title contains" rules (milestone point 2): show how the
+              // category was split, e.g. [title "frame" (2) → Рамки и Кейджове]
+              const tr = (c.title_rules ?? []).map((t: any) =>
+                `title "${t.title_contains}" (${t.product_count}) → ${t.woo_cats?.[t.woo_cats.length - 1]?.name ?? "?"}`);
+              const base = `${c.sunsky_cat} (${c.product_count}) → ${c.woo_cats?.[0]?.name ?? "?"}`;
+              return tr.length ? `${base} [${tr.join("; ")}]` : base;
+            }).join(" · ")}
           </span>
         </div>
       )}

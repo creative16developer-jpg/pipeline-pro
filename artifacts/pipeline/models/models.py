@@ -405,11 +405,21 @@ class SunskyCategoryMapping(Base):
     purposes, even inside a compound constraint).
     """
     __tablename__ = "sunsky_category_mappings"
-    __table_args__ = (UniqueConstraint("store_id", "sunsky_cat"),)
+    # One rule per (store, Sunsky category, title words). title_contains ""
+    # is the ordinary rule for the whole Sunsky category; non-empty values
+    # ("frame", "waterproof, diving") are "IF title contains" rules that
+    # take precedence for matching products -- see job_tasks._choose_cat_rule.
+    # Global rules (store_id NULL) get a partial unique index on
+    # (sunsky_cat, title_contains) -- migrations/add_category_mapping_title_contains.sql.
+    __table_args__ = (UniqueConstraint("store_id", "sunsky_cat", "title_contains", name="uq_category_mapping_store_title"),)
 
     id                 = Column(Integer, primary_key=True, index=True)
     store_id           = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=True, index=True)
     sunsky_cat         = Column(Text, nullable=False)
+    # Client feedback (milestone point 2): "IF Sunsky category = X AND
+    # product title contains Y -> map to WooCommerce category Z". Comma-
+    # separated words, any of them, case-insensitive; "" = no title condition.
+    title_contains     = Column(Text, nullable=False, default="", server_default="")
     # Numeric Sunsky category ID, when known. Matching by name alone is
     # fragile: name resolution for an unstarred category falls back to a
     # background tree-walk cache that can be stale/incomplete right after a

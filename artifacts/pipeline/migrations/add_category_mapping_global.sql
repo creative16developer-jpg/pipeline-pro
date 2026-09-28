@@ -40,5 +40,10 @@
 ALTER TABLE sunsky_category_mappings
   ALTER COLUMN store_id DROP NOT NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_category_mapping_global
-  ON sunsky_category_mappings (sunsky_cat) WHERE store_id IS NULL;
+-- (The global unique index this file used to create, uq_category_mapping_global
+-- on (sunsky_cat), was replaced by uq_category_mapping_global_title on
+-- (sunsky_cat, title_contains) in add_category_mapping_title_contains.sql.
+-- It must NOT be re-created here: migrations re-run on every startup, and
+-- once two global rules share a Sunsky category with different title words
+-- re-creating it would fail and stop the API from starting.)
+SELECT 1;

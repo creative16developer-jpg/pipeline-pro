@@ -488,7 +488,8 @@ async def extract_attributes(
     """
     rules = await _load_rules(db, store_id)
     mapping_rules = await _load_mapping_rules(db, store_id)
-    resolved_woo_category = await _resolve_woo_category_name(db, store_id, sunsky_category or "")
+    _ea_titles = [str(product.get(k) or "").strip() for k in ("name", "title") if str(product.get(k) or "").strip()]
+    resolved_woo_category = await _resolve_woo_category_name(db, store_id, sunsky_category or "", _ea_titles)
 
     resolved, ai_extract_from_mapping = apply_mapping_rules(
         product, mapping_rules, sunsky_category or "", resolved_woo_category
@@ -708,7 +709,8 @@ async def get_effective_category_name_map(db: Optional["AsyncSession"]) -> dict[
 
 
 async def _resolve_woo_category_name(
-    db: Optional["AsyncSession"], store_id: Optional[int], sunsky_category: str
+    db: Optional["AsyncSession"], store_id: Optional[int], sunsky_category: str,
+    titles: Optional[list] = None,
 ) -> str:
     """Resolve a raw Sunsky category name to its mapped WooCommerce
     category name for this store, via the same SunskyCategoryMapping
@@ -721,21 +723,27 @@ async def _resolve_woo_category_name(
     try:
         from sqlalchemy import select
         from models.models import SunskyCategoryMapping
-        mapping = (
+        # A category can have several rules ("IF title contains",
+        # milestone point 2) -- pick the one for this product, as Upload does.
+        # (.scalar_one_or_none() raised on several rows, silently caught
+        # below, which would have disabled this lookup for that category.)
+        from tasks.job_tasks import _choose_cat_rule
+        mapping = _choose_cat_rule((
             await db.execute(
                 select(SunskyCategoryMapping).where(
                     SunskyCategoryMapping.store_id == store_id,
                     SunskyCategoryMapping.sunsky_cat == sunsky_category,
                 )
             )
-        ).scalar_one_or_none()
+        ).scalars().all(), titles)
         return (mapping.woo_cat_name or "") if mapping else ""
     except Exception:
         return ""
 
 
 async def load_profile_attrs_for_category(
-    db: Optional["AsyncSession"], store_id: Optional[int], sunsky_category: str
+    db: Optional["AsyncSession"], store_id: Optional[int], sunsky_category: str,
+    titles: Optional[list] = None,
 ) -> list[str]:
     """Return the woo_attr_name list for the AttributeProfile assigned (via
     Category Mapping / the Map Step) to this Sunsky category — Section 6.3.
@@ -748,14 +756,19 @@ async def load_profile_attrs_for_category(
     try:
         from sqlalchemy import select
         from models.models import SunskyCategoryMapping, ProfileAttribute
-        mapping = (
+        # A category can have several rules ("IF title contains",
+        # milestone point 2) -- pick the one for this product, as Upload does.
+        # (.scalar_one_or_none() raised on several rows, silently caught
+        # below, which would have disabled this lookup for that category.)
+        from tasks.job_tasks import _choose_cat_rule
+        mapping = _choose_cat_rule((
             await db.execute(
                 select(SunskyCategoryMapping).where(
                     SunskyCategoryMapping.store_id == store_id,
                     SunskyCategoryMapping.sunsky_cat == sunsky_category,
                 )
             )
-        ).scalar_one_or_none()
+        ).scalars().all(), titles)
         if not mapping or not mapping.profile_id:
             return []
         rows = (

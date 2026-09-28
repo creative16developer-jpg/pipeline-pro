@@ -367,6 +367,8 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
     cats_json_by_name: dict[str, str] = {}
     broken_by_name: dict[str, list[int]] = {}
     broken_by_cat_id: dict[str, list[int]] = {}
+    _cd_all_store_rules: list = []
+    _cd_broken_rule_ids: dict[int, list[int]] = {}
     sunsky_name_by_product: dict[int, str] = {}
     sunsky_id_by_product: dict[int, str] = {}
     try:
@@ -436,6 +438,9 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
                     select(_SCM_CD).where(_SCM_CD.store_id == pl.store_id)
                 )
             ).scalars().all()
+            _cd_all_store_rules = list(map_rows)
+            from tasks.job_tasks import _broken_rule_ids as _cd_bri
+            _cd_broken_rule_ids = await _cd_bri(db, pl.store_id, map_rows)
             # Was: `if m.woo_cat_name` -- but confirmed live that a row can
             # have a real, working woo_cat_id (what uploads actually use)
             # with woo_cat_name left blank (empty string, not NULL) from
@@ -553,6 +558,37 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
             resolved_woo_cat = None
             mapped_cats_json = None
 
+        # "IF title contains" rules (milestone point 2): a Sunsky category can
+        # have several store rules, and the lookups above (keyed by
+        # category) can only hold one of them. When this product's category
+        # has store rules, the one that applies to THIS product
+        # (_choose_cat_rule -- title rules first, then the ordinary rule)
+        # decides mapped / name / ticked categories / broken, exactly as
+        # Upload will choose. No applicable store rule -> not mapped here,
+        # and the global fallback below is tried with the product's titles.
+        from tasks.job_tasks import _choose_cat_rule as _cd_choose, _product_titles as _cd_titles
+        _cd_rows_for_cat = [
+            m for m in _cd_all_store_rules
+            if (sunsky_cat_id and m.sunsky_cat_id == sunsky_cat_id)
+            or (sunsky_cat_name and m.sunsky_cat.strip().lower() == sunsky_cat_name.strip().lower())
+        ]
+        _cd_product_titles = _cd_titles(p)
+        if _cd_rows_for_cat:
+            _cd_rule = _cd_choose(_cd_rows_for_cat, _cd_product_titles)
+            if _cd_rule is None or not _cd_rule.woo_cat_id:
+                _mapped_val, is_mapped, resolved_woo_cat, mapped_cats_json = None, False, None, None
+                category_missing_ids = None
+            else:
+                _mapped_val = _cd_rule.woo_cat_name or True
+                resolved_woo_cat = _cd_rule.woo_cat_name or None
+                is_mapped = True
+                mapped_cats_json = _cd_rule.woo_cats_json
+                category_missing_ids = _cd_broken_rule_ids.get(_cd_rule.id)
+                if category_missing_ids:
+                    is_mapped = False
+                    resolved_woo_cat = None
+                    mapped_cats_json = None
+
         # Client feedback (Review_4.docx, item #8): "In some products,
         # last review step doesn't mark categories." Confirmed: the
         # map_rows query above only ever fetched THIS store's own
@@ -572,7 +608,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         if _mapped_val is None and sunsky_cat_name:
             try:
                 from tasks.job_tasks import _resolve_category_mapping as _cd_resolve_cat
-                _global_resolved = await _cd_resolve_cat(db, pl.store_id, sunsky_cat_name)
+                _global_resolved = await _cd_resolve_cat(db, pl.store_id, sunsky_cat_name, _cd_product_titles)
                 if _global_resolved:
                     _mapped_val = f"[global] {sunsky_cat_name}"
                     is_mapped = True
