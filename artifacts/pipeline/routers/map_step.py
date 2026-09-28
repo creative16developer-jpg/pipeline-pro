@@ -368,8 +368,12 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         for u in used:
             r = u["rule"] or global_saved.get(u["global"].get("rule_id"))
             if r is not None and (r.title_contains or "").strip():
+                _tr_cats, _tr_primary = _cats_of(u)
                 title_rules.append({"title_contains": r.title_contains, "product_count": u["count"],
-                                    "woo_cats": _cats_of(u)[0],
+                                    "woo_cats": _tr_cats,
+                                    # ★ main category -- what the summary shows (the list is
+                                    # in click order, so its last entry can be a parent)
+                                    "primary_woo_cat_id": _tr_primary or (_tr_cats[-1]["id"] if _tr_cats else None),
                                     "source": "store" if u["rule"] is not None else "global"})
 
         if not unresolved and used:

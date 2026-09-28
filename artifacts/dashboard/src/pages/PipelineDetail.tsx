@@ -807,14 +807,7 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
         <div className="bg-emerald-500/10 border border-emerald-500/30 border-l-[3px] border-l-emerald-500 rounded-lg px-4 py-3 text-[13px] text-emerald-300">
           <strong>✓ Already mapped — applied automatically</strong><br />
           <span className="text-[12px] mt-0.5 block">
-            {knownCats.map(c => {
-              // "IF title contains" rules (milestone point 2): show how the
-              // category was split, e.g. [title "frame" (2) → Рамки и Кейджове]
-              const tr = (c.title_rules ?? []).map((t: any) =>
-                `title "${t.title_contains}" (${t.product_count}) → ${t.woo_cats?.[t.woo_cats.length - 1]?.name ?? "?"}`);
-              const base = `${c.sunsky_cat} (${c.product_count}) → ${c.woo_cats?.[0]?.name ?? "?"}`;
-              return tr.length ? `${base} [${tr.join("; ")}]` : base;
-            }).join(" · ")}
+            {knownCats.map(formatKnownCategory).join(" · ")}
           </span>
         </div>
       )}
@@ -2337,6 +2330,24 @@ function buildDemoPipeline(state: string): Pipeline {
     }] : [],
   };
   return base;
+}
+
+// Cat. Review "Already mapped" line for one category. Shows the ★ MAIN
+// category of each rule (woo_cats is in click order, so its first/last
+// entry can be a parent -- live PL showed "→ Защита и Съхранение" for rules
+// whose ★ was Рамки и Кейджове / Водоустойчиви и Защитни корпуси). With
+// "IF title contains" rules (milestone point 2) it shows the split; when
+// every product was covered by a title rule there's no single target for
+// the whole category, so none is shown.
+function formatKnownCategory(c: any): string {
+  const mainName = (cats: any[] | undefined, primaryId: number | null | undefined) =>
+    (cats ?? []).find((x: any) => x.id === primaryId)?.name ?? cats?.[cats.length - 1]?.name ?? "?";
+  const tr = (c.title_rules ?? []).map((t: any) =>
+    `title "${t.title_contains}" (${t.product_count}) → ${mainName(t.woo_cats, t.primary_woo_cat_id)}`);
+  const byTitle = (c.title_rules ?? []).reduce((n: number, t: any) => n + (t.product_count ?? 0), 0);
+  if (tr.length && byTitle >= c.product_count) return `${c.sunsky_cat} (${c.product_count}): ${tr.join("; ")}`;
+  const base = `${c.sunsky_cat} (${c.product_count}) → ${mainName(c.woo_cats, c.primary_woo_cat_id)}`;
+  return tr.length ? `${base} [${tr.join("; ")}]` : base;
 }
 
 export default function PipelineDetail() {
