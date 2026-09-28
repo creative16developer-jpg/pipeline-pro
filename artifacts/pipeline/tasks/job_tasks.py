@@ -2467,26 +2467,16 @@ async def _run_upload(db, job):
                 try:
                     from models.models import ProductEnrichAttr as _PEA
                     from sqlalchemy import select as _sel_ea, desc as _desc_ea
-                    # First try: attrs confirmed in *this* pipeline (most authoritative)
-                    _enrich_attrs = (await db.execute(
-                        _sel_ea(_PEA).where(
-                            _PEA.pipeline_job_id == job.pipeline_job_id,
-                            _PEA.product_id == prod.id,
-                            _PEA.confirmed == True,  # noqa: E712
-                        )
-                    )).scalars().all()
-                    # Fallback: any confirmed attrs for this product (across all pipelines)
-                    if not _enrich_attrs:
-                        _enrich_attrs = (await db.execute(
-                            _sel_ea(_PEA).where(
-                                _PEA.product_id == prod.id,
-                                _PEA.confirmed == True,  # noqa: E712
-                            ).order_by(_desc_ea(_PEA.id))
-                        )).scalars().all()
-                        if _enrich_attrs:
-                            await _log(db, job.id, LogLevel.info,
-                                       f"  {prod.sku}: using enrich attrs from a previous pipeline "
-                                       f"({len(_enrich_attrs)} confirmed)")
+                    # Shared with Sync (_confirmed_enrich_rows) so both send the
+                    # same reviewed attributes: this pipeline's confirmed rows,
+                    # else earlier pipelines' (newest first).
+                    _enrich_attrs, _from_this_pl = await _confirmed_enrich_rows(
+                        db, prod.id, job.pipeline_job_id
+                    )
+                    if _enrich_attrs and not _from_this_pl:
+                        await _log(db, job.id, LogLevel.info,
+                                   f"  {prod.sku}: using enrich attrs from a previous pipeline "
+                                   f"({len(_enrich_attrs)} confirmed)")
 
                     if _enrich_attrs:
                         # Build a name-level dedup set from attrs already queued
@@ -2720,6 +2710,46 @@ async def _sync_rule_category_ids(db, store_id: int, raw_p: dict, sunsky_cat_id,
                 return ids, ids[-1], f"SunskyCategoryMapping ({cand!r}, global)"
             return [], None, ""
     return [], None, ""
+
+
+async def _confirmed_enrich_rows(db, product_id: int, pipeline_job_id):
+    """The reviewed attributes to send to WooCommerce for one product --
+    ONE rule shared by Upload Phase 2 and Sync.
+
+    Live finding (PL-153, Test hdcam): Upload sent the 4 attributes approved
+    in PL-153, then Sync, seconds later, overwrote them with 5-6 per product
+    -- adding "Тип продукт" / "Характеристики" approved only in OLDER
+    pipelines (PL-151/152) -- because Upload used the uploading pipeline's
+    confirmed rows while Sync took the newest row per attribute across ALL
+    pipelines. Sync runs last, so WooCommerce ended up with attributes that
+    were not in this pipeline's review (and Details -> Attributes showed 4
+    approved vs 5-6 in WooCommerce).
+
+    Rule (Upload's, unchanged): the confirmed rows of this job's pipeline,
+    in saved order; only if that pipeline has none for the product, the
+    confirmed rows of earlier pipelines newest first (callers keep the first
+    row per attribute name). A job without a pipeline (standalone Sync) goes
+    straight to that fallback -- the same as Sync did before.
+    Returns (rows, from_this_pipeline: bool)."""
+    from models.models import ProductEnrichAttr as _CPEA
+    from sqlalchemy import select as _csel, desc as _cdesc
+    if pipeline_job_id:
+        rows = (await db.execute(
+            _csel(_CPEA).where(
+                _CPEA.pipeline_job_id == pipeline_job_id,
+                _CPEA.product_id == product_id,
+                _CPEA.confirmed == True,  # noqa: E712
+            ).order_by(_CPEA.id)
+        )).scalars().all()
+        if rows:
+            return rows, True
+    rows = (await db.execute(
+        _csel(_CPEA).where(
+            _CPEA.product_id == product_id,
+            _CPEA.confirmed == True,  # noqa: E712
+        ).order_by(_cdesc(_CPEA.id))
+    )).scalars().all()
+    return rows, False
 
 
 async def _run_sync(db, job):
@@ -3706,12 +3736,17 @@ async def _run_sync(db, job):
             try:
                 from models.models import ProductEnrichAttr as _SPEA
                 from sqlalchemy import select as _ssel_ea, desc as _sdesc_ea
-                _s_enrich = (await db.execute(
-                    _ssel_ea(_SPEA).where(
-                        _SPEA.product_id == prod.id,
-                        _SPEA.confirmed == True,  # noqa: E712
-                    ).order_by(_sdesc_ea(_SPEA.id))
-                )).scalars().all()
+                # Same rule as Upload Phase 2 (_confirmed_enrich_rows): the
+                # attributes approved in THIS job's pipeline -- not the
+                # newest per attribute across all pipelines, which re-added
+                # attributes from older pipelines after Upload (PL-153).
+                _s_enrich, _s_from_this_pl = await _confirmed_enrich_rows(
+                    db, prod.id, getattr(job, "pipeline_job_id", None)
+                )
+                if _s_enrich and not _s_from_this_pl and getattr(job, "pipeline_job_id", None):
+                    await _log(db, job.id, LogLevel.info,
+                               f"  {prod.sku}: using enrich attrs from a previous pipeline "
+                               f"({len(_s_enrich)} confirmed)")
                 _s_enrich_added = 0
                 _seen_names_s: set[str] = {a["name"].lower() for a in woo_attrs}
                 for _sea in _s_enrich:
