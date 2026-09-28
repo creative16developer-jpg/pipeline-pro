@@ -97,8 +97,20 @@ async def list_rules(
     return {"rules": [RuleOut.from_orm(r) for r in rows]}
 
 
+def _validate_rule(body: RuleIn) -> None:
+    """A Fixed value rule with no value is skipped by Enrich
+    (apply_mapping_rules: `if not rule["fixed_value"]: continue`), so it
+    silently does nothing -- client screenshot showed exactly such a rule
+    ("—" value). Reject it instead of storing it."""
+    if not body.woo_attr_name.strip():
+        raise HTTPException(400, "WooCommerce attribute name is required")
+    if body.rule_type == "fixed_value" and not (body.fixed_value or "").strip():
+        raise HTTPException(400, "A Fixed value rule needs at least one value")
+
+
 @router.post("/attr-mapping", status_code=201)
 async def create_rule(body: RuleIn, db: AsyncSession = Depends(get_db)):
+    _validate_rule(body)
     # A new rule for an attribute that already has rules goes LAST in that
     # attribute's priority order (first match wins), rather than jumping
     # ahead of rules the operator has already ordered. Only when the caller
@@ -135,6 +147,7 @@ async def update_rule(rule_id: int, body: RuleIn, db: AsyncSession = Depends(get
     rule = await db.get(AttributeMappingRule, rule_id)
     if not rule:
         raise HTTPException(404, "Rule not found")
+    _validate_rule(body)
 
     rule.store_id       = body.store_id
     rule.woo_attr_name  = body.woo_attr_name.strip()

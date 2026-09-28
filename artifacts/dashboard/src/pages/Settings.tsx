@@ -2958,6 +2958,16 @@ function ConditionBadge({ type, value }: { type: string; value: string | null })
   );
 }
 
+// Adds text still typed in the Fixed value input (not yet confirmed with
+// Enter / a suggestion) to the saved value, using the picker's own " and "
+// separator; ignores it if already present (case-insensitive).
+function commitPendingFixedValue(current: string, pending: string): string {
+  const p = (pending || "").trim();
+  const values = current ? current.split(/\s+and\s+/i).map(v => v.trim()).filter(Boolean) : [];
+  if (p && !values.some(v => v.toLowerCase() === p.toLowerCase())) values.push(p);
+  return values.join(" and ");
+}
+
 function AttrMappingModal({
   rule,
   seedFrom,
@@ -3158,6 +3168,31 @@ function AttrMappingModal({
       toast({ title: "WooCommerce attribute name required", variant: "destructive" });
       return;
     }
+    // Client screenshot: a Test hdcam "Характеристики" rule (Fixed value,
+    // If category 4K Екшън камери) showed "—" as its value -- saved with
+    // NO value. The Fixed value picker only adds text when you press
+    // Enter or click a suggestion; typing and clicking Save threw the
+    // typed text away, and nothing checked for an empty value. Enrich
+    // skips a Fixed value rule with no value, so the rule silently did
+    // nothing. Now: text still in the input is added on Save (same
+    // " and " separator the picker uses), and an empty Fixed value
+    // can't be saved.
+    let fixedValue = form.fixed_value;
+    if (form.rule_type === "fixed_value") {
+      if (termSearch.trim()) {
+        fixedValue = commitPendingFixedValue(fixedValue, termSearch);
+        set("fixed_value", fixedValue);
+        setTermSearch("");
+      }
+      if (!fixedValue.trim()) {
+        toast({
+          title: "Add at least one value",
+          description: "Type a value and press Enter, or pick one from the list.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
     setSaving(true);
     try {
       const body = {
@@ -3170,7 +3205,7 @@ function AttrMappingModal({
         woo_attr_name: form.woo_attr_name.trim(),
         rule_type: form.rule_type,
         source_field: form.rule_type === "from_sunsky" ? (form.source_field || null) : null,
-        fixed_value: form.rule_type === "fixed_value" ? (form.fixed_value || null) : null,
+        fixed_value: form.rule_type === "fixed_value" ? (fixedValue || null) : null,
         instruction: form.rule_type === "ai_extract" ? (form.instruction || null) : null,
         condition_type: form.condition_type,
         condition_value: form.condition_type === "if_category" ? (form.condition_value || null) : null,
