@@ -910,10 +910,31 @@ async def _run_process(db, job):
         stamped_q = base_q.where(Product.fetch_job_id == job.source_job_id).limit(limit)
         products = (await db.execute(stamped_q)).scalars().all()
 
+        # Products of this fetch job that are NOT eligible -- in practice
+        # already UPLOADED (status is shared across stores). Live logs
+        # PL-154 ("No products stamped with fetch_job_id=509 — falling back
+        # to un-linked eligible products", although both products WERE
+        # linked to #509 and Upload then found them) and PL-153 (Process
+        # "3 product(s) found" of 5): the warning was wrong, and the
+        # fallback below could pull in ANY unrelated unlinked pending
+        # product. Already-uploaded products keep their processed images
+        # (Upload reuses them), so they are reported, not re-processed.
+        from sqlalchemy import func as _pfunc
+        _stamped_total = (await db.execute(
+            select(_pfunc.count(Product.id)).where(Product.fetch_job_id == job.source_job_id)
+        )).scalar() or 0
+        _not_eligible = _stamped_total - len(products)
         if products:
             await _log(db, job.id, LogLevel.info,
                        f"Process scoped to fetch job #{job.source_job_id} — "
-                       f"{len(products)} product(s) found")
+                       f"{len(products)} product(s) found"
+                       + (f" ({_not_eligible} more already uploaded — their existing processed "
+                          f"images are reused, not re-processed)" if _not_eligible > 0 else ""))
+        elif _stamped_total:
+            await _log(db, job.id, LogLevel.info,
+                       f"All {_stamped_total} product(s) from fetch job #{job.source_job_id} are "
+                       f"already uploaded — their existing processed images are reused "
+                       f"(not re-processed)")
         else:
             await _log(db, job.id, LogLevel.warn,
                        f"No products stamped with fetch_job_id={job.source_job_id} — "
@@ -1714,8 +1735,14 @@ async def _run_upload(db, job):
                     # context) while being distinct from the others.
                     base_alt = product.image_alt or product.name or ""
                     payload["images"] = []
-                    for i, entry in enumerate(image_entries):
-                        alt = (base_alt if i == 0 else f"{base_alt} - {i + 1}") if base_alt else ""
+                    # img_i, NOT i: this loop sits inside the product loop
+                    # (`for i, product in enumerate(products)`), and reusing i
+                    # made `job.processed_items = i + 1` below report the LAST
+                    # IMAGE number -- PL-154's log said "[upload] done — 5/2
+                    # items" (2 products, 5 images each); PL-151/153's "5/5"
+                    # were only right by coincidence (5 products).
+                    for img_i, entry in enumerate(image_entries):
+                        alt = (base_alt if img_i == 0 else f"{base_alt} - {img_i + 1}") if base_alt else ""
                         if isinstance(entry, dict):
                             # {"id": wp_media_id, "src": url} from the
                             # WP-upload path -- keep both, woo_client.py
