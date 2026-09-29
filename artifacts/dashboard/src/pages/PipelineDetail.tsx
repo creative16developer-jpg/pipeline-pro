@@ -1980,12 +1980,15 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                               return (
                                 <div key={a.id} className="flex items-center gap-1 bg-card border border-violet-400 rounded-lg px-1.5 py-1">
                                   <span className="text-[11px] text-muted-foreground">{a.attribute}:</span>
-                                  <input
+                                  <AttrValueInput
                                     autoFocus
+                                    storeId={pl.store_id}
+                                    attributeName={a.attribute}
                                     value={attrDraft.value}
-                                    onChange={e => setAttrDraft(d => ({ ...d, value: e.target.value }))}
-                                    onKeyDown={e => { if (e.key === "Enter") handleSaveAttr(p.id); if (e.key === "Escape") setEditingAttr(null); }}
-                                    className="text-[11px] bg-transparent border-none outline-none w-24"
+                                    onChange={v => setAttrDraft(d => ({ ...d, value: v }))}
+                                    onEnter={() => handleSaveAttr(p.id)}
+                                    onEscape={() => setEditingAttr(null)}
+                                    className="text-[11px] bg-transparent border-none outline-none w-40"
                                   />
                                   <button onClick={() => handleSaveAttr(p.id)} disabled={attrSaving} className="text-emerald-400 hover:text-emerald-300"><Check className="w-3 h-3" /></button>
                                   <button onClick={() => setEditingAttr(null)} className="text-muted-foreground hover:text-foreground"><XIcon className="w-3 h-3" /></button>
@@ -2025,12 +2028,15 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                               onChange={e => setAttrDraft(d => ({ ...d, name: e.target.value }))}
                               className="text-[11px] px-2 py-1 rounded-lg border border-border bg-card w-28 focus:outline-none focus:border-violet-400"
                             />
-                            <input
-                              placeholder="Value"
+                            <AttrValueInput
+                              storeId={pl.store_id}
+                              attributeName={attrDraft.name}
                               value={attrDraft.value}
-                              onChange={e => setAttrDraft(d => ({ ...d, value: e.target.value }))}
-                              onKeyDown={e => { if (e.key === "Enter") handleSaveAttr(p.id); if (e.key === "Escape") setEditingAttr(null); }}
-                              className="text-[11px] px-2 py-1 rounded-lg border border-border bg-card w-28 focus:outline-none focus:border-violet-400"
+                              onChange={v => setAttrDraft(d => ({ ...d, value: v }))}
+                              onEnter={() => handleSaveAttr(p.id)}
+                              onEscape={() => setEditingAttr(null)}
+                              placeholder="Value"
+                              className="text-[11px] px-2 py-1 rounded-lg border border-border bg-card w-40 focus:outline-none focus:border-violet-400"
                             />
                             <button onClick={() => handleSaveAttr(p.id)} disabled={attrSaving} className="text-emerald-400 hover:text-emerald-300"><Check className="w-3.5 h-3.5" /></button>
                             <button onClick={() => setEditingAttr(null)} className="text-muted-foreground hover:text-foreground"><XIcon className="w-3.5 h-3.5" /></button>
@@ -2330,6 +2336,82 @@ function buildDemoPipeline(state: string): Pipeline {
     }] : [],
   };
   return base;
+}
+
+// Existing WooCommerce values per (store, attribute), fetched once per page.
+const _attrTermsCache = new Map<string, Promise<string[]>>();
+function loadAttrTerms(storeId: number | null | undefined, attributeName: string): Promise<string[]> {
+  const name = (attributeName || "").trim();
+  if (!name) return Promise.resolve([]);
+  const key = `${storeId ?? "all"}|${name.toLowerCase()}`;
+  if (!_attrTermsCache.has(key)) {
+    const qs = `${storeId ? `store_id=${storeId}&` : ""}attribute_name=${encodeURIComponent(name)}`;
+    _attrTermsCache.set(key, fetch(`/api/attr-mapping/attribute-terms?${qs}`)
+      .then(r => r.ok ? r.json() : { terms: [] })
+      .then(d => (d?.terms ?? []).map((t: any) => String(t.name)))
+      .catch(() => []));
+  }
+  return _attrTermsCache.get(key)!;
+}
+
+// Picking a suggestion replaces the part after the last " and " separator
+// (the separator multi-value attributes use; upload splits on it), so
+// several existing values can be combined; typing a new value still works.
+function applyAttrTermPick(current: string, term: string): string {
+  const parts = (current || "").split(/\s+and\s+/i);
+  parts[parts.length - 1] = term;
+  return parts.map(p => p.trim()).filter(Boolean).join(" and ");
+}
+
+// Client feedback (screenshot of Content Review "Тип продукт:" being typed
+// freely): "Need to have predefined values". Value input that suggests the
+// attribute's EXISTING WooCommerce values for the pipeline's store.
+function AttrValueInput({
+  storeId, attributeName, value, onChange, onEnter, onEscape, autoFocus, className, placeholder,
+}: {
+  storeId: number | null | undefined; attributeName: string; value: string;
+  onChange: (v: string) => void; onEnter: () => void; onEscape: () => void;
+  autoFocus?: boolean; className?: string; placeholder?: string;
+}) {
+  const [terms, setTerms] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    loadAttrTerms(storeId, attributeName).then(t => { if (alive) setTerms(t); });
+    return () => { alive = false; };
+  }, [storeId, attributeName]);
+  const last = (value || "").split(/\s+and\s+/i).pop()!.trim().toLowerCase();
+  const chosen = new Set((value || "").split(/\s+and\s+/i).map(v => v.trim().toLowerCase()));
+  const shown = terms.filter(t => !chosen.has(t.toLowerCase()) || t.toLowerCase() === last)
+    .filter(t => !last || t.toLowerCase().includes(last)).slice(0, 12);
+  return (
+    <div className="relative">
+      <input
+        autoFocus={autoFocus}
+        value={value}
+        placeholder={placeholder ?? (terms.length ? "Pick or type a value" : "Value")}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onChange={e => { onChange(e.target.value); setOpen(true); }}
+        onKeyDown={e => { if (e.key === "Enter") onEnter(); if (e.key === "Escape") onEscape(); }}
+        className={className}
+      />
+      {open && shown.length > 0 && (
+        <div className="absolute z-30 left-0 top-full mt-1 min-w-[12rem] max-h-56 overflow-auto rounded-lg border border-border bg-popover shadow-xl">
+          <div className="px-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">Existing values</div>
+          {shown.map(t => (
+            <button
+              key={t}
+              type="button"
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => { onChange(applyAttrTermPick(value, t)); setOpen(false); }}
+              className="block w-full text-left px-2 py-1 text-[11px] hover:bg-secondary"
+            >{t}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Cat. Review "Already mapped" line for one category. Shows the ★ MAIN

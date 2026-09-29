@@ -106,6 +106,11 @@ def _validate_rule(body: RuleIn) -> None:
         raise HTTPException(400, "WooCommerce attribute name is required")
     if body.rule_type == "fixed_value" and not (body.fixed_value or "").strip():
         raise HTTPException(400, "A Fixed value rule needs at least one value")
+    # An "If category" rule with no category never matches (enrich_service
+    # returns False) -- a silently dead rule, same as an empty Fixed value.
+    from services.enrich_service import condition_category_values
+    if body.condition_type == "if_category" and not condition_category_values(body.condition_value):
+        raise HTTPException(400, "An If category rule needs at least one category")
 
 
 @router.post("/attr-mapping", status_code=201)
@@ -248,7 +253,7 @@ async def export_csv(
 
 @router.get("/attr-mapping/attribute-terms")
 async def get_attribute_terms_for_picker(
-    store_id: int = Query(...),
+    store_id: Optional[int] = Query(None),
     attribute_name: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
@@ -276,30 +281,51 @@ async def get_attribute_terms_for_picker(
     from models.models import Store
     from pipeline.woo_client import get_all_woo_attributes, get_attribute_terms
 
-    store = await db.get(Store, store_id)
-    if not store:
-        raise HTTPException(404, "Store not found")
-
-    try:
+    async def _terms_for_store(store):
         woo_attrs = await get_all_woo_attributes(store)
-    except Exception as e:
-        raise HTTPException(502, f"Could not load WooCommerce attributes: {e}")
+        target = attribute_name.strip().lower()
+        matched = next((a for a in woo_attrs if str(a.get("name", "")).strip().lower() == target), None)
+        if not matched:
+            return None, []
+        return matched["id"], await get_attribute_terms(store, matched["id"])
 
-    target = attribute_name.strip().lower()
-    matched = next((a for a in woo_attrs if str(a.get("name", "")).strip().lower() == target), None)
-    if not matched:
-        # Not an error -- a genuinely new attribute (not yet created in
-        # WooCommerce at all) simply has no terms to offer yet. The
-        # frontend can fall back to free-text entry in this case.
-        return {"attribute_found": False, "terms": []}
+    if store_id is not None:
+        store = await db.get(Store, store_id)
+        if not store:
+            raise HTTPException(404, "Store not found")
+        try:
+            attr_id, terms = await _terms_for_store(store)
+        except Exception as e:
+            raise HTTPException(502, f"Could not load terms for attribute {attribute_name!r}: {e}")
+        if attr_id is None:
+            return {"attribute_found": False, "terms": []}
+        return {
+            "attribute_found": True,
+            "attribute_id": attr_id,
+            "terms": [{"id": t["id"], "name": t["name"]} for t in terms],
+        }
 
-    try:
-        terms = await get_attribute_terms(store, matched["id"])
-    except Exception as e:
-        raise HTTPException(502, f"Could not load terms for attribute {attribute_name!r}: {e}")
-
+    # No store = a GLOBAL rule. Client screenshot: a global "Тип продукт"
+    # rule's Fixed value picker said "No existing values yet" -- the
+    # frontend skipped this call without a store, and this endpoint
+    # required one. Merge every store's terms (same name in any case listed
+    # once); a store that can't be reached is skipped, not fatal.
+    stores = (await db.execute(select(Store))).scalars().all()
+    merged: dict[str, dict] = {}
+    found = False
+    for st in stores:
+        try:
+            attr_id, terms = await _terms_for_store(st)
+        except Exception:
+            continue
+        if attr_id is None:
+            continue
+        found = True
+        for t in terms:
+            key = str(t.get("name", "")).strip().lower()
+            if key and key not in merged:
+                merged[key] = {"id": t["id"], "name": t["name"]}
     return {
-        "attribute_found": True,
-        "attribute_id": matched["id"],
-        "terms": [{"id": t["id"], "name": t["name"]} for t in terms],
+        "attribute_found": found,
+        "terms": sorted(merged.values(), key=lambda t: t["name"].lower()),
     }

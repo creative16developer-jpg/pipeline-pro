@@ -222,12 +222,25 @@ async def _load_mapping_rules(db: Optional["AsyncSession"], store_id: Optional[i
         return []
 
 
+def condition_category_values(condition_value) -> list[str]:
+    """If-category condition values: one category per line, trimmed,
+    lower-cased, empty lines dropped."""
+    return [v.strip().lower() for v in str(condition_value or "").split("\n") if v.strip()]
+
+
 def _rule_matches_product(rule: dict, sunsky_category: str, resolved_woo_category: str = "") -> bool:
     if rule["condition_type"] == "always":
         print(f"[enrich_service] rule {rule.get('woo_attr_name')!r} matched via condition_type='always'")
         return True
     if rule["condition_type"] == "if_category":
-        cond = (rule.get("condition_value") or "").strip().lower()
+        # Several categories allowed, ONE PER LINE (client request: "multiple
+        # values for Sunsky categories under condition if category"). Not
+        # comma-separated: real WooCommerce category names contain commas
+        # ("Маунтове, Монтажи, Стойки"). A legacy single value is one line,
+        # so existing rules match exactly as before. Any listed category
+        # matching (exact, case-insensitive) counts.
+        conds = condition_category_values(rule.get("condition_value"))
+        cond = " | ".join(conds)
         if not cond:
             return False
         # Client feedback confirmed live via screenshot: a real
@@ -249,7 +262,7 @@ def _rule_matches_product(rule: dict, sunsky_category: str, resolved_woo_categor
         # vocabulary work correctly.
         sunsky_lower = (sunsky_category or "").strip().lower()
         woo_lower = (resolved_woo_category or "").strip().lower()
-        matched = cond == sunsky_lower or (bool(woo_lower) and cond == woo_lower)
+        matched = sunsky_lower in conds or (bool(woo_lower) and woo_lower in conds)
         # Client feedback confirmed live (twice, both directions): a
         # rule scoped to "If category" still matched products it
         # shouldn't have (Активност on unrelated GoPro cases even after

@@ -171,10 +171,13 @@ function buildCategoryConditionOptions(
 // select it outright; keep typing to filter; click outside or Escape closes
 // the list without losing whatever's currently in the input.
 function SearchableCombobox({
-  value, onChange, options, placeholder, emptyHint,
+  value, onChange, options, placeholder, emptyHint, onPick,
 }: {
   value: string;
   onChange: (v: string) => void;
+  // When set, choosing a suggestion calls onPick instead of onChange
+  // (multi-value inputs add a chip rather than replacing the text).
+  onPick?: (v: string) => void;
   options: { id: string; label: string; sublabel?: string; key?: string }[];
   placeholder?: string;
   emptyHint?: string;
@@ -221,7 +224,7 @@ function SearchableCombobox({
                 key={o.key ?? o.id}
                 type="button"
                 onMouseDown={e => e.preventDefault()}
-                onClick={() => { onChange(o.label); setOpen(false); }}
+                onClick={() => { if (onPick) onPick(o.label); else onChange(o.label); setOpen(false); }}
                 className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center justify-between gap-2"
               >
                 <span className="font-sans">{o.label}</span>
@@ -2981,11 +2984,30 @@ function AttrRuleBadge({ type }: { type: string }) {
   );
 }
 
+// "If category" condition values: ONE CATEGORY PER LINE (client request:
+// several Sunsky categories in one condition). Not comma-separated -- real
+// WooCommerce category names contain commas ("Маунтове, Монтажи, Стойки").
+// Same format enrich_service.condition_category_values reads.
+function splitCondValues(v: string | null | undefined): string[] {
+  return String(v ?? "").split("\n").map(x => x.trim()).filter(Boolean);
+}
+function joinCondValues(values: string[]): string {
+  return values.map(x => x.trim()).filter(Boolean).join("\n");
+}
+// Adds a category still typed in the condition search box (not yet added
+// as a chip) -- no duplicate, case-insensitive.
+function commitPendingCondition(current: string, pending: string): string {
+  const values = splitCondValues(current);
+  const p = (pending || "").trim();
+  if (p && !values.some(v => v.toLowerCase() === p.toLowerCase())) values.push(p);
+  return joinCondValues(values);
+}
+
 function ConditionBadge({ type, value }: { type: string; value: string | null }) {
   if (type === "if_category" && value) {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-500/15 text-amber-400 border border-amber-500/25">
-        If category: {value}
+        If category: {splitCondValues(value).join(" · ")}
       </span>
     );
   }
@@ -3091,16 +3113,19 @@ function AttrMappingModal({
   const [availableTerms, setAvailableTerms] = useState<{ id: number; name: string }[]>([]);
   const [termsLoading, setTermsLoading] = useState(false);
   const [termSearch, setTermSearch] = useState("");
+  const [condDraft, setCondDraft] = useState("");
   const [termPickerOpen, setTermPickerOpen] = useState(false);
 
   useEffect(() => {
-    if (!storeId || !form.woo_attr_name.trim() || form.rule_type !== "fixed_value") {
+    // Global rule (no store): the endpoint now merges every store's values --
+    // previously skipped, so a global rule's picker said "No existing values yet".
+    if (!form.woo_attr_name.trim() || form.rule_type !== "fixed_value") {
       setAvailableTerms([]);
       return;
     }
     let cancelled = false;
     setTermsLoading(true);
-    fetch(`/api/attr-mapping/attribute-terms?store_id=${storeId}&attribute_name=${encodeURIComponent(form.woo_attr_name.trim())}`)
+    fetch(`/api/attr-mapping/attribute-terms?${storeId ? `store_id=${storeId}&` : ""}attribute_name=${encodeURIComponent(form.woo_attr_name.trim())}`)
       .then(r => r.json())
       .then(data => { if (!cancelled) setAvailableTerms(data.terms ?? []); })
       .catch(() => { if (!cancelled) setAvailableTerms([]); })
@@ -3215,6 +3240,18 @@ function AttrMappingModal({
     // nothing. Now: text still in the input is added on Save (same
     // " and " separator the picker uses), and an empty Fixed value
     // can't be saved.
+    let conditionValue = form.condition_value ?? "";
+    if (form.condition_type === "if_category") {
+      if (condDraft.trim()) {
+        conditionValue = commitPendingCondition(conditionValue, condDraft);
+        set("condition_value", conditionValue);
+        setCondDraft("");
+      }
+      if (!splitCondValues(conditionValue).length) {
+        toast({ title: "Add at least one category", description: "Pick a category from the list, or choose Always.", variant: "destructive" });
+        return;
+      }
+    }
     let fixedValue = form.fixed_value;
     if (form.rule_type === "fixed_value") {
       if (termSearch.trim()) {
@@ -3246,7 +3283,7 @@ function AttrMappingModal({
         fixed_value: form.rule_type === "fixed_value" ? (fixedValue || null) : null,
         instruction: form.rule_type === "ai_extract" ? (form.instruction || null) : null,
         condition_type: form.condition_type,
-        condition_value: form.condition_type === "if_category" ? (form.condition_value || null) : null,
+        condition_value: form.condition_type === "if_category" ? (conditionValue || null) : null,
         // Editing keeps the rule's priority position; a new rule sends 0 and
         // the backend places it last within its attribute.
         sort_order: rule ? rule.sort_order : 0,
@@ -3509,17 +3546,43 @@ function AttrMappingModal({
             </div>
             {form.condition_type === "if_category" && (
               <>
-                <SearchableCombobox
-                  value={form.condition_value ?? ""}
-                  onChange={v => set("condition_value", v)}
-                  options={storeCatComboOptions}
-                  placeholder="Category name, e.g. Waterproof Cases"
-                  emptyHint={storeCatComboOptions.length === 0
-                    ? "No categories synced yet — type the name freely."
-                    : "No matches — you can still type a category name freely."}
-                />
+                {splitCondValues(form.condition_value).length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {splitCondValues(form.condition_value).map(v => (
+                      <span key={v} className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-500/15 text-amber-400 text-xs">
+                        {v}
+                        <button
+                          type="button"
+                          onClick={() => set("condition_value", joinCondValues(splitCondValues(form.condition_value).filter(x => x !== v)))}
+                          className="hover:text-red-400"
+                        >×</button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <SearchableCombobox
+                      value={condDraft}
+                      onChange={setCondDraft}
+                      onPick={v => { set("condition_value", commitPendingCondition(form.condition_value ?? "", v)); setCondDraft(""); }}
+                      options={storeCatComboOptions}
+                      placeholder={splitCondValues(form.condition_value).length ? "Add another category…" : "Category name, e.g. Waterproof Cases"}
+                      emptyHint={storeCatComboOptions.length === 0
+                        ? "No categories synced yet — type the name, then Add."
+                        : "No matches — type the name, then Add."}
+                    />
+                  </div>
+                  {condDraft.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => { set("condition_value", commitPendingCondition(form.condition_value ?? "", condDraft)); setCondDraft(""); }}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-secondary hover:bg-secondary/80 text-foreground border border-border"
+                    >Add</button>
+                  )}
+                </div>
                 <p className="text-[11px] text-muted-foreground mt-1">
-                  Matches either the product's Sunsky category or its mapped WooCommerce category.
+                  Add one or more categories — the rule applies if the product's Sunsky category or its mapped WooCommerce category is ANY of them.
                 </p>
                 {!storeId && storeCatComboOptions.length > 0 && (
                   <p className="text-[11px] text-muted-foreground mt-1">
