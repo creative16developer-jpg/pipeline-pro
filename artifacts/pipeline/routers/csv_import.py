@@ -204,6 +204,13 @@ async def upload_csv(
 
     rows: list[dict] = []
     errors: list[str] = []
+    # Client feedback (next milestone point): "After upload CSV need to have
+    # preview of the table with the results". Every row now carries its row
+    # number, its own warnings and (below) its result -- new / updated --
+    # and skipped rows are listed with the reason, so the UI can show the
+    # whole file as a results table (previously: first 5 rows, 3 columns,
+    # on the CSV Import page only; just a toast in New Pipeline).
+    skipped_rows: list[dict] = []
     # Client feedback confirmed live via screenshot: Cyrillic product
     # titles imported as "???? ?? Xiaomi Watch 5" -- directly simulated
     # and confirmed this exact pattern is produced by Excel's plain
@@ -242,9 +249,12 @@ async def upload_csv(
         price_raw       = (row.get("Price") or "").strip()
         sale_price_raw  = (row.get("Sale Price") or "").strip()
         qty_raw    = (row.get("QTY") or "").strip()
+        row_warn: list[str] = []
 
         if not sunsky_sku:
             errors.append(f"Row {i + 2}: missing Sunsky SKU — skipped")
+            skipped_rows.append({"row": i + 2, "site_sku": site_sku, "csv_title": csv_title,
+                                 "reason": "Missing Sunsky SKU"})
             continue
 
         # Validate price if provided
@@ -254,6 +264,7 @@ async def upload_csv(
                 price = str(round(float(price_raw.replace(",", ".")), 2))
             except ValueError:
                 errors.append(f"Row {i + 2}: invalid price '{price_raw}' — price ignored")
+                row_warn.append(f"Invalid price '{price_raw}' — ignored")
 
         # Client feedback: "I noticed that in the CSV there is only one
         # price - need to have sale and regular price." Validated the
@@ -264,6 +275,7 @@ async def upload_csv(
                 sale_price = str(round(float(sale_price_raw.replace(",", ".")), 2))
             except ValueError:
                 errors.append(f"Row {i + 2}: invalid sale price '{sale_price_raw}' — sale price ignored")
+                row_warn.append(f"Invalid sale price '{sale_price_raw}' — ignored")
 
         # Validate QTY if provided (optional column)
         qty: int | None = None
@@ -272,14 +284,35 @@ async def upload_csv(
                 qty = int(float(qty_raw))
             except ValueError:
                 errors.append(f"Row {i + 2}: invalid QTY '{qty_raw}' — QTY ignored")
+                row_warn.append(f"Invalid QTY '{qty_raw}' — ignored")
 
+        # WooCommerce only applies a sale price LOWER than the regular price
+        # (client's own CSV had Sale Price 70 vs Price 59 -> shop showed 59).
+        if price is not None and sale_price is not None and float(sale_price) >= float(price):
+            row_warn.append("Sale Price is not lower than Price — WooCommerce will ignore the sale price")
         rows.append({
+            "row": i + 2,
             "sunsky_sku": sunsky_sku, "site_sku": site_sku, "csv_title": csv_title,
             "price": price, "sale_price": sale_price, "qty": qty,
+            "warnings": row_warn,
         })
 
     if not rows:
         raise HTTPException(400, f"No valid rows found. Errors: {errors[:5]}")
+
+    # Same Sunsky SKU on several rows: they update the same product, so the
+    # LAST row wins (open item: "CSV duplicate-SKU validation safeguard").
+    _sku_rows: dict[str, list[int]] = {}
+    for r in rows:
+        _sku_rows.setdefault(r["sunsky_sku"], []).append(r["row"])
+    for r in rows:
+        _dups = _sku_rows[r["sunsky_sku"]]
+        if len(_dups) > 1:
+            _others = ", ".join(str(n) for n in _dups if n != r["row"])
+            r["warnings"].append(
+                f"Sunsky SKU also on row {_others} — the last row wins"
+                if r["row"] != _dups[-1] else f"Sunsky SKU also on row {_others} — this (last) row is used"
+            )
 
     filename = file.filename or "import.csv"
 
@@ -348,8 +381,10 @@ async def upload_csv(
                 existing.sale_price = r["sale_price"]
             if r["qty"] is not None:
                 existing.stock_quantity = r["qty"]
+            r["result"] = "updated"
             continue
 
+        r["result"] = "new"
         values: dict = dict(
             sunsky_id=r["sunsky_sku"],
             sku=r["sunsky_sku"],
@@ -394,7 +429,16 @@ async def upload_csv(
     # ── 3. Upsert csv_mappings (backward compat: generate step uses this lookup)
     skus = [r["sunsky_sku"] for r in rows]
     await db.execute(delete(M.CsvMapping).where(M.CsvMapping.sunsky_sku.in_(skus)))
+    # ONE mapping per Sunsky SKU -- the LAST row with that SKU, matching the
+    # product itself (each later row updates it). Previously one mapping was
+    # added per ROW, so a SKU on two rows hit the unique index
+    # ix_csv_mappings_sunsky_sku and the whole upload failed (found while
+    # testing the results table with a duplicate row; open item "CSV
+    # duplicate-SKU validation safeguard").
+    _last_by_sku: dict[str, dict] = {}
     for r in rows:
+        _last_by_sku[r["sunsky_sku"]] = r
+    for r in _last_by_sku.values():
         db.add(M.CsvMapping(
             sunsky_sku=r["sunsky_sku"],
             site_sku=r["site_sku"] or None,
@@ -417,6 +461,16 @@ async def upload_csv(
         "job_id": job.id,
         "errors": errors[:20],
         "preview": rows[:5],
+        # Full results table (every row): row number, values as imported,
+        # result "new"/"updated", per-row warnings; plus skipped rows.
+        "results": rows,
+        "skipped": skipped_rows,
+        "summary": {
+            "new": sum(1 for r in rows if r.get("result") == "new"),
+            "updated": sum(1 for r in rows if r.get("result") == "updated"),
+            "skipped": len(skipped_rows),
+            "with_warnings": sum(1 for r in rows if r.get("warnings")),
+        },
     }
     if suspicious_title_rows:
         response["encoding_warning"] = (

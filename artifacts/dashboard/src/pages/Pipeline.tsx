@@ -1,3 +1,4 @@
+import { CsvImportResults, type CsvUploadResponse } from "@/components/CsvImportResults";
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useSearch } from "wouter";
 import {
@@ -379,6 +380,9 @@ export default function Pipeline() {
   const [csvFile, setCsvFile]           = useState<File | null>(null);
   const [csvUploading, setCsvUploading] = useState(false);
   const [csvUploadDone, setCsvUploadDone] = useState(false);
+  // Results table after a CSV upload (client: "After upload CSV need to have
+  // preview of the table with the results").
+  const [csvUploadResult, setCsvUploadResult] = useState<CsvUploadResponse | null>(null);
   // Client feedback: needed a way to import a fresh CSV even after one
   // already exists -- previously csvJobs.length === 0 was the ONLY way
   // to reach the upload UI at all, permanently locking anyone who'd ever
@@ -526,6 +530,7 @@ export default function Pipeline() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail || `Upload failed (${res.status})`);
       toast({ title: "CSV imported", description: `${data.imported} products loaded.` });
+      setCsvUploadResult(data);
       if (data.encoding_warning) {
         toast({
           title: "Possible text corruption detected",
@@ -1014,6 +1019,15 @@ export default function Pipeline() {
                     </a>
                   </div>
                 </>
+              )}
+              {csvUploadResult && (
+                <div className="mt-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-medium text-foreground/80">Last upload — results</p>
+                    <button onClick={() => setCsvUploadResult(null)} className="text-xs text-muted-foreground hover:text-foreground">Hide</button>
+                  </div>
+                  <CsvImportResults result={csvUploadResult} />
+                </div>
               )}
             </div>
           )}

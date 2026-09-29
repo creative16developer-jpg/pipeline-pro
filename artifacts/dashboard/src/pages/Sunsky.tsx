@@ -1,3 +1,4 @@
+import { CsvImportResults, type CsvUploadResponse } from "@/components/CsvImportResults";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { CloudDownload, Info, Search, ChevronRight, Upload, Trash2, FileText, CheckCircle2, Hash, Tag } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -13,11 +14,7 @@ type CsvMapping = {
   created_at: string | null;
 };
 
-type CsvResult = {
-  imported: number;
-  errors: string[];
-  preview: { sunsky_sku: string; site_sku: string; csv_title: string }[];
-};
+type CsvResult = CsvUploadResponse;
 
 async function fetchLevel(parentId: string, signal?: AbortSignal): Promise<Category[]> {
   const res = await fetch(`/api/sunsky/categories?parent_id=${parentId}`, { signal });
@@ -286,47 +283,11 @@ export default function Sunsky() {
           )}
         </div>
 
-        {/* Import result */}
+        {/* Import result: full results table (client: "After upload CSV need to
+            have preview of the table with the results") */}
         {csvResult && (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center gap-3 text-sm">
-              <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 font-medium">
-                {csvResult.imported} imported
-              </span>
-              {csvResult.errors.length > 0 && (
-                <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-400 font-medium">
-                  {csvResult.errors.length} skipped
-                </span>
-              )}
-            </div>
-
-            {csvResult.preview.length > 0 && (
-              <div className="overflow-x-auto rounded-xl border border-border">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b border-border bg-secondary/30">
-                      <th className="text-left px-3 py-2 text-muted-foreground font-medium">Sunsky SKU</th>
-                      <th className="text-left px-3 py-2 text-muted-foreground font-medium">Site SKU</th>
-                      <th className="text-left px-3 py-2 text-muted-foreground font-medium">CSV Title</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {csvResult.preview.map((row, i) => (
-                      <tr key={i} className="border-b border-border/50 last:border-0">
-                        <td className="px-3 py-2 font-mono text-primary">{row.sunsky_sku}</td>
-                        <td className="px-3 py-2 font-mono text-muted-foreground">{row.site_sku || "—"}</td>
-                        <td className="px-3 py-2 text-foreground truncate max-w-[200px]">{row.csv_title || "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {csvResult.imported > csvResult.preview.length && (
-                  <p className="text-xs text-muted-foreground px-3 py-2 border-t border-border/50">
-                    …and {csvResult.imported - csvResult.preview.length} more rows
-                  </p>
-                )}
-              </div>
-            )}
+          <div className="mt-4">
+            <CsvImportResults result={csvResult} />
           </div>
         )}
 
