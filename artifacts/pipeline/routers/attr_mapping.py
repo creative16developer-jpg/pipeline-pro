@@ -14,7 +14,7 @@ import csv
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, or_
@@ -208,6 +208,199 @@ async def delete_rule(rule_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
 
+EXPORT_COLUMNS = [
+    "id", "store", "woo_attr_name", "rule_type", "source_field",
+    "fixed_value", "instruction",
+    "condition_type", "condition_value", "sort_order",
+]
+_RULE_TYPES = {"from_sunsky", "ai_extract", "fixed_value"}
+_CONDITION_TYPES = {"always", "if_category"}
+
+
+def parse_rule_import_rows(headers: list, rows: list, store_ids_by_name: dict,
+                           default_store_id: Optional[int]) -> tuple[list[dict], list[dict]]:
+    """Client request: "Don't see an option for import, but need have"
+    (Attribute Mapping had Export CSV only). Turns a sheet (header row +
+    data rows, same columns as the export) into rule dicts -- pure, so it
+    can be tested without a database. Returns (rules, errors); errors are
+    {"row": sheet_row_number, "error": text}.
+
+    - Columns matched by name, case-insensitive; woo_attr_name required.
+    - "store": store name (any case) -> that store; "" or "Global" ->
+      global rule; column absent -> default_store_id (the store selected in
+      the UI). Unknown store name -> error.
+    - "id": existing rule to update (checked by the caller).
+    - rule_type defaults to fixed_value, condition_type to always (or
+      if_category when condition_value is filled).
+    - condition_value: several categories one per line, or separated by
+      "|" (easier to type in Excel). Commas are NOT separators -- real
+      WooCommerce names contain them ("Маунтове, Монтажи, Стойки").
+    - Same checks as the rule editor: Fixed value needs a value,
+      If category needs a category.
+    """
+    idx = {str(h or "").strip().lower(): i for i, h in enumerate(headers)}
+    if "woo_attr_name" not in idx:
+        return [], [{"row": 1, "error": "Missing required column 'woo_attr_name'"}]
+
+    def cell(row, name):
+        i = idx.get(name)
+        if i is None or i >= len(row) or row[i] is None:
+            return ""
+        v = row[i]
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        return str(v).strip()
+
+    rules, errors = [], []
+    for n, row in enumerate(rows, start=2):
+        if not any(str(c or "").strip() for c in row):
+            continue
+        name = cell(row, "woo_attr_name")
+        if not name:
+            errors.append({"row": n, "error": "woo_attr_name is empty"})
+            continue
+        rt = (cell(row, "rule_type") or "fixed_value").lower()
+        if rt not in _RULE_TYPES:
+            errors.append({"row": n, "error": f"Unknown rule_type {rt!r} (use from_sunsky, ai_extract or fixed_value)"})
+            continue
+        cond_raw = cell(row, "condition_value").replace("|", "\n")
+        cond_vals = [v.strip() for v in cond_raw.split("\n") if v.strip()]
+        ct = (cell(row, "condition_type") or ("if_category" if cond_vals else "always")).lower()
+        if ct not in _CONDITION_TYPES:
+            errors.append({"row": n, "error": f"Unknown condition_type {ct!r} (use always or if_category)"})
+            continue
+        if "store" in idx:
+            sname = cell(row, "store")
+            if not sname or sname.lower() == "global":
+                store_id = None
+            elif sname.lower() in store_ids_by_name:
+                store_id = store_ids_by_name[sname.lower()]
+            else:
+                errors.append({"row": n, "error": f"Unknown store {sname!r}"})
+                continue
+        else:
+            store_id = default_store_id
+        fixed = cell(row, "fixed_value")
+        if rt == "fixed_value" and not fixed:
+            errors.append({"row": n, "error": "A Fixed value rule needs at least one value"})
+            continue
+        if ct == "if_category" and not cond_vals:
+            errors.append({"row": n, "error": "An If category rule needs at least one category"})
+            continue
+        rid = cell(row, "id")
+        so = cell(row, "sort_order")
+        try:
+            rid_i = int(rid) if rid else None
+            so_i = int(so) if so else None
+        except ValueError:
+            errors.append({"row": n, "error": "id and sort_order must be whole numbers"})
+            continue
+        rules.append({
+            "row": n, "id": rid_i, "store_id": store_id, "store_from_file": "store" in idx,
+            "woo_attr_name": name, "rule_type": rt,
+            "source_field": cell(row, "source_field") or None,
+            "fixed_value": fixed or None,
+            "instruction": cell(row, "instruction") or None,
+            "condition_type": ct,
+            "condition_value": "\n".join(cond_vals) if ct == "if_category" else None,
+            "sort_order": so_i,
+        })
+    return rules, errors
+
+
+def _rule_signature(d) -> tuple:
+    g = (lambda k: d.get(k)) if isinstance(d, dict) else (lambda k: getattr(d, k))
+    return (
+        g("store_id"), (g("woo_attr_name") or "").strip().lower(), g("rule_type"),
+        (g("source_field") or "").strip(), (g("fixed_value") or "").strip(), (g("instruction") or "").strip(),
+        g("condition_type"), (g("condition_value") or "").strip().lower() if g("condition_type") == "if_category" else "",
+    )
+
+
+@router.post("/attr-mapping/import")
+async def import_rules(
+    file: UploadFile = File(...),
+    store_id: Optional[int] = Query(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import Attribute Mapping rules from CSV or Excel -- the export's
+    format. ALL OR NOTHING: every row is checked first; if any row is
+    invalid nothing is saved and the errors are returned (400). Rows with
+    an existing id update that rule; other rows are created, except rows
+    identical to an existing rule (same store, attribute, type, value and
+    condition), which are skipped -- re-importing a file creates no
+    duplicates. store_id = the store selected in the UI, used only when
+    the file has no "store" column."""
+    from models.models import Store
+    content = await file.read()
+    fname = (file.filename or "").lower()
+    try:
+        if fname.endswith(".xlsx"):
+            import openpyxl
+            ws = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True).active
+            all_rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        elif fname.endswith(".csv"):
+            all_rows = list(csv.reader(io.StringIO(content.decode("utf-8-sig"))))
+        else:
+            raise HTTPException(400, "Please upload a .csv or .xlsx file")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(400, f"Could not read the file: {exc}")
+    if not all_rows:
+        raise HTTPException(400, "The file is empty")
+
+    stores = (await db.execute(select(Store))).scalars().all()
+    by_name = {st.name.strip().lower(): st.id for st in stores}
+    rules, errors = parse_rule_import_rows(all_rows[0], all_rows[1:], by_name, store_id)
+
+    existing = (await db.execute(select(AttributeMappingRule))).scalars().all()
+    by_id = {r.id: r for r in existing}
+    for r in rules:
+        if r["id"] is not None and r["id"] not in by_id:
+            errors.append({"row": r["row"], "error": f"Rule id {r['id']} does not exist (leave id empty to create a new rule)"})
+    if errors:
+        raise HTTPException(400, {"message": "Nothing was imported -- fix these rows and try again", "errors": sorted(errors, key=lambda e: e["row"])})
+
+    sigs = {_rule_signature(r) for r in existing}
+    # Files WITHOUT a "store" column (e.g. exports made before it existed)
+    # carry no scope: a row identical to an existing rule in ANY store or
+    # global counts as existing -- otherwise re-importing such a file would
+    # copy every store rule as a new rule for the selected scope.
+    sigs_any_store = {_rule_signature(r)[1:] for r in existing}
+    created = updated = skipped = 0
+    now = datetime.now(timezone.utc)
+    for r in rules:
+        fields = {k: r[k] for k in ("store_id", "woo_attr_name", "rule_type", "source_field", "fixed_value",
+                                    "instruction", "condition_type", "condition_value")}
+        if r["id"] is not None:
+            row = by_id[r["id"]]
+            for k, v in fields.items():
+                setattr(row, k, v)
+            if r["sort_order"] is not None:
+                row.sort_order = r["sort_order"]
+            row.updated_at = now
+            updated += 1
+            continue
+        if _rule_signature(fields) in sigs or (
+            not r["store_from_file"] and _rule_signature(fields)[1:] in sigs_any_store
+        ):
+            skipped += 1
+            continue
+        sort_order = r["sort_order"]
+        if sort_order is None:
+            same = [x.sort_order for x in existing if x.woo_attr_name.strip().lower() == fields["woo_attr_name"].lower()]
+            sort_order = (max(same) + 10) if same else 0
+        new = AttributeMappingRule(**fields, sort_order=sort_order)
+        db.add(new)
+        existing.append(new)
+        sigs.add(_rule_signature(fields))
+        sigs_any_store.add(_rule_signature(fields)[1:])
+        created += 1
+    await db.commit()
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
 @router.get("/attr-mapping/export-csv")
 async def export_csv(
     store_id: Optional[int] = Query(None),
@@ -224,16 +417,19 @@ async def export_csv(
             )
         )
     rows = (await db.execute(q)).scalars().all()
+    from models.models import Store as _ExStore
+    store_names = {st.id: st.name for st in (await db.execute(select(_ExStore))).scalars().all()}
 
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=[
-        "woo_attr_name", "rule_type", "source_field",
-        "fixed_value", "instruction",
-        "condition_type", "condition_value", "sort_order",
-    ])
+    # "id" and "store" added so an exported file can be edited and imported
+    # back (POST /attr-mapping/import): id -> update that rule, store name ->
+    # scope ("" = Global). Older exports without them still import.
+    writer = csv.DictWriter(buf, fieldnames=EXPORT_COLUMNS)
     writer.writeheader()
     for r in rows:
         writer.writerow({
+            "id":             r.id,
+            "store":          store_names.get(r.store_id, "") if r.store_id is not None else "",
             "woo_attr_name":  r.woo_attr_name,
             "rule_type":      r.rule_type,
             "source_field":   r.source_field or "",

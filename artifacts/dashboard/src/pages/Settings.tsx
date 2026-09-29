@@ -3864,6 +3864,41 @@ function AttributeMappingTab() {
     window.open(url, "_blank");
   };
 
+  // Client request: "Don't see an option for import, but need have".
+  // Imports the export's format (CSV or Excel). All or nothing: any
+  // invalid row -> nothing saved, rows listed below the toolbar.
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+  const [importErrors, setImportErrors] = useState<{ row: number; error: string }[] | null>(null);
+  const handleImportFile = async (file: File) => {
+    setImporting(true);
+    setImportErrors(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const url = storeId !== null ? `/api/attr-mapping/import?store_id=${storeId}` : "/api/attr-mapping/import";
+      const r = await fetch(url, { method: "POST", body: fd });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const detail = d?.detail;
+        if (detail && Array.isArray(detail.errors)) {
+          setImportErrors(detail.errors);
+          toast({ title: "Nothing was imported", description: `${detail.errors.length} row(s) need fixing — see the list.`, variant: "destructive" });
+        } else {
+          toast({ title: "Import failed", description: typeof detail === "string" ? detail : "Could not import the file.", variant: "destructive" });
+        }
+        return;
+      }
+      toast({ title: "Import complete", description: `${d.created} created · ${d.updated} updated · ${d.skipped} unchanged (already existed)` });
+      fetchRules(storeId);
+    } catch (e: any) {
+      toast({ title: "Import failed", description: e.message, variant: "destructive" });
+    } finally {
+      setImporting(false);
+      if (importInputRef.current) importInputRef.current.value = "";
+    }
+  };
+
 
   return (
     <div className="space-y-4">
@@ -3888,6 +3923,21 @@ function AttributeMappingTab() {
           >
             <Upload className="w-3.5 h-3.5" /> Export CSV
           </button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".csv,.xlsx"
+            className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleImportFile(f); }}
+          />
+          <button
+            onClick={() => importInputRef.current?.click()}
+            disabled={importing}
+            title="Import rules from a CSV or Excel file in the Export CSV format. Rows with an id update that rule; other rows are added; identical rules are skipped. If any row is invalid, nothing is imported."
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground border border-border/50 transition-colors disabled:opacity-50"
+          >
+            {importing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} Import
+          </button>
           <button
             onClick={() => { setPresetName(undefined); setDuplicateSeed(null); setModalRule("new"); }}
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
@@ -3909,6 +3959,18 @@ function AttributeMappingTab() {
           top to bottom (store and Global rules together) and the first rule whose condition matches a product wins.
         </span>
       </div>
+
+      {importErrors && importErrors.length > 0 && (
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 p-3 text-xs">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="font-medium text-red-400">Nothing was imported — fix these rows and import again:</span>
+            <button onClick={() => setImportErrors(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3.5 h-3.5" /></button>
+          </div>
+          <ul className="space-y-0.5 text-red-300/90 max-h-40 overflow-auto">
+            {importErrors.map((e, i) => <li key={i}>Row {e.row}: {e.error}</li>)}
+          </ul>
+        </div>
+      )}
 
       {/* Table: one row per attribute */}
       <div className="bg-card border border-border/50 rounded-2xl overflow-x-auto shadow-sm">
