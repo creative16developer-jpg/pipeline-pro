@@ -305,14 +305,21 @@ async def upload_csv(
     _sku_rows: dict[str, list[int]] = {}
     for r in rows:
         _sku_rows.setdefault(r["sunsky_sku"], []).append(r["row"])
+    # Structured (not just a warning line) so the UI can show duplicates
+    # prominently -- client: make it red and add a note at the top of the
+    # table that it has duplicate records (the yellow line under the Sale
+    # Price warning was easy to miss).
+    duplicate_skus: list[dict] = []
+    for sku, _dups in _sku_rows.items():
+        if len(_dups) > 1:
+            duplicate_skus.append({"sunsky_sku": sku, "rows": _dups, "used_row": _dups[-1]})
     for r in rows:
         _dups = _sku_rows[r["sunsky_sku"]]
         if len(_dups) > 1:
-            _others = ", ".join(str(n) for n in _dups if n != r["row"])
-            r["warnings"].append(
-                f"Sunsky SKU also on row {_others} — the last row wins"
-                if r["row"] != _dups[-1] else f"Sunsky SKU also on row {_others} — this (last) row is used"
-            )
+            r["duplicate"] = {
+                "other_rows": [n for n in _dups if n != r["row"]],
+                "is_used_row": r["row"] == _dups[-1],
+            }
 
     filename = file.filename or "import.csv"
 
@@ -469,7 +476,8 @@ async def upload_csv(
             "new": sum(1 for r in rows if r.get("result") == "new"),
             "updated": sum(1 for r in rows if r.get("result") == "updated"),
             "skipped": len(skipped_rows),
-            "with_warnings": sum(1 for r in rows if r.get("warnings")),
+            "with_warnings": sum(1 for r in rows if r.get("warnings") or r.get("duplicate")),
+            "duplicates": duplicate_skus,
         },
     }
     if suspicious_title_rows:
