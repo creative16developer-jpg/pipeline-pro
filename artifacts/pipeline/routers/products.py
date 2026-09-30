@@ -217,11 +217,18 @@ async def update_product_fields(
     # overwrites them (client decision: an explicit edit wins over the CSV
     # title). Only when the value actually CHANGED -- a save that resends
     # the same value is not an edit.
+    # Any content field the operator CHANGES is marked "manual" too (not
+    # only title / site SKU): generation now retries fields that fell back
+    # ("logic:fallback" / "ai:failed", client PL-159), so a hand-fixed
+    # fallback text must be protected from being overwritten by that retry.
+    from services.content_service import FIELD_ATTR
+    attr_to_field = {attr: f for f, attr in FIELD_ATTR.items()}
+    attr_to_field["site_sku"] = "site_sku"
     cs = dict(product.content_source or {})
     for field in body.model_fields_set:
         new_val = getattr(body, field)
-        if field in ("name", "site_sku") and (getattr(product, field) or "") != (new_val or ""):
-            cs["title" if field == "name" else "site_sku"] = "manual"
+        if field in attr_to_field and (getattr(product, field) or "") != (new_val or ""):
+            cs[attr_to_field[field]] = "manual"
         setattr(product, field, new_val)
     product.content_source = cs
 

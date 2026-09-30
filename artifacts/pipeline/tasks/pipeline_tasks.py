@@ -477,6 +477,16 @@ def _template_skipping_generated_fields(product, template: dict) -> tuple[dict, 
         if field in _FETCH_COLLIDES:
             if field not in sources:
                 continue  # no generation record yet -- still just the raw fetched value
+        # Client feedback (PL-159, OpenRouter free model rate-limited): a
+        # field whose AI call FAILED holds only template text
+        # ("logic:fallback") or nothing ("ai:failed") -- not generated
+        # content. Treating it as "already generated" meant every later run
+        # (Back to Enrich/Process/Fetch, a new pipeline) skipped it and kept
+        # the fallback forever: "same result - fallback". Retry it instead.
+        # (An operator's own edit of such a field is recorded as "manual"
+        # by PATCH /products/{id}/fields, so it is still protected.)
+        if sources.get(field) in ("logic:fallback", "ai:failed"):
+            continue
         existing_value = getattr(product, attr, None)
         if existing_value:
             overrides[field] = existing_value
@@ -588,6 +598,34 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
     from pathlib import Path
 
     # ── Load generation config ────────────────────────────────────────────────
+    # Client feedback (PL-159): "choose gemini flash 2.5 lite ... same result
+    # - fallback ... It can be some kind of cache." The pipeline kept the
+    # settings COPIED at pipeline start, so a model changed afterwards never
+    # applied -- on ANY path (Back to Enrich / Process / Fetch, not only
+    # Re-generate). Generate now uses the CURRENT saved Content Generation
+    # settings when the step runs, stores them on the pipeline, and logs the
+    # change. Falls back to the pipeline's copy if nothing is saved.
+    _cur_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+    if _cur_path.exists():
+        try:
+            _current = json.loads(_cur_path.read_text())
+        except Exception:
+            _current = None
+        if _current:
+            _prev = cfg.get("content_gen_config") or {}
+            _fmt = lambda c: f"{((c or {}).get('globalSettings') or {}).get('ai_provider') or '?'} · {((c or {}).get('globalSettings') or {}).get('ai_model') or 'default model'}"
+            if _prev and _fmt(_prev) != _fmt(_current):
+                await _plog(db, pl.id, "generate", "info",
+                            f"Using the CURRENT Content Generation settings ({_fmt(_current)}) — "
+                            f"this pipeline started with {_fmt(_prev)}")
+            cfg = dict(cfg)
+            cfg["content_gen_config"] = _current
+            try:
+                _plc = dict(pl.config or {})
+                _plc["content_gen_config"] = _current
+                pl.config = _plc
+            except Exception:
+                pass
     gen_cfg = cfg.get("content_gen_config", {})
     if not gen_cfg:
         saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
@@ -905,6 +943,18 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
     import json
     from pathlib import Path
 
+    # Same as Generate (client PL-159): the AI extraction uses the CURRENT
+    # saved Content Generation settings (provider/model), not the copy
+    # taken at pipeline start.
+    _cur_path_e = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+    if _cur_path_e.exists():
+        try:
+            _cur_e = json.loads(_cur_path_e.read_text())
+            if _cur_e:
+                cfg = dict(cfg)
+                cfg["content_gen_config"] = _cur_e
+        except Exception:
+            pass
     gen_cfg = cfg.get("content_gen_config", {})
     if not gen_cfg:
         saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
