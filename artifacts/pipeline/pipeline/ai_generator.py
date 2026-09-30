@@ -208,6 +208,17 @@ def _build_product_context(product: dict, category_name: str = "") -> str:
         lines.append(f"Brand: {native_brand}")
     lines.append(f"Description: {desc or '(none)'}")
     lines.append(f"Specifications:\n{specs_text}")
+    # Attributes as reviewed/corrected by the shop operator at the Enrich
+    # step (client decision: they guide the AI for ALL products). Stated as
+    # authoritative so a wrong raw spec can't override a corrected value.
+    reviewed = product.get("reviewed_attributes") or []
+    if reviewed:
+        attr_lines = "\n".join(f"  - {a['name']}: {a['value']}" for a in reviewed[:25])
+        lines.append(
+            "Reviewed attributes (checked by the shop operator -- treat as correct; "
+            "if they conflict with the description or specifications, follow these):\n"
+            + attr_lines
+        )
     if variant_info:
         lines.append(f"Variant Options: {variant_info}")
     return "\n".join(lines)

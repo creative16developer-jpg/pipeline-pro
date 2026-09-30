@@ -168,8 +168,19 @@ async def update_product_fields(
     if not product:
         raise HTTPException(404, "Product not found")
 
+    # Title / Site SKU changed by the operator (Enrich step or Content
+    # Review) are marked "manual" in content_source: generation then keeps
+    # them and feeds the edited title to the AI, and the CSV no longer
+    # overwrites them (client decision: an explicit edit wins over the CSV
+    # title). Only when the value actually CHANGED -- a save that resends
+    # the same value is not an edit.
+    cs = dict(product.content_source or {})
     for field in body.model_fields_set:
-        setattr(product, field, getattr(body, field))
+        new_val = getattr(body, field)
+        if field in ("name", "site_sku") and (getattr(product, field) or "") != (new_val or ""):
+            cs["title" if field == "name" else "site_sku"] = "manual"
+        setattr(product, field, new_val)
+    product.content_source = cs
 
     await db.commit()
     await db.refresh(product)

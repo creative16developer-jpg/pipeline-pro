@@ -323,13 +323,62 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
   const [saving, setSaving]   = useState(false);
   const [tab, setTab]         = useState<"all"|"review"|"ok">("all");
 
-  useEffect(() => {
+  const reloadEnrich = () =>
     fetch(`/api/pipelines/${pl.id}/enrich-data`)
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(setData)
       .catch(() => toast({ title: "Failed to load attribute data", variant: "destructive" }))
       .finally(() => setLoading(false));
-  }, [pl.id]);
+  useEffect(() => { reloadEnrich(); }, [pl.id]);
+
+  // Client request: edit title, SKU and attributes at the Enrich step --
+  // content generation uses them (an edited title and the reviewed
+  // attributes are passed to the AI; an edited title/SKU also wins over
+  // the CSV). Title/SKU -> PATCH /products/{id}/fields (marked "manual");
+  // attributes -> the same endpoints Content Review uses (source "manual").
+  const [edit, setEdit] = useState<{ pid: number; kind: "name" | "sku" | "attr" | "newattr"; attrId?: number; attrName?: string } | null>(null);
+  const [draft, setDraft] = useState<{ name: string; value: string }>({ name: "", value: "" });
+  const [busy, setBusy] = useState(false);
+  const saveEdit = async () => {
+    if (!edit) return;
+    setBusy(true);
+    try {
+      let r: Response;
+      if (edit.kind === "name" || edit.kind === "sku") {
+        const v = draft.value.trim();
+        if (!v) throw new Error(edit.kind === "name" ? "Title can't be empty" : "SKU can't be empty");
+        r = await fetch(`/api/products/${edit.pid}/fields`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(edit.kind === "name" ? { name: v } : { site_sku: v }),
+        });
+      } else {
+        const name = (edit.kind === "attr" ? edit.attrName ?? "" : draft.name).trim();
+        if (!name || !draft.value.trim()) throw new Error("Attribute name and value are required");
+        r = await fetch(`/api/pipelines/${pl.id}/products/${edit.pid}/attributes`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ attribute: name, raw_value: draft.value.trim() }),
+        });
+      }
+      if (!r.ok) throw new Error(await r.text());
+      setEdit(null);
+      await reloadEnrich();
+    } catch (e: any) {
+      toast({ title: "Save failed", description: e.message, variant: "destructive" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const deleteAttr = async (pid: number, attrId: number) => {
+    try {
+      const r = await fetch(`/api/pipelines/${pl.id}/products/${pid}/attributes/${attrId}`, { method: "DELETE" });
+      if (!r.ok) throw new Error(await r.text());
+      await reloadEnrich();
+    } catch (e: any) {
+      toast({ title: "Remove failed", description: e.message, variant: "destructive" });
+    }
+  };
+  const editKeys = (e: React.KeyboardEvent) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEdit(null); };
+  const inlineInput = "text-[12px] px-2 py-1 rounded-md border border-violet-400 bg-card focus:outline-none";
 
   const allProducts: any[] = data?.products ?? [];
   const needsReview = allProducts.filter((p: any) => p.attrs?.some((a: any) => a.status === "unset" || a.status === "low_confidence")).length;
@@ -371,7 +420,7 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
             {ready > 0       && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-400">{ready} auto-confirmed</span>}
           </div>
         </div>
-        <div className="text-[12px] text-muted-foreground mb-4">AI reads raw Sunsky title + spec block and extracts structured values. You confirm or correct.</div>
+        <div className="text-[12px] text-muted-foreground mb-4">AI reads raw Sunsky title + spec block and extracts structured values. Click a title, SKU or attribute to correct it — content generation uses these values.</div>
 
         {/* Legend */}
         <div className="flex gap-4 text-[12px] text-muted-foreground mb-4 flex-wrap">
@@ -417,13 +466,49 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
                 {displayed.slice(0, 30).map((p: any) => (
                   <tr key={p.id} className="border-b border-border/20 last:border-0 hover:bg-card/50">
                     <td className="px-4 py-3 align-top">
-                      <div className="font-medium text-foreground">{p.name}</div>
-                      <div className="text-[12px] text-muted-foreground font-mono">{p.sku}</div>
+                      {edit && edit.pid === p.id && edit.kind === "name" ? (
+                        <div className="flex items-center gap-1 mb-1">
+                          <input autoFocus value={draft.value} onChange={e => setDraft(d => ({ ...d, value: e.target.value }))}
+                                 onKeyDown={editKeys} className={cn(inlineInput, "w-full")} />
+                          <button onClick={saveEdit} disabled={busy} className="text-emerald-400"><Check className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => setEdit(null)} className="text-muted-foreground"><XIcon className="w-3.5 h-3.5" /></button>
+                        </div>
+                      ) : (
+                        <div className="font-medium text-foreground cursor-pointer hover:text-violet-300" title="Click to edit the title — the AI uses it when writing content"
+                             onClick={() => { setEdit({ pid: p.id, kind: "name" }); setDraft({ name: "", value: p.name ?? "" }); }}>
+                          {p.name}
+                        </div>
+                      )}
+                      {edit && edit.pid === p.id && edit.kind === "sku" ? (
+                        <div className="flex items-center gap-1">
+                          <input autoFocus value={draft.value} onChange={e => setDraft(d => ({ ...d, value: e.target.value }))}
+                                 onKeyDown={editKeys} className={cn(inlineInput, "font-mono w-40")} />
+                          <button onClick={saveEdit} disabled={busy} className="text-emerald-400"><Check className="w-3.5 h-3.5" /></button>
+                          <button onClick={() => setEdit(null)} className="text-muted-foreground"><XIcon className="w-3.5 h-3.5" /></button>
+                        </div>
+                      ) : (
+                        <div className="text-[12px] text-muted-foreground font-mono cursor-pointer hover:text-violet-300" title="Click to edit the site SKU"
+                             onClick={() => { setEdit({ pid: p.id, kind: "sku" }); setDraft({ name: "", value: p.sku ?? "" }); }}>
+                          {p.sku}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 align-top">
                       <div className="flex flex-wrap gap-1.5">
-                        {(p.attrs ?? []).map((a: any, idx: number) => (
-                          <span key={idx} className={cn(
+                        {(p.attrs ?? []).map((a: any, idx: number) => edit && edit.pid === p.id && edit.kind === "attr" && edit.attrId === a.id ? (
+                          <span key={idx} className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-violet-400 bg-card">
+                            <span className="text-[11px] text-muted-foreground">{a.attribute}:</span>
+                            <AttrValueInput autoFocus storeId={pl.store_id} attributeName={a.attribute} value={draft.value}
+                                            onChange={v => setDraft(d => ({ ...d, value: v }))} onEnter={saveEdit} onEscape={() => setEdit(null)}
+                                            className="text-[12px] bg-transparent border-none outline-none w-40" />
+                            <button onClick={saveEdit} disabled={busy} className="text-emerald-400"><Check className="w-3 h-3" /></button>
+                            <button onClick={() => setEdit(null)} className="text-muted-foreground"><XIcon className="w-3 h-3" /></button>
+                          </span>
+                        ) : (
+                          <span key={idx}
+                            title="Click to edit — the AI uses these values when writing content"
+                            onClick={() => { setEdit({ pid: p.id, kind: "attr", attrId: a.id, attrName: a.attribute }); setDraft({ name: a.attribute, value: a.raw_value && a.raw_value !== "not found" ? a.raw_value : "" }); }}
+                            className={cn("group cursor-pointer",
                             "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium border-[1.5px]",
                             a.status === "resolved"       ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-400" :
                             a.status === "low_confidence" ? "bg-amber-500/15 border-amber-500/30 text-amber-400" :
@@ -436,8 +521,26 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
                                 {` ${Math.round(a.confidence * 100)}%`}
                               </span>
                             )}
+                            <button onClick={e => { e.stopPropagation(); deleteAttr(p.id, a.id); }} title="Remove attribute"
+                                    className="opacity-0 group-hover:opacity-100 hover:text-red-300 transition-opacity"><XIcon className="w-3 h-3" /></button>
                           </span>
                         ))}
+                        {edit && edit.pid === p.id && edit.kind === "newattr" ? (
+                          <span className="inline-flex items-center gap-1">
+                            <input autoFocus placeholder="Attribute name" value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
+                                   className={cn(inlineInput, "w-32")} />
+                            <AttrValueInput storeId={pl.store_id} attributeName={draft.name} value={draft.value} placeholder="Value"
+                                            onChange={v => setDraft(d => ({ ...d, value: v }))} onEnter={saveEdit} onEscape={() => setEdit(null)}
+                                            className={cn(inlineInput, "w-40")} />
+                            <button onClick={saveEdit} disabled={busy} className="text-emerald-400"><Check className="w-3.5 h-3.5" /></button>
+                            <button onClick={() => setEdit(null)} className="text-muted-foreground"><XIcon className="w-3.5 h-3.5" /></button>
+                          </span>
+                        ) : (
+                          <button onClick={() => { setEdit({ pid: p.id, kind: "newattr" }); setDraft({ name: "", value: "" }); }}
+                                  className="text-[12px] text-violet-400 hover:text-violet-300 flex items-center gap-1 px-1">
+                            <Plus className="w-3 h-3" /> Add attribute
+                          </button>
+                        )}
                         {(!p.attrs || p.attrs.length === 0) && (
                           <span className="text-[12px] text-muted-foreground italic">No attributes extracted</span>
                         )}

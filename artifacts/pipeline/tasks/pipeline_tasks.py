@@ -507,13 +507,59 @@ def _apply_csv_entry(product, csv_entry) -> str:
     """
     if not csv_entry:
         return ""
+    # Client decision (Enrich-step editing): a title / Site SKU the operator
+    # edited by hand (content_source "manual", set by PATCH
+    # /products/{id}/fields) WINS over the CSV -- the newest, deliberate
+    # choice. Returning "" keeps the CSV title from winning later in
+    # _prepare_field_context too.
+    _cs = product.content_source or {}
     csv_title = (csv_entry.csv_title or "").strip()
     site_sku = csv_entry.site_sku or ""
-    if site_sku:
+    if site_sku and _cs.get("site_sku") != "manual":
         product.site_sku = site_sku
+    if _cs.get("title") == "manual":
+        return ""
     if csv_title:
         product.name = csv_title
     return csv_title
+
+
+async def _generation_context_extras(db, pl_id: int, product) -> dict:
+    """Extra product-dict keys for content generation, merged AFTER **raw.
+
+    Client request: edit title / SKU / attributes at the Enrich step,
+    "because if ... some attribute is wrong and AI use them as context it
+    will generate wrong data". Findings: generation never read the Enrich
+    attributes, and the prod_dict put **raw last, so raw_data["name"] (the
+    ORIGINAL Sunsky title) overrode the product's saved name -- an edited
+    title never reached the AI. Client decisions: (1) an edited title wins
+    (also over the CSV title); (2) the reviewed attributes guide the AI for
+    ALL products.
+    - "reviewed_attributes": this pipeline's attributes for the product as
+      they stand after the Enrich review (name: value), empty values and
+      "not found" left out -> _build_product_context adds them.
+    - "name": the operator-edited title, when content_source title is
+      "manual" (otherwise the existing behaviour is untouched).
+    """
+    from models.models import ProductEnrichAttr
+    from sqlalchemy import select as _sel_gx
+    extras: dict = {}
+    rows = (await db.execute(
+        _sel_gx(ProductEnrichAttr).where(
+            ProductEnrichAttr.pipeline_job_id == pl_id,
+            ProductEnrichAttr.product_id == product.id,
+        ).order_by(ProductEnrichAttr.id)
+    )).scalars().all()
+    attrs = []
+    for r in rows:
+        name = (r.woo_attr_name or r.attribute or "").strip()
+        value = (r.normalised_value or r.raw_value or "").strip()
+        if name and value and value.lower() != "not found":
+            attrs.append({"name": name, "value": value})
+    extras["reviewed_attributes"] = attrs
+    if (product.content_source or {}).get("title") == "manual" and product.name:
+        extras["name"] = product.name
+    return extras
 
 
 async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regenerate: bool = False) -> dict:
@@ -685,6 +731,7 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
                 "native_brand": _gen_resolve_brand(product),
                 **raw,
             }
+            prod_dict.update(await _generation_context_extras(db, pl.id, product))
             product_template = template
             if not force_regenerate:
                 product_template, skipped = _template_skipping_generated_fields(product, template)
@@ -727,22 +774,13 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
         try:
             raw = product.raw_data or {}
 
-            # Apply CSV mapping if available
+            # Apply CSV mapping if available -- the shared helper (same as
+            # batch mode), which also leaves an operator-edited title / Site
+            # SKU alone. Post-generate we re-assert csv_title so AI mode
+            # can't silently overwrite it ("" for an edited title).
             csv_entry = csv_lookup.get(product.sku)
-            csv_title = ""
-            site_sku = ""
-            if csv_entry:
-                csv_title = csv_entry.csv_title or ""
-                site_sku = csv_entry.site_sku or ""
-                # Apply both directly — same pattern, same priority.
-                # Content generation runs AFTER this, so it sees the updated
-                # name but csv_title in prod_dict ensures logic mode also
-                # returns it. Post-generate we re-assert csv_title so AI
-                # mode can't silently overwrite it.
-                if site_sku:
-                    product.site_sku = site_sku
-                if csv_title:
-                    product.name = csv_title  # direct apply like site_sku
+            csv_title = _apply_csv_entry(product, csv_entry)
+            site_sku = product.site_sku or ""
 
             prod_dict = {
                 "name":        product.name or "",
@@ -755,8 +793,16 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
                 "native_brand": _gen_resolve_brand(product),
                 **raw,
             }
+            prod_dict.update(await _generation_context_extras(db, pl.id, product))
 
-            sources: dict = product.content_source or {}
+            # A COPY: content_source is a plain JSON column, so changing the
+            # loaded dict in place and assigning the SAME object back is
+            # not detected as a change -- for a product that already had a
+            # content_source, newly generated fields' provenance was never
+            # saved (found testing Enrich-step edits: a batch-generated
+            # description was stored but not recorded, so the next pipeline
+            # would treat it as missing and generate it again).
+            sources: dict = dict(product.content_source or {})
             prod_failed = False
 
             # Skip fields that already have a recorded value (from a prior
@@ -1291,8 +1337,18 @@ async def _poll_batch_pipelines():
                         "description": product.description or "", "price": product.price or "0",
                         "site_sku": product.site_sku or "", "csv_title": csv_title, **raw,
                     }
-                    field_results_out = await generate_product(prod_dict, template, precomputed_ai=field_results)
-                    sources = product.content_source or {}
+                    prod_dict.update(await _generation_context_extras(db, pl.id, product))
+                    # Same "already generated / operator-set -> keep" rule the
+                    # SUBMIT step applied (batch mode never runs with
+                    # force_regenerate -- that's only the sync "Re-generate
+                    # content" path). Without it, every field deliberately
+                    # left OUT of the batch (already generated, or a title
+                    # the operator edited) was regenerated LIVE here via
+                    # run_field's non-precomputed AI branch and overwritten.
+                    _sources_before = dict(product.content_source or {})
+                    apply_template, _apply_skipped = _template_skipping_generated_fields(product, template)
+                    field_results_out = await generate_product(prod_dict, apply_template, precomputed_ai=field_results)
+                    sources = dict(product.content_source or {})  # copy -- see the sync path
                     # Client feedback confirmed live via a full pipeline
                     # log: Meta Description and every other dependent
                     # field (Slug, Meta Title, Short Description, Focus
@@ -1315,7 +1371,13 @@ async def _poll_batch_pipelines():
                         value = result.get("value", "")
                         if attr and value:
                             setattr(product, attr, value)
-                            sources[field] = result.get("source", "logic")
+                            # kept (skipped) fields keep their original
+                            # provenance -- e.g. "manual" for an operator-
+                            # edited title -- same as the sync path
+                            if field in _apply_skipped and field in _sources_before:
+                                sources[field] = _sources_before[field]
+                            else:
+                                sources[field] = result.get("source", "logic")
                     product.content_source = sources
                     # CSV title always wins -- same re-assert as the
                     # synchronous path (see _apply_csv_entry).
