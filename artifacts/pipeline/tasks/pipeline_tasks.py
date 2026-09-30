@@ -764,9 +764,10 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
         # Nothing batchable (e.g. every field is logic/derive) -- fall
         # through to the normal path below, same as batch mode being off.
 
+    _model_label = (gen_cfg.get("globalSettings") or {}).get("ai_model") or "default model"
     await _plog(db, pl.id, "generate", "info",
                 f"Content generation: {total} products | "
-                f"AI={'on (' + ai_provider + ')' if ai_enabled else 'off (logic only)'}")
+                f"AI={'on (' + ai_provider + ' · ' + _model_label + ')' if ai_enabled else 'off (logic only)'}")
 
     ok_count = fallback_count = failed_count = 0
 
@@ -1777,7 +1778,33 @@ async def _regenerate_content(pipeline_job_id: int):
                         f"{_make_pl_id(pl.id)} re-generating content (operator requested)")
 
             try:
-                cfg = pl.config or {}
+                # Client feedback (PL-159): after switching the model from
+                # google/gemma-...:free (rate-limited -> fallbacks) to
+                # Gemini 2.5 Flash Lite, "Re-generate content" gave the same
+                # fallbacks -- it used the settings COPIED when the pipeline
+                # started (pl.config), not the current ones. Re-generate is
+                # the operator's explicit "try again", so it uses the CURRENT
+                # saved Content Generation settings, stores them on the
+                # pipeline, and logs which provider/model it uses.
+                import json
+                cfg = dict(pl.config or {})
+                _old_gs = (cfg.get("content_gen_config") or {}).get("globalSettings") or {}
+                _saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+                _current = None
+                if _saved_path.exists():
+                    try:
+                        _current = json.loads(_saved_path.read_text())
+                    except Exception:
+                        _current = None
+                if _current:
+                    cfg["content_gen_config"] = _current
+                    pl.config = cfg
+                    _new_gs = _current.get("globalSettings") or {}
+                    _fmt = lambda g: f"{g.get('ai_provider') or '?'} · {g.get('ai_model') or 'default model'}"
+                    await _plog(db, pl.id, "generate", "info",
+                                f"Re-generate uses the CURRENT Content Generation settings: {_fmt(_new_gs)}"
+                                + (f" (this pipeline started with {_fmt(_old_gs)})" if _fmt(_old_gs) != _fmt(_new_gs) and _old_gs else ""))
+                    await db.commit()
                 stats = await _run_generate(db, pl, cfg, force_sync=True, force_regenerate=True)
 
                 pl.status = "content_review"

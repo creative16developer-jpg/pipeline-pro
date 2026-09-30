@@ -1646,7 +1646,10 @@ async def run_field(
             try:
                 value = await _run_ai_with_retry(field, product, ai_provider, ai_model, options)
                 value = _fix_brand_spelling(value, product)
-                source = f"ai:{ai_provider}"
+                # model recorded too (client: "It's good if somewhere the
+                # system can be check which model is used ... and which data
+                # is fallback") -- e.g. "ai:openrouter:google/gemini-2.5-flash-lite"
+                source = f"ai:{ai_provider}:{ai_model}" if ai_model else f"ai:{ai_provider}"
 
                 # Client feedback confirmed live via a real generated
                 # product (SYA002283914A, generated through THIS exact

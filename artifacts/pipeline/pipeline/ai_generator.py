@@ -385,6 +385,29 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
 
 
+def openrouter_retry_wait(err, now: float) -> float:
+    """Seconds to wait after an OpenRouter 429: until X-RateLimit-Reset
+    (epoch ms, in the error body's metadata.headers or the response
+    headers) plus a second, clamped to 2..65 s; 20 s if unknown."""
+    reset = None
+    try:
+        body = getattr(err, "body", None) or {}
+        err_obj = body.get("error", body) if isinstance(body, dict) else {}
+        reset = ((err_obj.get("metadata") or {}).get("headers") or {}).get("X-RateLimit-Reset")
+    except Exception:
+        reset = None
+    if reset is None:
+        try:
+            reset = err.response.headers.get("X-RateLimit-Reset")
+        except Exception:
+            reset = None
+    try:
+        wait = float(reset) / 1000.0 - now + 1.0
+    except (TypeError, ValueError):
+        return 20.0
+    return max(2.0, min(65.0, wait))
+
+
 async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
     api_key = _get_api_key("OPENROUTER_API_KEY", "openrouter")
     if not api_key:
@@ -399,15 +422,27 @@ async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
         base_url=OPENROUTER_BASE_URL,
         default_headers={"X-Title": "PipelinePro"},   # optional app attribution
     )
-    try:
-        response = await client.chat.completions.create(
-            model=model or OPENROUTER_DEFAULT_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=600,
-            temperature=0.7,
-        )
-    except Exception as e:
-        raise AIGenerationError(f"OpenRouter request failed ({model or OPENROUTER_DEFAULT_MODEL}): {e}")
+    # Client log (PL-159): free models are limited per minute ("Rate limit
+    # exceeded: free-models-per-min", X-RateLimit-Limit 20) and every 429
+    # fell straight back to logic. Wait until OpenRouter's reset time
+    # (X-RateLimit-Reset, epoch ms; capped) and retry a few times first.
+    import asyncio as _aio, time as _t
+    response = None
+    for attempt in range(4):
+        try:
+            response = await client.chat.completions.create(
+                model=model or OPENROUTER_DEFAULT_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=600,
+                temperature=0.7,
+            )
+            break
+        except Exception as e:
+            status = getattr(e, "status_code", None)
+            if status == 429 and attempt < 3:
+                await _aio.sleep(openrouter_retry_wait(e, _t.time()))
+                continue
+            raise AIGenerationError(f"OpenRouter request failed ({model or OPENROUTER_DEFAULT_MODEL}): {e}")
     choices = getattr(response, "choices", None) or []
     text = (choices[0].message.content or "").strip() if choices else ""
     if not text:

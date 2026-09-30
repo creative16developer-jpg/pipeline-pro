@@ -1659,6 +1659,28 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
           <span className="font-semibold">"Re-generate content"</span> below
           to refresh it.
         </div>
+        {(() => {
+          // Batch summary (client: see which model this pipeline used and which data fell back)
+          const models = new Set<string>();
+          let withFallback = 0;
+          for (const p of allProducts as any[]) {
+            const sm = summarizeContentSource(p.content_source);
+            sm.models.forEach(m => models.add(m));
+            if (sm.fellBack.length) withFallback++;
+          }
+          if (!models.size && !withFallback) return null;
+          return (
+            <div className={`rounded-lg px-4 py-2 text-[12px] mb-3 border ${withFallback ? "border-red-500/30 bg-red-500/5" : "border-border bg-secondary/20"}`}>
+              {models.size > 0 && <div className="text-muted-foreground">AI used: <span className="font-mono text-foreground">{Array.from(models).sort().join(", ")}</span></div>}
+              {withFallback > 0 && (
+                <div className="text-red-400">
+                  {withFallback} product(s) have fields that fell back to template text (the AI call failed) — marked "fell back" below.
+                  See the Pipeline Log for the reason, then use Re-generate content (it uses the current Content Generation settings).
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Product rows */}
         <div className="flex items-center gap-2 mb-2 px-1">
@@ -1718,10 +1740,28 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                   )}
                   <strong className="text-[13px]">{p.name}</strong>
                   <span className="text-[12px] text-muted-foreground">{p.sku}{p.price ? ` · $${p.price}` : ""}</span>
+                  {summarizeContentSource(p.content_source).fellBack.length > 0 && (
+                    <span
+                      title={`Fell back to template (logic) text — the AI call failed for: ${summarizeContentSource(p.content_source).fellBack.join(", ")}. Check the Pipeline Log for the reason, then use Re-generate content.`}
+                      className="inline-flex px-2 py-0.5 rounded-full text-[11px] font-medium bg-red-500/15 text-red-400 flex-shrink-0"
+                    >
+                      {summarizeContentSource(p.content_source).fellBack.length} fell back
+                    </span>
+                  )}
                   <span className="ml-auto text-muted-foreground/60 text-[12px]">{isExp ? "▾" : "›"}</span>
                 </div>
                 {isExp && (
                   <div className="px-4 pb-4 bg-card/50 border-t border-border">
+                    {(() => {
+                      const sm = summarizeContentSource(p.content_source);
+                      if (!sm.models.length && !sm.fellBack.length) return null;
+                      return (
+                        <div className="mt-3 text-[12px] rounded-lg border border-border/60 bg-secondary/20 px-3 py-2 space-y-0.5">
+                          {sm.models.length > 0 && <div className="text-muted-foreground">Generated with: <span className="text-foreground font-mono">{sm.models.join(", ")}</span></div>}
+                          {sm.fellBack.length > 0 && <div className="text-red-400">Fell back to template text (AI failed): {sm.fellBack.join(", ")}</div>}
+                        </div>
+                      );
+                    })()}
                     <div className="grid grid-cols-1 gap-3 mt-3">
                       <div>
                         <label className="block text-[12px] font-medium text-foreground/70 mb-1">Product Title</label>
@@ -2515,6 +2555,33 @@ function AttrValueInput({
       )}
     </div>
   );
+}
+
+// Client feedback (PL-159): "It's good if somewhere the system can be
+// check which model is used for the specific pipeline and which data is
+// fallback". Per product, from its recorded content_source: which AI
+// provider/model wrote it ("ai:openrouter:google/gemini-2.5-flash-lite";
+// batch: "ai:anthropic:batch") and which fields fell back ("logic:fallback"
+// = the AI call failed and a template text was used; "ai:failed" = left empty).
+const _CS_FIELD_LABELS: Record<string, string> = {
+  title: "Title", description: "Description", short_description: "Short description", slug: "Slug",
+  meta_title: "Meta title", meta_description: "Meta description", tags: "Tags", image_alt: "Image alt",
+  image_names: "Image names", image_caption: "Image caption", image_description: "Image description",
+  focus_keyword: "Focus keyword",
+};
+export function summarizeContentSource(cs: Record<string, string> | null | undefined) {
+  const models = new Set<string>();
+  const fellBack: string[] = [];
+  for (const [field, src] of Object.entries(cs ?? {})) {
+    if (typeof src !== "string") continue;
+    if (src === "logic:fallback" || src === "ai:failed") { fellBack.push(_CS_FIELD_LABELS[field] ?? field); continue; }
+    if (src.startsWith("ai:")) {
+      const rest = src.slice(3);
+      const i = rest.indexOf(":");
+      models.add(i === -1 ? `${rest} · model not recorded` : `${rest.slice(0, i)} · ${rest.slice(i + 1)}`);
+    }
+  }
+  return { models: Array.from(models).sort(), fellBack };
 }
 
 // Cat. Review "Already mapped" line for one category. Shows the ★ MAIN
