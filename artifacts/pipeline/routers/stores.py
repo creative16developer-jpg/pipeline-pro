@@ -156,7 +156,7 @@ async def translate_store_categories(store_id: int, db: AsyncSession = Depends(g
         return {"translated": 0, "message": "Nothing to translate — all categories already have an English name cached."}
 
     status = get_provider_status()
-    provider = next((p for p in ("openai", "anthropic", "gemini") if status.get(p, {}).get("configured")), None)
+    provider = next((p for p in ("openai", "anthropic", "gemini", "openrouter") if status.get(p, {}).get("configured")), None)
     if not provider:
         raise HTTPException(400, "No AI provider is configured (Settings → AI Provider Keys) — translation needs one, same as Content Generation.")
 

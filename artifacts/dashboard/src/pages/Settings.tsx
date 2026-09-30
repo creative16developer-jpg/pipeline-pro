@@ -28,6 +28,16 @@ const PROVIDERS: Record<string, {
   bgColor: string;
   models: string[];
 }> = {
+  openrouter: {
+    label: "OpenRouter",
+    description: "One key for hundreds of models (OpenAI, Claude, Gemini, Llama, Mistral…) — pick the model and see prices in Content Generation",
+    envVar: "OPENROUTER_API_KEY",
+    docsUrl: "https://openrouter.ai/keys",
+    docsLabel: "OpenRouter Keys",
+    color: "text-violet-400",
+    bgColor: "bg-violet-500/10 border-violet-500/20",
+    models: ["openai/gpt-4o-mini", "anthropic/claude-sonnet-4", "google/gemini-2.5-flash", "…and many more"],
+  },
   gemini: {
     label: "Google Gemini",
     description: "gemini-2.5-flash (free tier), gemini-3.7-flash and other Google models",

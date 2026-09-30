@@ -50,7 +50,7 @@ DEFAULT_CONFIG: dict = {
         "ai_enabled": False,
         "ai_provider": "openai",
         "ai_model": "",
-        "ai_providers_enabled": {"openai": True, "anthropic": True, "gemini": True},
+        "ai_providers_enabled": {"openai": True, "anthropic": True, "gemini": True, "openrouter": True},
         "max_calls_per_product": 3,
         "keyword_strategy": "auto",
         "fallback_strategy": "safe",
@@ -213,6 +213,20 @@ async def save_config(config: GenerateConfig):
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     _SAVED_CONFIG_PATH.write_text(json.dumps(config.model_dump(), indent=2))
     return {"saved": True, "path": str(_SAVED_CONFIG_PATH)}
+
+
+@router.get("/openrouter-models")
+async def get_openrouter_models(refresh: bool = False):
+    """OpenRouter's text models with prices per 1M tokens (input / output)
+    for the Content Generation model picker. Public catalogue -- works
+    before an OpenRouter key is saved. Cached for an hour; ?refresh=true
+    reloads."""
+    from pipeline.ai_generator import list_openrouter_models, AIGenerationError
+    try:
+        models = await list_openrouter_models(force=refresh)
+    except AIGenerationError as e:
+        raise HTTPException(502, str(e))
+    return {"models": models, "count": len(models)}
 
 
 @router.get("/providers")

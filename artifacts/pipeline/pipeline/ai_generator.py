@@ -8,7 +8,7 @@ Usage:
     value = await generate_with_ai(
         field="description",
         product=product_dict,
-        provider="openai",        # "openai" | "anthropic" | "gemini"
+        provider="openai",        # "openai" | "anthropic" | "gemini" | "openrouter"
         model=None,               # None = use provider default
         options=field_options,
     )
@@ -375,6 +375,100 @@ async def _generate_openai(prompt: str, model: Optional[str]) -> str:
 # restart (in-memory only, not persisted) -- a fresh worker simply
 # relearns it on the first failure again, an acceptable cost for
 # avoiding a stale, wrong cached value surviving indefinitely.
+# Client request (milestone point 7): "In AI Provider Keys and Content
+# Generation add OpenRouter and list of the AI models I can use" -- to test
+# different models and optimise cost. OpenRouter's API is OpenAI-compatible
+# (https://openrouter.ai/api/v1, POST /chat/completions), so the official
+# OpenAI SDK is used with that base_url. Model ids look like
+# "openai/gpt-4o-mini", "anthropic/claude-sonnet-4", "google/gemini-2.5-flash".
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_DEFAULT_MODEL = "openai/gpt-4o-mini"
+
+
+async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
+    api_key = _get_api_key("OPENROUTER_API_KEY", "openrouter")
+    if not api_key:
+        raise AIGenerationError("OPENROUTER_API_KEY not configured — add it in Settings")
+    try:
+        from openai import AsyncOpenAI
+    except ImportError:
+        raise AIGenerationError("openai package not installed — run: pip install openai")
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url=OPENROUTER_BASE_URL,
+        default_headers={"X-Title": "PipelinePro"},   # optional app attribution
+    )
+    try:
+        response = await client.chat.completions.create(
+            model=model or OPENROUTER_DEFAULT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=600,
+            temperature=0.7,
+        )
+    except Exception as e:
+        raise AIGenerationError(f"OpenRouter request failed ({model or OPENROUTER_DEFAULT_MODEL}): {e}")
+    choices = getattr(response, "choices", None) or []
+    text = (choices[0].message.content or "").strip() if choices else ""
+    if not text:
+        raise AIGenerationError(f"OpenRouter returned an empty response ({model or OPENROUTER_DEFAULT_MODEL})")
+    return _strip_markdown_fence(text)
+
+
+_OPENROUTER_MODELS_CACHE: dict = {"at": 0.0, "models": None}
+
+
+def parse_openrouter_models(payload: dict) -> list[dict]:
+    """GET https://openrouter.ai/api/v1/models -> models usable for text
+    generation, with prices per 1M tokens (the API gives USD per TOKEN as
+    strings). Pure -- tested without network. Models whose output is not
+    text, or without an id, are left out; sorted by name."""
+    out: list[dict] = []
+    for m in (payload or {}).get("data") or []:
+        mid = str(m.get("id") or "").strip()
+        if not mid:
+            continue
+        outputs = ((m.get("architecture") or {}).get("output_modalities")) or ["text"]
+        if "text" not in outputs:
+            continue
+        pricing = m.get("pricing") or {}
+        def per_million(v):
+            try:
+                return round(float(v) * 1_000_000, 4)
+            except (TypeError, ValueError):
+                return None
+        pin, pout = per_million(pricing.get("prompt")), per_million(pricing.get("completion"))
+        out.append({
+            "id": mid,
+            "name": str(m.get("name") or mid),
+            "context_length": m.get("context_length"),
+            "input_per_million": pin,
+            "output_per_million": pout,
+            "is_free": mid.endswith(":free") or (pin == 0 and pout == 0),
+        })
+    out.sort(key=lambda x: x["name"].lower())
+    return out
+
+
+async def list_openrouter_models(force: bool = False) -> list[dict]:
+    """OpenRouter's public model catalogue (no API key needed), cached for
+    an hour. Raises AIGenerationError if it can't be reached."""
+    import time
+    if not force and _OPENROUTER_MODELS_CACHE["models"] is not None \
+            and time.time() - _OPENROUTER_MODELS_CACHE["at"] < 3600:
+        return _OPENROUTER_MODELS_CACHE["models"]
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=20) as client:
+            r = await client.get(f"{OPENROUTER_BASE_URL}/models")
+            r.raise_for_status()
+            models = parse_openrouter_models(r.json())
+    except Exception as e:
+        raise AIGenerationError(f"Could not load the OpenRouter model list: {e}")
+    _OPENROUTER_MODELS_CACHE.update(at=time.time(), models=models)
+    return models
+
+
 _MODEL_SUPPORTS_EFFORT: dict[str, bool] = {}
 
 
@@ -752,6 +846,8 @@ async def generate_with_ai(
         return await _generate_anthropic(prompt, model)
     elif provider == "gemini":
         return await _generate_gemini(prompt, model)
+    elif provider == "openrouter":
+        return await _generate_openrouter(prompt, model)
     else:
         raise AIGenerationError(f"Unknown AI provider: '{provider}'")
 
@@ -775,6 +871,14 @@ def get_provider_status() -> dict:
                 "claude-sonnet-5",
                 "claude-haiku-4-5-20251001",
             ],
+        },
+        "openrouter": {
+            "configured": bool(_get_api_key("OPENROUTER_API_KEY", "openrouter")),
+            "label": "OpenRouter",
+            "default_model": OPENROUTER_DEFAULT_MODEL,
+            # hundreds of models -- loaded live: GET /api/generate/openrouter-models
+            "models": [OPENROUTER_DEFAULT_MODEL],
+            "dynamic_models": True,
         },
         "gemini": {
             "configured": bool(_get_api_key("GEMINI_API_KEY", "gemini")),

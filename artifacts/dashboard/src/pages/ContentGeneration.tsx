@@ -147,7 +147,128 @@ interface GenerationJob {
 // Default config
 // ─────────────────────────────────────────────────────────────────────────────
 
+type OpenRouterModel = {
+  id: string; name: string; context_length: number | null;
+  input_per_million: number | null; output_per_million: number | null; is_free: boolean;
+};
+
+// "$0.15 / $0.60" per 1M tokens (input / output); "free" for free models.
+export function formatOpenRouterPrice(m: OpenRouterModel): string {
+  if (m.is_free) return "free";
+  // at least 2 decimals, a 3rd only when needed: $0.60, $0.075, $30.00
+  const f = (v: number | null) => {
+    if (v == null) return "?";
+    let t = v < 1 ? v.toFixed(3) : v.toFixed(2);
+    if (v < 1 && t.endsWith("0")) t = t.slice(0, -1);
+    return `$${t}`;
+  };
+  return `${f(m.input_per_million)} / ${f(m.output_per_million)}`;
+}
+
+// Filter + sort for the picker (pure, testable). "cheapest" orders by the
+// cost of a typical product text (input + output price), free first.
+export function filterOpenRouterModels(models: OpenRouterModel[], query: string, sort: "name" | "cheapest", freeOnly: boolean): OpenRouterModel[] {
+  const q = query.trim().toLowerCase();
+  let out = models.filter(m => (!freeOnly || m.is_free) && (!q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)));
+  if (sort === "cheapest") {
+    const cost = (m: OpenRouterModel) => m.is_free ? -1 : (m.input_per_million ?? Infinity) + (m.output_per_million ?? Infinity);
+    out = [...out].sort((a, b) => cost(a) - cost(b) || a.name.localeCompare(b.name));
+  }
+  return out;
+}
+
+function OpenRouterModelPicker({ value, onChange }: { value: string; onChange: (m: string) => void }) {
+  const [models, setModels] = useState<OpenRouterModel[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<"name" | "cheapest">("cheapest");
+  const [freeOnly, setFreeOnly] = useState(false);
+  const load = (refresh = false) => {
+    setError(null);
+    fetch(`/api/generate/openrouter-models${refresh ? "?refresh=true" : ""}`)
+      .then(async r => { if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.detail || `HTTP ${r.status}`); return r.json(); })
+      .then(d => setModels(d.models ?? []))
+      .catch(e => { setError(String(e.message || e)); setModels([]); });
+  };
+  useEffect(() => { load(); }, []);
+  const shown = filterOpenRouterModels(models ?? [], query, sort, freeOnly).slice(0, 200);
+  const selected = (models ?? []).find(m => m.id === value);
+  return (
+    <div className="p-3 rounded-xl bg-secondary/30 border border-border/40 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-xs text-muted-foreground">Model (OpenRouter)</label>
+        <button type="button" onClick={() => load(true)} className="text-[11px] text-muted-foreground hover:text-foreground">Refresh list</button>
+      </div>
+      <div className="text-sm">
+        Selected: <span className="font-mono">{value || "openai/gpt-4o-mini (default)"}</span>
+        {selected && <span className="ml-2 text-xs text-muted-foreground">{formatOpenRouterPrice(selected)} per 1M tokens (input / output)</span>}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search models, e.g. claude, gpt, gemini, llama…"
+          className="flex-1 min-w-[12rem] bg-background border border-border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-primary"
+        />
+        <select value={sort} onChange={e => setSort(e.target.value as any)}
+                className="bg-background border border-border rounded-lg px-2 py-1.5 text-xs">
+          <option value="cheapest">Cheapest first</option>
+          <option value="name">By name</option>
+        </select>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          <input type="checkbox" checked={freeOnly} onChange={e => setFreeOnly(e.target.checked)} /> Free only
+        </label>
+      </div>
+      {error && (
+        <div className="text-xs text-red-400">
+          Could not load the OpenRouter model list ({error}). You can still type a model id below.
+        </div>
+      )}
+      {models === null ? (
+        <div className="text-xs text-muted-foreground">Loading models…</div>
+      ) : (
+        <div className="max-h-64 overflow-auto rounded-lg border border-border/50 divide-y divide-border/30">
+          {shown.map(m => (
+            <button
+              type="button"
+              key={m.id}
+              onClick={() => onChange(m.id)}
+              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-3 hover:bg-secondary/60 ${m.id === value ? "bg-primary/10" : ""}`}
+            >
+              <span className="flex-1 min-w-0">
+                <span className="text-foreground">{m.name}</span>
+                <span className="block font-mono text-[10px] text-muted-foreground truncate">{m.id}</span>
+              </span>
+              <span className={`shrink-0 ${m.is_free ? "text-emerald-400" : "text-muted-foreground"}`}>{formatOpenRouterPrice(m)}</span>
+            </button>
+          ))}
+          {shown.length === 0 && <div className="px-3 py-3 text-xs text-muted-foreground">No models match.</div>}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          value={value}
+          onChange={e => onChange(e.target.value.trim())}
+          placeholder="…or type a model id, e.g. anthropic/claude-sonnet-4"
+          className="flex-1 bg-background border border-border rounded-lg px-3 py-1.5 text-xs font-mono focus:outline-none focus:border-primary"
+        />
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Prices are USD per 1M tokens (input / output), from OpenRouter. Batch processing stays Anthropic-only; OpenRouter runs live requests.
+      </p>
+    </div>
+  );
+}
+
 const AI_PROVIDERS: Record<string, { label: string; models: string[]; defaultModel: string }> = {
+  // Client request (point 7): OpenRouter + a list of the models it offers,
+  // to test models and optimise cost. Its catalogue (hundreds of models,
+  // changing often) is loaded live with prices -- see OpenRouterModelPicker.
+  openrouter: {
+    label: "OpenRouter",
+    models: [],
+    defaultModel: "openai/gpt-4o-mini",
+  },
   openai: {
     label: "OpenAI",
     models: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
@@ -207,7 +328,7 @@ const DEFAULT_CONFIG: GenerateConfig = {
     ai_enabled: false,
     ai_provider: "openai",
     ai_model: "",
-    ai_providers_enabled: { openai: true, anthropic: true, gemini: true },
+    ai_providers_enabled: { openai: true, anthropic: true, gemini: true, openrouter: true },
     max_calls_per_product: 3,
     keyword_strategy: "auto",
     fallback_strategy: "safe",
@@ -1269,6 +1390,12 @@ export default function ContentGeneration() {
                 )}
 
                 {/* Model selector */}
+                {config.globalSettings.ai_provider === "openrouter" ? (
+                  <OpenRouterModelPicker
+                    value={config.globalSettings.ai_model || ""}
+                    onChange={(m) => patchGlobal({ ai_model: m })}
+                  />
+                ) : (
                 <div className="p-3 rounded-xl bg-secondary/30 border border-border/40">
                   <label className="text-xs text-muted-foreground">Model</label>
                   <select
@@ -1284,6 +1411,7 @@ export default function ContentGeneration() {
                     ))}
                   </select>
                 </div>
+                )}
               </div>
             )}
           </div>
