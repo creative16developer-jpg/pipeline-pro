@@ -76,6 +76,36 @@ class ProductFieldsUpdate(BaseModel):
 # List + Detail
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def _latest_uploads(db, product_ids: list[int]) -> dict[int, list[dict]]:
+    """{product_id: [latest upload per store, newest first]}. woo_sku
+    falls back to the product's current Site SKU (else Sunsky SKU) for
+    rows backfilled from old logs -- marked woo_sku_from_log False."""
+    from models.models import ProductUpload, Store
+    if not product_ids:
+        return {}
+    rows = (await db.execute(
+        select(ProductUpload, Store.name, Product.site_sku, Product.sku)
+        .join(Store, Store.id == ProductUpload.store_id, isouter=True)
+        .join(Product, Product.id == ProductUpload.product_id)
+        .where(ProductUpload.product_id.in_(product_ids))
+        .order_by(ProductUpload.uploaded_at.desc(), ProductUpload.id.desc())
+    )).all()
+    out: dict[int, list[dict]] = {}
+    seen: set = set()
+    for u, store_name, site_sku, sku in rows:
+        key = (u.product_id, u.store_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.setdefault(u.product_id, []).append({
+            "store_id": u.store_id, "store_name": store_name,
+            "pipeline_job_id": u.pipeline_job_id, "woo_product_id": u.woo_product_id,
+            "woo_sku": u.woo_sku or site_sku or sku, "woo_sku_recorded": bool(u.woo_sku),
+            "action": u.action, "uploaded_at": u.uploaded_at.isoformat() if u.uploaded_at else None,
+        })
+    return out
+
+
 @router.get("", response_model=ProductListOut)
 async def list_products(
     page: int = Query(1, ge=1),
@@ -96,8 +126,19 @@ async def list_products(
             pass
 
     if search:
-        term = f"%{search}%"
-        filter_clause = or_(Product.name.ilike(term), Product.sku.ilike(term))
+        # "PL-155" / "PL155" / "pl-155" -> products uploaded by that
+        # pipeline (client point 10); otherwise name / Sunsky SKU / Site SKU
+        # (the SKU in WooCommerce).
+        import re as _re
+        from models.models import ProductUpload
+        _pl = _re.fullmatch(r"\s*pl-?\s*0*(\d+)\s*", search, flags=_re.IGNORECASE)
+        if _pl:
+            filter_clause = Product.id.in_(
+                select(ProductUpload.product_id).where(ProductUpload.pipeline_job_id == int(_pl.group(1)))
+            )
+        else:
+            term = f"%{search}%"
+            filter_clause = or_(Product.name.ilike(term), Product.sku.ilike(term), Product.site_sku.ilike(term))
         q = q.where(filter_clause)
         count_q = count_q.where(filter_clause)
 
@@ -113,11 +154,13 @@ async def list_products(
     from services.enrich_service import get_effective_category_name_map
     category_name_map = await get_effective_category_name_map(db)
 
+    latest = await _latest_uploads(db, [p.id for p in products])
     out_products = []
     for p in products:
         po = ProductOut.model_validate(p)
         if p.category_id:
             po.category_name = category_name_map.get(str(p.category_id))
+        po.uploads = latest.get(p.id, [])
         out_products.append(po)
 
     return ProductListOut(
@@ -441,3 +484,25 @@ async def get_product_attributes(product_id: int, db: AsyncSession = Depends(get
         else:
             g["state"] = "awaiting"
     return {"product_id": product_id, "pipelines": list(groups.values())}
+
+
+@router.get("/{product_id}/uploads")
+async def get_product_uploads(product_id: int, db: AsyncSession = Depends(get_db)):
+    """Full upload history of one product, newest first (client point 10)."""
+    from models.models import ProductUpload, Store
+    prod = await db.get(Product, product_id)
+    if not prod:
+        raise HTTPException(status_code=404, detail="Product not found")
+    rows = (await db.execute(
+        select(ProductUpload, Store.name)
+        .join(Store, Store.id == ProductUpload.store_id, isouter=True)
+        .where(ProductUpload.product_id == product_id)
+        .order_by(ProductUpload.uploaded_at.desc(), ProductUpload.id.desc())
+    )).all()
+    return {"product_id": product_id, "uploads": [
+        {"pipeline_job_id": u.pipeline_job_id, "job_id": u.job_id, "store_id": u.store_id, "store_name": store_name,
+         "woo_product_id": u.woo_product_id, "woo_sku": u.woo_sku or prod.site_sku or prod.sku,
+         "woo_sku_recorded": bool(u.woo_sku), "action": u.action,
+         "uploaded_at": u.uploaded_at.isoformat() if u.uploaded_at else None}
+        for u, store_name in rows
+    ]}

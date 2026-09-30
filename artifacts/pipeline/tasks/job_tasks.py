@@ -1415,6 +1415,20 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
 # UPLOAD — push to WooCommerce with SKU duplicate check + update logic
 # ---------------------------------------------------------------------------
 
+async def _record_upload(db, job, product, woo_id, woo_sku, action: str) -> None:
+    """Upload history row (client point 10: which pipeline uploaded each
+    product, and its SKU in WooCommerce). Never breaks an upload."""
+    try:
+        from models.models import ProductUpload
+        db.add(ProductUpload(
+            product_id=product.id, store_id=job.store_id,
+            pipeline_job_id=getattr(job, "pipeline_job_id", None), job_id=job.id,
+            woo_product_id=woo_id, woo_sku=(woo_sku or None), action=action,
+        ))
+    except Exception as e:
+        print(f"[upload] could not record upload history for {product.sku}: {e}")
+
+
 async def _run_upload(db, job):
     from models.models import Product, ProductStatus, Store, LogLevel
     from pipeline import woo_client as wc
@@ -1795,6 +1809,7 @@ async def _run_upload(db, job):
                 updated_count += 1
                 await _log(db, job.id, LogLevel.info,
                            f"  {product.sku} → UPDATED woo_id={woo_id} (full payload re-sent)")
+                await _record_upload(db, job, product, woo_id, payload.get("sku"), "updated")
             else:
                 # Create new product in WooCommerce
                 await _log(db, job.id, LogLevel.info,
@@ -1810,6 +1825,7 @@ async def _run_upload(db, job):
                     created_count += 1
                     await _log(db, job.id, LogLevel.info,
                                f"  {product.sku} → CREATED woo_id={_new_woo_id}")
+                    await _record_upload(db, job, product, _new_woo_id, payload.get("sku"), "created")
                 except Exception as create_err:
                     err_text = str(create_err)
                     if "woocommerce_rest_product_not_created" in err_text and "already present in the lookup table" in err_text:
@@ -1825,6 +1841,7 @@ async def _run_upload(db, job):
                             updated_count += 1
                             await _log(db, job.id, LogLevel.warn,
                                        f"  {product.sku} → existing SKU found, UPDATED woo_id={woo_id} instead of creating")
+                            await _record_upload(db, job, product, woo_id, payload.get("sku"), "updated")
                         else:
                             raise
                     else:

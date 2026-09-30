@@ -209,7 +209,7 @@ export default function Products() {
           <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Search by SKU or Name..."
+            placeholder="Search by SKU, Woo SKU, name, or pipeline (e.g. PL-155)..."
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             className="w-full bg-background border border-border rounded-xl pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-sm"
@@ -241,6 +241,7 @@ export default function Products() {
                 <th className="p-4 font-medium">SKU</th>
                 <th className="p-4 font-medium">Product</th>
                 <th className="p-4 font-medium">Category</th>
+                <th className="p-4 font-medium">Woo SKU / Pipeline</th>
                 <th className="p-4 font-medium">Price</th>
                 <th className="p-4 font-medium">Status</th>
                 <th className="p-4 font-medium">Images</th>
@@ -250,11 +251,11 @@ export default function Products() {
             <tbody className="divide-y divide-border/50">
               {isLoading ? (
                 <tr>
-                  <td colSpan={7} className="p-8 text-center text-muted-foreground">Loading products...</td>
+                  <td colSpan={8} className="p-8 text-center text-muted-foreground">Loading products...</td>
                 </tr>
               ) : data?.products?.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-12 text-center text-muted-foreground">
+                  <td colSpan={8} className="p-12 text-center text-muted-foreground">
                     <Package className="w-12 h-12 mx-auto opacity-20 mb-3" />
                     No products found matching your criteria.
                   </td>
@@ -290,6 +291,25 @@ export default function Products() {
                         </div>
                       ) : (
                         (product as any).categoryId || '—'
+                      )}
+                    </td>
+                    {/* Client point 10: which pipeline uploaded the product and
+                        its SKU in WooCommerce -- latest upload per store */}
+                    <td className="p-4 text-sm">
+                      {((product as any).uploads ?? []).length === 0 ? (
+                        <span className="text-muted-foreground">—</span>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {((product as any).uploads as any[]).map((u, i) => (
+                            <div key={i} title={`${u.action === "created" ? "Created" : "Updated"} in WooCommerce${u.woo_product_id ? ` (product #${u.woo_product_id})` : ""}${u.uploaded_at ? ` on ${new Date(u.uploaded_at).toLocaleString()}` : ""}${u.woo_sku_recorded ? "" : " — SKU shown is the product's current Site SKU (older upload, SKU not recorded)"}`}>
+                              <div className="font-mono text-xs text-foreground">{u.woo_sku || "—"}</div>
+                              <div className="text-[11px] text-muted-foreground">
+                                {u.pipeline_job_id ? <span className="text-primary font-medium">PL-{u.pipeline_job_id}</span> : "manual upload"}
+                                {u.store_name ? ` · ${u.store_name}` : ""}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       )}
                     </td>
                     <td className="p-4 text-sm font-medium">{product.price ? `$${product.price}` : '—'}</td>
@@ -354,7 +374,16 @@ export default function Products() {
 
 function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () => void }) {
   const { data: product, isLoading, refetch } = useProduct(id as number) as any;
-  const [tab, setTab] = useState<"content" | "attributes" | "raw" | "mapping">("content");
+  const [tab, setTab] = useState<"content" | "attributes" | "uploads" | "raw" | "mapping">("content");
+  const [uploadRows, setUploadRows] = useState<any[] | null>(null);
+  useEffect(() => { setUploadRows(null); }, [id]);
+  useEffect(() => {
+    if (tab !== "uploads" || !id) return;
+    fetch(`/api/products/${id}/uploads`)
+      .then(r => r.ok ? r.json() : { uploads: [] })
+      .then(d => setUploadRows(d.uploads ?? []))
+      .catch(() => setUploadRows([]));
+  }, [tab, id]);
 
   // Client feedback: in Details "I can't see the selected attributes so I
   // can't check if any of them was selected or missing" -- read-only view
@@ -512,7 +541,7 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
 
           {/* Tabs */}
           <div className="flex gap-1 p-1 bg-secondary/40 rounded-xl w-fit">
-            {(["content", "attributes", "raw", "mapping"] as const).map((t) => (
+            {(["content", "attributes", "uploads", "raw", "mapping"] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -524,7 +553,7 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
                 )}
               >
                 {t === "mapping" && <Tag className="w-3.5 h-3.5" />}
-                {t === "content" ? "Generated Content" : t === "attributes" ? "Attributes" : t === "raw" ? "Raw Data" : "Mapping"}
+                {t === "content" ? "Generated Content" : t === "attributes" ? "Attributes" : t === "uploads" ? "Uploads" : t === "raw" ? "Raw Data" : "Mapping"}
               </button>
             ))}
           </div>
@@ -624,6 +653,42 @@ function ProductDetailModal({ id, onClose }: { id: number | null; onClose: () =>
                     </div>
                   );
                 })
+              )}
+            </div>
+          ) : tab === "uploads" ? (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Every upload of this product to WooCommerce, newest first: the pipeline, the store, and the SKU sent.
+              </p>
+              {uploadRows === null ? (
+                <div className="py-8 flex justify-center"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+              ) : uploadRows.length === 0 ? (
+                <div className="text-sm text-muted-foreground bg-secondary/20 border border-border/50 rounded-xl p-4">This product has not been uploaded to WooCommerce yet.</div>
+              ) : (
+                <div className="overflow-auto rounded-xl border border-border/50">
+                  <table className="w-full text-xs">
+                    <thead><tr className="bg-secondary/30 text-muted-foreground">
+                      {["When", "Pipeline", "Store", "Woo SKU", "Woo ID", "Action"].map(h => <th key={h} className="text-left px-3 py-2 font-medium">{h}</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {uploadRows.map((u, i) => (
+                        <tr key={i} className="border-t border-border/40">
+                          <td className="px-3 py-2 whitespace-nowrap">{u.uploaded_at ? new Date(u.uploaded_at).toLocaleString() : "—"}</td>
+                          <td className="px-3 py-2">{u.pipeline_job_id ? <span className="text-primary font-medium">PL-{u.pipeline_job_id}</span> : "manual upload"}</td>
+                          <td className="px-3 py-2">{u.store_name ?? "—"}</td>
+                          <td className="px-3 py-2 font-mono" title={u.woo_sku_recorded ? "" : "Older upload: SKU not recorded, showing the product's current Site SKU"}>
+                            {u.woo_sku}{!u.woo_sku_recorded && <span className="text-muted-foreground"> *</span>}
+                          </td>
+                          <td className="px-3 py-2 font-mono">{u.woo_product_id ?? "—"}</td>
+                          <td className="px-3 py-2">{u.action}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {uploadRows.some(u => !u.woo_sku_recorded) && (
+                    <p className="px-3 py-2 text-[11px] text-muted-foreground">* older upload — the SKU sent wasn't recorded then; shown is the product's current Site SKU.</p>
+                  )}
+                </div>
               )}
             </div>
           ) : tab === "raw" ? (

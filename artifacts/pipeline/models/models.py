@@ -675,6 +675,28 @@ class InventoryMappingConfig(Base):
     store = relationship("Store")
 
 
+class ProductUpload(Base):
+    """One row per product per Upload (create or update in WooCommerce).
+    Client request (milestone point 10): "In product catalogue need to have
+    an option with which PL (number of the pipeline) are uploaded the
+    products and which is the SKU in Woo". Nothing recorded that before:
+    ProductStoreListing only keeps the woo id, and each pipeline re-links
+    products to its own fetch job. woo_sku = the SKU actually sent
+    (site_sku, else the Sunsky SKU); NULL for rows backfilled from old
+    upload logs, which didn't record it."""
+    __tablename__ = "product_uploads"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    product_id      = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    store_id        = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=True, index=True)
+    pipeline_job_id = Column(Integer, ForeignKey("pipeline_jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+    job_id          = Column(Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True)
+    woo_product_id  = Column(Integer, nullable=True)
+    woo_sku         = Column(String(100), nullable=True)
+    action          = Column(String(20), nullable=False)   # "created" | "updated"
+    uploaded_at     = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
 class ProductStoreListing(Base):
     """Per-(product, store) WooCommerce identity and manual category
     override -- previously these lived directly on Product as single,

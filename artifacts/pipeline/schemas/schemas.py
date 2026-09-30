@@ -114,6 +114,9 @@ class ProductOut(BaseModel):
     status: str
     category_id: Optional[str] = None
     category_name: Optional[str] = None
+    # Latest upload per store (client point 10): [{store_id, store_name,
+    # pipeline_job_id, woo_product_id, woo_sku, action, uploaded_at}]
+    uploads: list[dict] = []
     image_count: int
     woo_product_id: Optional[int] = None
     error_message: Optional[str] = None
