@@ -802,6 +802,14 @@ function PreviewPanel({
       </div>
 
       {/* Generated output */}
+          {/* Client: tested several models and got "logic:fallback" with no way
+              to see why -- the reason (provider error, rate limit, empty
+              reply ...) was in the result but only shown for "failed". */}
+          {result.status !== "failed" && String(result.source ?? "").includes("fallback") && result.error && (
+            <div className="mb-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs break-words">
+              <span className="font-semibold">AI failed — template text used instead.</span> Reason: {String(result.error).slice(0, 600)}
+            </div>
+          )}
       {result.status === "failed" ? (
         <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
           {result.error ?? "Generation failed"}
@@ -873,6 +881,14 @@ function ResultRow({ result }: { result: FieldResult }) {
       </button>
       {expanded && (
         <div className="px-4 pb-4 border-t border-border/30 pt-3">
+          {/* Client: tested several models and got "logic:fallback" with no way
+              to see why -- the reason (provider error, rate limit, empty
+              reply ...) was in the result but only shown for "failed". */}
+          {result.status !== "failed" && String(result.source ?? "").includes("fallback") && result.error && (
+            <div className="mb-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs break-words">
+              <span className="font-semibold">AI failed — template text used instead.</span> Reason: {String(result.error).slice(0, 600)}
+            </div>
+          )}
           {result.status === "failed" ? (
             <p className="text-sm text-red-400">{result.error}</p>
           ) : (
