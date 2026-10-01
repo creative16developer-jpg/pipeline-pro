@@ -3033,8 +3033,33 @@ function ConditionBadge({ type, value }: { type: string; value: string | null })
 // separator; ignores it if already present (case-insensitive).
 function commitPendingFixedValue(current: string, pending: string): string {
   const p = (pending || "").trim();
-  const values = current ? current.split(/\s+and\s+/i).map(v => v.trim()).filter(Boolean) : [];
+  const values = splitFixedValues(current);
   if (p && !values.some(v => v.toLowerCase() === p.toLowerCase())) values.push(p);
+  return values.join(" and ");
+}
+
+// The values a Fixed value rule really uploads: split on " and " AND on
+// commas, exactly like job_tasks._split_multi_value at upload (so a stored
+// "Закрепване, Свободни ръце" is TWO values / two chips, not one -- client
+// screenshot showed it as a single chip while "Закрепване" was still
+// offered in the list). Trimmed, empty dropped, case-insensitive dedupe.
+function splitFixedValues(v: string | null | undefined): string[] {
+  const out: string[] = [];
+  for (const part of String(v ?? "").split(/\s+and\s+|\s*,\s*/i)) {
+    const t = part.trim();
+    if (t && !out.some(o => o.toLowerCase() === t.toLowerCase())) out.push(t);
+  }
+  return out;
+}
+
+// Client request: "Add all" option in the Fixed value picker -- adds every
+// value still offered (or every value matching the current search).
+function addAllFixedValues(current: string, candidates: string[]): string {
+  const values = splitFixedValues(current);
+  for (const c of candidates) {
+    const t = (c || "").trim();
+    if (t && !values.some(v => v.toLowerCase() === t.toLowerCase())) values.push(t);
+  }
   return values.join(" and ");
 }
 
@@ -3445,9 +3470,7 @@ function AttrMappingModal({
                   since that's a real, legitimate need this can't
                   block. */}
               {(() => {
-                const selected = form.fixed_value
-                  ? form.fixed_value.split(/\s+and\s+/i).map(v => v.trim()).filter(Boolean)
-                  : [];
+                const selected = splitFixedValues(form.fixed_value);
                 const selectedLower = new Set(selected.map(v => v.toLowerCase()));
                 const filteredTerms = availableTerms.filter(t =>
                   !selectedLower.has(t.name.toLowerCase()) &&
@@ -3501,6 +3524,20 @@ function AttrMappingModal({
                       />
                       {termPickerOpen && form.woo_attr_name.trim() && (filteredTerms.length > 0 || (termSearch.trim() && !exactMatchExists)) && (
                         <div className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto rounded-lg border border-border bg-card shadow-lg">
+                          {filteredTerms.length > 1 && (
+                            <button
+                              type="button"
+                              className="w-full text-left px-3 py-2 text-sm font-medium text-primary hover:bg-secondary/60 border-b border-border"
+                              onMouseDown={e => e.preventDefault()}
+                              onClick={() => {
+                                set("fixed_value", addAllFixedValues(form.fixed_value, filteredTerms.map(t => t.name)));
+                                setTermSearch("");
+                                setTermPickerOpen(false);
+                              }}
+                            >
+                              + Add all {filteredTerms.length}{termSearch.trim() ? " matching" : ""}
+                            </button>
+                          )}
                           {filteredTerms.map(t => (
                             <button
                               key={t.id}
