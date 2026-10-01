@@ -1,3 +1,4 @@
+from tasks.background import spawn as _spawn_bg
 from datetime import datetime, timezone
 import asyncio
 import math
@@ -75,7 +76,7 @@ async def create_job(body: JobCreate, db: AsyncSession = Depends(get_db)):
     await db.refresh(job)
 
     from tasks.job_tasks import _execute_job
-    asyncio.create_task(_execute_job(job.id))
+    _spawn_bg(_execute_job(job.id))
 
     return JobOut.model_validate(job)
 

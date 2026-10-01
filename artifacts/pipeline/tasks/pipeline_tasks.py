@@ -12,6 +12,7 @@ from pathlib import Path
 _pkg_dir = str(Path(__file__).parent.parent.resolve())
 if _pkg_dir not in sys.path:
     sys.path.insert(0, _pkg_dir)
+from tasks.background import spawn as _spawn_bg
 
 import asyncio
 from datetime import datetime, timezone
@@ -177,7 +178,7 @@ async def _advance_queue(db, store_id: int, finished_pl_id: int):
         await db.commit()
         await _plog(db, next_pl.id, None, "info",
                     f"Auto-started from queue — PL-{str(finished_pl_id).zfill(3)} finished")
-        asyncio.create_task(_execute_pipeline(next_pl.id))
+        _spawn_bg(_execute_pipeline(next_pl.id))
 
 
 def _make_pl_id(n: int) -> str:
@@ -1859,18 +1860,26 @@ async def _regenerate_content(pipeline_job_id: int):
 
                 pl.status = "content_review"
                 pl.current_step = "content_review"
+                pl.config = {k: v for k, v in (pl.config or {}).items() if k != "regenerating"}
                 pl.updated_at = datetime.now(timezone.utc)
                 await db.commit()
                 await _plog(db, pl.id, "content_review", "info",
                             f"Content re-generated: {stats}")
 
             except Exception as e:
-                pl.status = "failed"
+                # Back to Content Review, not "failed": the pipeline was
+                # reviewable before this operator-requested retry, and a
+                # failed pipeline can neither be resumed nor re-generated
+                # (client PL-159: "pipeline stuck ... doesn't make any
+                # regenerates after that").
+                pl.status = "content_review"
+                pl.current_step = "content_review"
+                pl.config = {k: v for k, v in (pl.config or {}).items() if k != "regenerating"}
                 pl.error_message = str(e)
                 pl.updated_at = datetime.now(timezone.utc)
                 await db.commit()
                 await _plog(db, pl.id, "generate", "error",
-                            f"Re-generate failed: {e}")
+                            f"Re-generate failed: {e} — back in Content Review; you can try Re-generate again")
 
             finally:
                 await _advance_queue(db, pl.store_id, pl.id)

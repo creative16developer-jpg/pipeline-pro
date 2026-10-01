@@ -9,6 +9,7 @@ Run:
     uvicorn main:app --host 0.0.0.0 --port $PORT --reload
 """
 
+from tasks.background import spawn as _spawn_bg
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -101,14 +102,7 @@ async def lifespan(app: FastAPI):
     import sqlalchemy as _sa
     from database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
-        await db.execute(
-            _sa.text(
-                "UPDATE pipeline_jobs "
-                "SET status = 'failed', "
-                "    error_message = 'Interrupted by server restart' "
-                "WHERE status = 'running'"
-            )
-        )
+        await _recover_interrupted_pipelines(db)
         # Watermarking was removed from the pipeline per client requirement.
         # Backfill any images left in the old 'watermarked' status (written
         # by older code) to 'compressed', which is now the terminal
@@ -173,10 +167,41 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(120)
 
     import asyncio
-    asyncio.create_task(_prewarm_category_cache_loop())
-    asyncio.create_task(_poll_batch_pipelines_loop())
+    _spawn_bg(_prewarm_category_cache_loop())
+    _spawn_bg(_poll_batch_pipelines_loop())
 
     yield
+
+
+async def _recover_interrupted_pipelines(db) -> None:
+    """Pipelines left "running" by a previous server process can't still be
+    running (their tasks lived in that process).
+    - An interrupted Re-generate (marker set by the regenerate-content
+      endpoint) goes BACK TO CONTENT REVIEW with a log line -- it was
+      reviewable before the operator's retry; failing it left it stuck
+      (client PL-159).
+    - Any other interrupted pipeline: failed, as before (T03), so the queue
+      can start the next one."""
+    import sqlalchemy as _sa
+    regen = "status = 'running' AND current_step = 'generate' AND CAST(config AS jsonb) ->> 'regenerating' = 'true'"
+    await db.execute(_sa.text(
+        "INSERT INTO pipeline_logs (pipeline_job_id, level, step, message, created_at) "
+        "SELECT id, 'warn', 'generate', "
+        "'Re-generation was interrupted (server restart) — back in Content Review; click Re-generate content to run it again', now() "
+        f"FROM pipeline_jobs WHERE {regen}"
+    ))
+    await db.execute(_sa.text(
+        "UPDATE pipeline_jobs SET status = 'content_review', current_step = 'content_review', "
+        "config = CAST(CAST(config AS jsonb) - 'regenerating' AS json), "
+        "error_message = 'Re-generation interrupted by server restart' "
+        f"WHERE {regen}"
+    ))
+    await db.execute(_sa.text(
+        "UPDATE pipeline_jobs "
+        "SET status = 'failed', "
+        "    error_message = 'Interrupted by server restart' "
+        "WHERE status = 'running'"
+    ))
 
 
 app = FastAPI(

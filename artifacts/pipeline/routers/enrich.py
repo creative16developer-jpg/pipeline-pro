@@ -11,6 +11,7 @@ PUT  /api/stores/{id}/normalisation-dict       — bulk upsert (Settings page)
 DELETE /api/stores/{id}/normalisation-dict/{entry_id}
 """
 from __future__ import annotations
+from tasks.background import spawn as _spawn_bg
 
 import asyncio
 from typing import Optional
@@ -295,7 +296,7 @@ async def enrich_confirm(
     pl.current_step = "generate"
     pl.updated_at = datetime.now(timezone.utc)
     await db.commit()
-    asyncio.create_task(_enrich_resume_pipeline(pipeline_id))
+    _spawn_bg(_enrich_resume_pipeline(pipeline_id))
 
     return {"ok": True, "pipeline_id": pipeline_id}
 

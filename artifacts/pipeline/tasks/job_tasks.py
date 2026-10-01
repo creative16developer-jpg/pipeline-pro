@@ -8,6 +8,7 @@ from pathlib import Path
 _pkg_dir = str(Path(__file__).parent.parent.resolve())
 if _pkg_dir not in sys.path:
     sys.path.insert(0, _pkg_dir)
+from tasks.background import spawn as _spawn_bg
 
 import asyncio
 import json
@@ -563,7 +564,7 @@ async def _execute_job(job_id: int):
                         f"({next_job.type.value}) after job #{job.id} completed",
                     )
                     await db.commit()
-                    asyncio.create_task(_execute_job(next_job.id))
+                    _spawn_bg(_execute_job(next_job.id))
     finally:
         await celery_engine.dispose()
 

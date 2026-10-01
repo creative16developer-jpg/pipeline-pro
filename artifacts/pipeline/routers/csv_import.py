@@ -30,6 +30,7 @@ that reference a Sunsky fetch job continue to benefit from CSV title/SKU
 overrides during the generate step.
 """
 from __future__ import annotations
+from tasks.background import spawn as _spawn_bg
 
 import asyncio
 import csv
@@ -461,7 +462,7 @@ async def upload_csv(
     # with just their CSV-supplied name/SKU/price, and get filled in as
     # this completes (paced to respect Sunsky's rate limit, so a large CSV
     # takes a while in the background rather than blocking the upload).
-    asyncio.create_task(_enrich_csv_products_from_sunsky(job.id, [r["sunsky_sku"] for r in rows]))
+    _spawn_bg(_enrich_csv_products_from_sunsky(job.id, [r["sunsky_sku"] for r in rows]))
 
     response: dict = {
         "imported": len(rows),

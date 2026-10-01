@@ -1,3 +1,4 @@
+from tasks.background import spawn as _spawn_bg
 from datetime import datetime, timezone
 import asyncio
 import json
@@ -181,7 +182,7 @@ async def create_pipeline(body: PipelineCreateRequest, db: AsyncSession = Depend
 
     if initial_status == "running":
         from tasks.pipeline_tasks import _execute_pipeline
-        asyncio.create_task(_execute_pipeline(pl.id))
+        _spawn_bg(_execute_pipeline(pl.id))
     else:
         from models.models import PipelineLog
         db.add(PipelineLog(
@@ -245,7 +246,7 @@ async def resume_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
         await db.commit()
 
     from tasks.pipeline_tasks import _resume_pipeline
-    asyncio.create_task(_resume_pipeline(pl.id))
+    _spawn_bg(_resume_pipeline(pl.id))
 
     return {"message": f"PL-{str(pl_id).zfill(3)} resuming — upload step starting"}
 
@@ -812,7 +813,7 @@ async def back_to_process(pl_id: int, db: AsyncSession = Depends(get_db)):
 
     if pl.status == "running":
         from tasks.pipeline_tasks import _continue_pipeline
-        asyncio.create_task(_continue_pipeline(pl.id, "process"))
+        _spawn_bg(_continue_pipeline(pl.id, "process"))
 
     return _pl_dict(pl)
 
@@ -861,7 +862,7 @@ async def back_to_fetch(pl_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     from tasks.pipeline_tasks import _refresh_fetch_and_continue
-    asyncio.create_task(_refresh_fetch_and_continue(pl_id))
+    _spawn_bg(_refresh_fetch_and_continue(pl_id))
 
     return _pl_dict(pl)
 
@@ -965,6 +966,10 @@ async def regenerate_content(pl_id: int, db: AsyncSession = Depends(get_db)):
     pl.status = "running"
     pl.current_step = "generate"
     pl.updated_at = datetime.now(timezone.utc)
+    # Marker so a server restart mid-re-generate returns this pipeline to
+    # Content Review (main.py startup recovery) instead of failing it --
+    # it was already reviewable before the operator clicked Re-generate.
+    pl.config = {**(pl.config or {}), "regenerating": True}
 
     db.add(PipelineLog(
         pipeline_job_id=pl_id, level="info", step="generate",
@@ -974,7 +979,7 @@ async def regenerate_content(pl_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     from tasks.pipeline_tasks import _regenerate_content
-    asyncio.create_task(_regenerate_content(pl.id))
+    _spawn_bg(_regenerate_content(pl.id))
 
     return {"ok": True, "message": f"PL-{str(pl_id).zfill(3)} re-generating content"}
 
@@ -1126,7 +1131,7 @@ async def content_confirm(pl_id: int, body: ContentConfirmRequest = ContentConfi
     await db.commit()
 
     from tasks.pipeline_tasks import _resume_pipeline
-    asyncio.create_task(_resume_pipeline(pl.id))
+    _spawn_bg(_resume_pipeline(pl.id))
 
     return {"ok": True, "message": f"PL-{str(pl_id).zfill(3)} upload starting"}
 
@@ -1232,7 +1237,7 @@ async def continue_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
 
     if pl.status == "running":
         from tasks.pipeline_tasks import _continue_pipeline
-        asyncio.create_task(_continue_pipeline(pl.id, current_step))
+        _spawn_bg(_continue_pipeline(pl.id, current_step))
 
     return _pl_dict(pl)
 
@@ -1270,7 +1275,7 @@ async def retry_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
 
     if initial_status == "running":
         from tasks.pipeline_tasks import _execute_pipeline
-        asyncio.create_task(_execute_pipeline(new_pl.id))
+        _spawn_bg(_execute_pipeline(new_pl.id))
 
     return _pl_dict(new_pl)
 
