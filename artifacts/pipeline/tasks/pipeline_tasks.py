@@ -574,6 +574,18 @@ async def _generation_context_extras(db, pl_id: int, product) -> dict:
 
 
 async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regenerate: bool = False) -> dict:
+    """Runs one generation pass; the Gemini Flex setting it may switch on
+    (GEMINI_SERVICE_TIER) is always reset afterwards, so it can't leak into
+    later steps of the same task (e.g. Enrich after Back to Enrich)."""
+    from pipeline.ai_generator import GEMINI_SERVICE_TIER
+    _tier_token = GEMINI_SERVICE_TIER.set("standard")
+    try:
+        return await _run_generate_impl(db, pl, cfg, force_sync=force_sync, force_regenerate=force_regenerate)
+    finally:
+        GEMINI_SERVICE_TIER.reset(_tier_token)
+
+
+async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_regenerate: bool = False) -> dict:
     """
     Content generation step — DAG-aware field generation via services.content_service.
     Saves results back to each Product row so the upload step uses them.
@@ -753,6 +765,23 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
     # fields, so this naturally no-ops (falls through to the normal
     # synchronous path below) rather than submitting an empty/pointless
     # batch for an all-logic template.
+    # "Use Batch / Flex Processing" (client: Flex inference for Gemini, "same
+    # as Batch processing for Claude ... same button for all models with such
+    # an option"): Claude -> Batch API below (pipeline pauses); Gemini
+    # (direct key) -> Flex tier on every request (synchronous, just slower --
+    # no pause); other providers have no such tier.
+    _flex = bool(pl.use_batch_processing) and ai_enabled and ai_provider == "gemini"
+    if _flex:
+        from pipeline.ai_generator import GEMINI_SERVICE_TIER
+        GEMINI_SERVICE_TIER.set("flex")
+        await _plog(db, pl.id, "generate", "info",
+                    "Gemini Flex tier ON — 50% cheaper; each AI request can take several minutes "
+                    "(Google targets 1–15 min). The pipeline keeps running, it does not pause.")
+    elif pl.use_batch_processing and ai_enabled and ai_provider not in ("anthropic", "gemini"):
+        await _plog(db, pl.id, "generate", "info",
+                    f"Batch / Flex processing isn't available for {ai_provider} — standard requests are used "
+                    f"(Batch: Claude via Anthropic; Flex: Gemini via a Google key)")
+
     if pl.use_batch_processing and not force_sync and ai_enabled and ai_provider == "anthropic":
         from pipeline.ai_generator import submit_anthropic_batch, make_batch_custom_id
 
@@ -806,7 +835,7 @@ async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regen
     _model_label = (gen_cfg.get("globalSettings") or {}).get("ai_model") or "default model"
     await _plog(db, pl.id, "generate", "info",
                 f"Content generation: {total} products | "
-                f"AI={'on (' + ai_provider + ' · ' + _model_label + ')' if ai_enabled else 'off (logic only)'}")
+                f"AI={'on (' + ai_provider + ' · ' + _model_label + (' · Flex tier' if _flex else '') + ')' if ai_enabled else 'off (logic only)'}")
 
     ok_count = fallback_count = failed_count = 0
 

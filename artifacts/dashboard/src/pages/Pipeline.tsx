@@ -1067,11 +1067,19 @@ export default function Pipeline() {
               <div>
                 <p className="text-sm font-medium flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-amber-400" />
-                  Use Batch Processing (Claude)
+                  Use Batch / Flex Processing (50% cheaper)
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  50% cheaper AI generation via Claude's Batch API. Usually completes within
-                  an hour, up to 24h max — the pipeline pauses until results are ready.
+                  <span className="text-foreground/80">Claude (Anthropic):</span> Batch API — usually within an hour,
+                  up to 24h; the pipeline pauses until results are ready.
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  <span className="text-foreground/80">Gemini (Google key):</span> Flex tier — each AI request can take
+                  several minutes (Google targets 1–15 min); the pipeline keeps running. If Flex is busy, that request
+                  uses the standard tier.
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Other providers (OpenAI, OpenRouter) have no such option — they run normally.
                 </p>
               </div>
             </div>

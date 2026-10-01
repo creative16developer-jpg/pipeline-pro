@@ -834,10 +834,85 @@ _GEMINI_DEPRECATED: dict[str, str] = {
 }
 
 
+# ── Gemini Flex inference ─────────────────────────────────────────────────
+# Client request: "Implement Flex inference for Gemini models (it's same as
+# Batch processing for Claude). Can use same button here for all models with
+# such an option". Google docs (Gemini API -> Flex inference, Preview): add
+# "service_tier": "flex" to a normal generateContent request body; 50% of the
+# standard price; latency minutes (1-15 min target), best-effort; when Flex
+# capacity is full it returns 503 (or 429) and does NOT fall back to the
+# standard tier itself -- client-side retries with backoff (optionally then
+# standard) and a client timeout of 600 s+ are the caller's job. The legacy
+# google-generativeai SDK used below has no service_tier option, so Flex
+# requests go through the REST endpoint directly.
+#
+# Set per pipeline run (Use Batch / Flex Processing + provider gemini) by
+# pipeline_tasks._run_generate; a ContextVar so concurrent pipelines (each
+# its own asyncio task) can't affect each other.
+import contextvars as _contextvars
+GEMINI_SERVICE_TIER: "_contextvars.ContextVar[str]" = _contextvars.ContextVar("gemini_service_tier", default="standard")
+GEMINI_REST_BASE = "https://generativelanguage.googleapis.com/v1beta"
+FLEX_SERVER_TIMEOUT_S = 600
+FLEX_RETRY_DELAYS_S = (5, 10, 20)
+
+
+def parse_gemini_rest_response(data: dict) -> str:
+    """Text from a generateContent REST response (all text parts of the
+    first candidate). Raises AIGenerationError if there is none (blocked /
+    empty), with the reason Google gave."""
+    cands = (data or {}).get("candidates") or []
+    if not cands:
+        fb = (data or {}).get("promptFeedback") or {}
+        raise AIGenerationError(f"Gemini returned no candidates (blockReason={fb.get('blockReason')!r})")
+    parts = ((cands[0].get("content") or {}).get("parts")) or []
+    text = "".join(str(p.get("text") or "") for p in parts if not p.get("thought")).strip()
+    if not text:
+        raise AIGenerationError(f"Gemini returned an empty response (finishReason={cands[0].get('finishReason')!r})")
+    return text
+
+
+async def _generate_gemini_flex(prompt: str, model: str, api_key: str, sleep=None, client_factory=None) -> tuple[str, str]:
+    """One generateContent call on the Flex tier. 503/429 -> retry after
+    5 s, 10 s, 20 s; still busy -> the same request on the STANDARD tier
+    (full price, but the product gets AI text instead of template text).
+    Returns (text, tier_used)."""
+    import asyncio as _aio
+    import httpx
+    sleep = sleep or _aio.sleep
+    client_factory = client_factory or (lambda: httpx.AsyncClient(timeout=FLEX_SERVER_TIMEOUT_S + 60))
+    url = f"{GEMINI_REST_BASE}/models/{model}:generateContent"
+    headers = {"x-goog-api-key": api_key, "Content-Type": "application/json",
+               "X-Server-Timeout": str(FLEX_SERVER_TIMEOUT_S)}
+    body = {"contents": [{"parts": [{"text": prompt}]}]}
+    last_err = ""
+    async with client_factory() as client:
+        for attempt in range(len(FLEX_RETRY_DELAYS_S) + 1):
+            r = await client.post(url, headers=headers, json={**body, "service_tier": "flex"})
+            if r.status_code == 200:
+                return parse_gemini_rest_response(r.json()), "flex"
+            last_err = f"HTTP {r.status_code}: {r.text[:300]}"
+            if r.status_code in (429, 503) and attempt < len(FLEX_RETRY_DELAYS_S):
+                await sleep(FLEX_RETRY_DELAYS_S[attempt])
+                continue
+            if r.status_code not in (429, 503):
+                raise AIGenerationError(f"Gemini Flex request failed ({model}): {last_err}")
+            break
+        print(f"[ai_generator] Gemini Flex busy after {len(FLEX_RETRY_DELAYS_S)} retries ({last_err}) — "
+              f"using the STANDARD tier for this request ({model})")
+        r = await client.post(url, headers=headers, json=body)
+        if r.status_code != 200:
+            raise AIGenerationError(f"Gemini request failed ({model}, Flex busy, standard also failed): HTTP {r.status_code}: {r.text[:300]}")
+        return parse_gemini_rest_response(r.json()), "standard"
+
+
 async def _generate_gemini(prompt: str, model: Optional[str]) -> str:
     api_key = _get_api_key("GEMINI_API_KEY", "gemini")
     if not api_key:
         raise AIGenerationError("GEMINI_API_KEY not configured — add it in Settings")
+    if GEMINI_SERVICE_TIER.get() == "flex":
+        raw = model or "gemini-2.5-flash"
+        text, _tier = await _generate_gemini_flex(prompt, _GEMINI_DEPRECATED.get(raw, raw), api_key)
+        return _strip_markdown_fence(text)
     try:
         import google.generativeai as genai
     except ImportError:
