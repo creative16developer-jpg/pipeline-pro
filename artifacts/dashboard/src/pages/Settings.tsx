@@ -3348,9 +3348,13 @@ function AttrMappingModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
+      {/* Client: "I am not able to scroll in popup on save button" -- the
+          rule editor had no height limit / scrolling, so once it grew (title
+          words, several categories, value chips) Save went off-screen.
+          Limited to the screen height, scrolls inside, Save row pinned. */}
       <div
-        className="bg-card border border-border/60 rounded-2xl shadow-2xl w-full max-w-lg mx-4 p-6 flex flex-col gap-5"
+        className="bg-card border border-border/60 rounded-2xl shadow-2xl w-full max-w-lg p-6 pb-0 flex flex-col gap-5 max-h-[calc(100vh-2rem)] overflow-y-auto overscroll-contain"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between">
@@ -3659,7 +3663,7 @@ function AttrMappingModal({
           </div>
         </div>
 
-        <div className="flex gap-2 justify-end pt-1">
+        <div className="sticky bottom-0 -mx-6 px-6 py-4 mt-auto flex gap-2 justify-end bg-card border-t border-border/60 z-10">
           <button
             onClick={onClose}
             className="px-4 py-2 rounded-lg text-sm text-muted-foreground hover:text-foreground bg-secondary hover:bg-secondary/80 transition-colors"
