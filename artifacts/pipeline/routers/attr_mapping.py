@@ -39,7 +39,14 @@ class RuleIn(BaseModel):
     instruction:    Optional[str] = None
     condition_type: str = "always"
     condition_value: Optional[str] = None
+    # "and title contains" (client point 2): comma-separated words, any
+    title_contains: Optional[str] = ""
     sort_order:     int = 0
+
+
+def _tidy_title_words(v) -> str:
+    """" Frame ,Cage ,, " -> "Frame, Cage" (same tidy-up as Category Mapping)."""
+    return ", ".join(w.strip() for w in str(v or "").split(",") if w.strip())
 
 
 class RuleOut(BaseModel):
@@ -52,6 +59,7 @@ class RuleOut(BaseModel):
     instruction:    Optional[str]
     condition_type: str
     condition_value: Optional[str]
+    title_contains: str = ""
     sort_order:     int
     created_at:     str
     updated_at:     str
@@ -68,6 +76,7 @@ class RuleOut(BaseModel):
             instruction=r.instruction,
             condition_type=r.condition_type,
             condition_value=r.condition_value,
+            title_contains=getattr(r, "title_contains", "") or "",
             sort_order=r.sort_order,
             created_at=r.created_at.isoformat() if r.created_at else "",
             updated_at=r.updated_at.isoformat() if r.updated_at else "",
@@ -139,6 +148,7 @@ async def create_rule(body: RuleIn, db: AsyncSession = Depends(get_db)):
         instruction=body.instruction,
         condition_type=body.condition_type,
         condition_value=body.condition_value,
+        title_contains=_tidy_title_words(body.title_contains),
         sort_order=sort_order,
     )
     db.add(rule)
@@ -162,6 +172,7 @@ async def update_rule(rule_id: int, body: RuleIn, db: AsyncSession = Depends(get
     rule.instruction    = body.instruction
     rule.condition_type = body.condition_type
     rule.condition_value= body.condition_value
+    rule.title_contains = _tidy_title_words(body.title_contains)
     rule.sort_order     = body.sort_order
     rule.updated_at     = datetime.now(timezone.utc)
     await db.commit()
@@ -211,7 +222,7 @@ async def delete_rule(rule_id: int, db: AsyncSession = Depends(get_db)):
 EXPORT_COLUMNS = [
     "id", "store", "woo_attr_name", "rule_type", "source_field",
     "fixed_value", "instruction",
-    "condition_type", "condition_value", "sort_order",
+    "condition_type", "condition_value", "title_contains", "sort_order",
 ]
 _RULE_TYPES = {"from_sunsky", "ai_extract", "fixed_value"}
 _CONDITION_TYPES = {"always", "if_category"}
@@ -303,6 +314,7 @@ def parse_rule_import_rows(headers: list, rows: list, store_ids_by_name: dict,
             "instruction": cell(row, "instruction") or None,
             "condition_type": ct,
             "condition_value": "\n".join(cond_vals) if ct == "if_category" else None,
+            "title_contains": _tidy_title_words(cell(row, "title_contains")),
             "sort_order": so_i,
         })
     return rules, errors
@@ -314,6 +326,7 @@ def _rule_signature(d) -> tuple:
         g("store_id"), (g("woo_attr_name") or "").strip().lower(), g("rule_type"),
         (g("source_field") or "").strip(), (g("fixed_value") or "").strip(), (g("instruction") or "").strip(),
         g("condition_type"), (g("condition_value") or "").strip().lower() if g("condition_type") == "if_category" else "",
+        (g("title_contains") or "").strip().lower(),
     )
 
 
@@ -372,7 +385,7 @@ async def import_rules(
     now = datetime.now(timezone.utc)
     for r in rules:
         fields = {k: r[k] for k in ("store_id", "woo_attr_name", "rule_type", "source_field", "fixed_value",
-                                    "instruction", "condition_type", "condition_value")}
+                                    "instruction", "condition_type", "condition_value", "title_contains")}
         if r["id"] is not None:
             row = by_id[r["id"]]
             for k, v in fields.items():
@@ -437,6 +450,7 @@ async def export_csv(
             "instruction":    r.instruction or "",
             "condition_type": r.condition_type,
             "condition_value":r.condition_value or "",
+            "title_contains": getattr(r, "title_contains", "") or "",
             "sort_order":     r.sort_order,
         })
 

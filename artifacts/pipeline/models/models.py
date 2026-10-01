@@ -617,6 +617,12 @@ class AttributeMappingRule(Base):
     instruction    = Column(Text, nullable=True)
     condition_type = Column(String(20), nullable=False, default="always")
     condition_value= Column(Text, nullable=True)
+    # Client request (point 2 for Attribute Mapping): "Need to have same
+    # 'if' condition in attribute mapping ... for example if title contain
+    # 'waterproof'". Comma-separated words, ANY of them, case-insensitive,
+    # checked on the original Sunsky title and the current title; combined
+    # (AND) with condition_type. "" = no title condition.
+    title_contains  = Column(Text, nullable=False, default="", server_default="")
     sort_order     = Column(Integer, nullable=False, default=0)
     created_at     = Column(DateTime(timezone=True), server_default=func.now())
     updated_at     = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -981,7 +981,10 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
     product_dicts = []
     for product in products:
         raw = product.raw_data or {}
-        prod_dict = {"id": product.id, "name": product.name or "", **raw}
+        prod_dict = {"id": product.id, "name": product.name or "", **raw,
+                     # current (CSV / edited) title too, for Attribute Mapping
+                     # "title contains" rules -- **raw's "name" is the Sunsky one
+                     "_current_name": product.name or ""}
         product_dicts.append(prod_dict)
 
         sunsky_cat = extract_sunsky_category(raw, category_name_map)

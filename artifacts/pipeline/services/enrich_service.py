@@ -215,6 +215,7 @@ async def _load_mapping_rules(db: Optional["AsyncSession"], store_id: Optional[i
                 "instruction":     r.instruction,
                 "condition_type":  r.condition_type,
                 "condition_value": r.condition_value,
+                "title_contains":  getattr(r, "title_contains", "") or "",
             }
             for r in rows
         ]
@@ -317,6 +318,31 @@ def _find_sunsky_value(product: dict, source_field: Optional[str]) -> str:
     return str(val) if val is not None else ""
 
 
+def rule_title_matches(rule: dict, titles: list[str]) -> bool:
+    """Attribute Mapping "and title contains" (client point 2, same rule as
+    Category Mapping's job_tasks._choose_cat_rule): no words -> True; else
+    True if ANY word (comma-separated, case-insensitive) is in ANY title
+    (original Sunsky title or current title)."""
+    words = [w.strip().lower() for w in str(rule.get("title_contains") or "").split(",") if w.strip()]
+    if not words:
+        return True
+    tl = [t.lower() for t in titles if t]
+    return any(w in t for w in words for t in tl)
+
+
+def product_titles_for_rules(product: dict) -> list[str]:
+    """Titles a title condition is checked against: the original Sunsky
+    title (raw "name"/"title") and the product's current title
+    ("_current_name", set by the Enrich step -- the raw "name" overrides
+    the saved name in that product dict)."""
+    out: list[str] = []
+    for k in ("name", "title", "_current_name"):
+        v = str(product.get(k) or "").strip()
+        if v and v not in out:
+            out.append(v)
+    return out
+
+
 def apply_mapping_rules(
     product: dict, rules: list[dict], sunsky_category: str, resolved_woo_category: str = ""
 ) -> tuple[list[AttrResult], list[dict]]:
@@ -333,6 +359,13 @@ def apply_mapping_rules(
     First matching rule (by sort_order, already applied by _load_mapping_rules)
     wins per attribute — later rules for an attribute already resolved are skipped.
     """
+    _rule_titles = product_titles_for_rules(product)
+    # Same as Category Mapping: rules WITH title words are checked first
+    # (more specific), the rule without words is the fallback -- otherwise a
+    # general rule earlier in the list would always win and a title rule
+    # for the same attribute could never apply. Stable sort: the existing
+    # order is kept within each group.
+    rules = sorted(rules, key=lambda r: 0 if str(r.get("title_contains") or "").strip() else 1)
     resolved: list[AttrResult] = []
     ai_extract_rules: list[dict] = []
     seen_attrs: set[str] = set()
@@ -342,6 +375,10 @@ def apply_mapping_rules(
         if attr_key in seen_attrs:
             continue
         if not _rule_matches_product(rule, sunsky_category, resolved_woo_category):
+            continue
+        # "and title contains" -- a rule with title words applies only to
+        # products whose title contains one of them.
+        if not rule_title_matches(rule, _rule_titles):
             continue
 
         if rule["rule_type"] == "fixed_value":

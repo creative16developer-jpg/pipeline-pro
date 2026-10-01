@@ -2951,6 +2951,7 @@ interface AttrMappingRule {
   instruction: string | null;
   condition_type: string;
   condition_value: string | null;
+  title_contains?: string;
   sort_order: number;
 }
 
@@ -2983,6 +2984,7 @@ const EMPTY_FORM = {
   instruction: "",
   condition_type: "always",
   condition_value: "",
+  title_contains: "",
 };
 
 function AttrRuleBadge({ type }: { type: string }) {
@@ -3091,6 +3093,7 @@ function AttrMappingModal({
           instruction: rule.instruction ?? "",
           condition_type: rule.condition_type,
           condition_value: rule.condition_value ?? "",
+          title_contains: rule.title_contains ?? "",
         }
       : seedFrom
       ? {
@@ -3106,6 +3109,7 @@ function AttrMappingModal({
           instruction: seedFrom.instruction ?? "",
           condition_type: seedFrom.condition_type,
           condition_value: seedFrom.condition_value ?? "",
+          title_contains: seedFrom.title_contains ?? "",
         }
       : { ...EMPTY_FORM, woo_attr_name: presetAttrName ?? EMPTY_FORM.woo_attr_name }
   );
@@ -3319,6 +3323,7 @@ function AttrMappingModal({
         instruction: form.rule_type === "ai_extract" ? (form.instruction || null) : null,
         condition_type: form.condition_type,
         condition_value: form.condition_type === "if_category" ? (conditionValue || null) : null,
+        title_contains: (form.title_contains ?? "").trim(),
         // Editing keeps the rule's priority position; a new rule sends 0 and
         // the backend places it last within its attribute.
         sort_order: rule ? rule.sort_order : 0,
@@ -3638,6 +3643,19 @@ function AttrMappingModal({
                 )}
               </>
             )}
+            {/* Client request (point 2): same "if title contains" as Category Mapping */}
+            <div className="mt-3">
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">And title contains (optional)</label>
+              <input
+                className="mt-1 w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
+                placeholder="e.g. waterproof, водоустойчив"
+                value={form.title_contains ?? ""}
+                onChange={e => set("title_contains", e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Optional. The rule applies only to products whose title contains one of these words (comma-separated, any case) — checked on the original Sunsky title and the current title. Rules with title words are checked before the rule without words, like in Category Mapping.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -3738,7 +3756,14 @@ function AttrGroupModal({
                   <td className="px-3 py-2.5 text-xs text-muted-foreground">{i + 1}</td>
                   <td className="px-3 py-2.5"><AttrRuleBadge type={rule.rule_type} /></td>
                   <td className="px-3 py-2.5 text-muted-foreground text-xs max-w-[260px] break-words">{sourceLabel(rule)}</td>
-                  <td className="px-3 py-2.5"><ConditionBadge type={rule.condition_type} value={rule.condition_value} /></td>
+                  <td className="px-3 py-2.5">
+                    <ConditionBadge type={rule.condition_type} value={rule.condition_value} />
+                    {(rule.title_contains ?? "").trim() && (
+                      <span className="ml-1 inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-500/15 text-amber-400 border border-amber-500/25">
+                        title: {rule.title_contains}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-2.5">
                     {rule.store_id === null ? (
                       <span className="inline-flex px-2 py-0.5 rounded-md bg-secondary text-muted-foreground text-xs">Global</span>
