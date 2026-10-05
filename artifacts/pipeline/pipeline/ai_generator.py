@@ -428,6 +428,7 @@ async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
     # (X-RateLimit-Reset, epoch ms; capped) and retry a few times first.
     import asyncio as _aio, time as _t
     response = None
+    _or_reasoning: dict = {"max_tokens": 600, "exclude": True}
     for attempt in range(4):
         try:
             response = await client.chat.completions.create(
@@ -442,8 +443,20 @@ async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
                 # excluded from the reply. Non-reasoning models ignore it.
                 max_tokens=2500,
                 temperature=0.7,
-                extra_body={"reasoning": {"effort": "low", "exclude": True}},
+                # Live log after the first fix: DeepSeek V4 Flash still ran out
+                # of tokens on some tries ("low" effort not always honoured), and
+                # each failed try bills up to ~2500 tokens for nothing. So: an
+                # EXPLICIT reasoning budget (OpenRouter: one of effort OR
+                # max_tokens; models supporting only effort map it to a level),
+                # and -- after an empty "length" reply -- reasoning switched off.
+                extra_body={"reasoning": _or_reasoning},
             )
+            choices = getattr(response, "choices", None) or []
+            if (choices and not (choices[0].message.content or "").strip()
+                    and getattr(choices[0], "finish_reason", None) == "length"
+                    and _or_reasoning.get("effort") != "none"):
+                _or_reasoning = {"effort": "none", "exclude": True}
+                continue      # immediate retry without reasoning (no wait)
             break
         except Exception as e:
             status = getattr(e, "status_code", None)
