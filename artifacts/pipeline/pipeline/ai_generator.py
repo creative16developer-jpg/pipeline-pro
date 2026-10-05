@@ -433,8 +433,16 @@ async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
             response = await client.chat.completions.create(
                 model=model or OPENROUTER_DEFAULT_MODEL,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=600,
+                # Client log: deepseek/deepseek-v4-flash returned EMPTY replies
+                # on every field. Reasoning ("thinking") models spend output
+                # tokens on reasoning first (OpenRouter: reasoning tokens are
+                # output tokens, inside max_tokens), so 600 could be used up
+                # before any answer. 2500 is a cap (only used tokens are
+                # billed); reasoning effort "low" (~20% of max_tokens) and
+                # excluded from the reply. Non-reasoning models ignore it.
+                max_tokens=2500,
                 temperature=0.7,
+                extra_body={"reasoning": {"effort": "low", "exclude": True}},
             )
             break
         except Exception as e:
@@ -446,7 +454,10 @@ async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
     choices = getattr(response, "choices", None) or []
     text = (choices[0].message.content or "").strip() if choices else ""
     if not text:
-        raise AIGenerationError(f"OpenRouter returned an empty response ({model or OPENROUTER_DEFAULT_MODEL})")
+        finish = getattr(choices[0], "finish_reason", None) if choices else None
+        why = (" — the model ran out of tokens (likely spent on reasoning)" if finish == "length"
+               else f" (finish_reason={finish!r})" if finish else "")
+        raise AIGenerationError(f"OpenRouter returned an empty response ({model or OPENROUTER_DEFAULT_MODEL}){why}")
     return _strip_markdown_fence(text)
 
 
