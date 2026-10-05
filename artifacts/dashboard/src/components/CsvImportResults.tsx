@@ -18,6 +18,7 @@ export type CsvResultRow = {
   result?: "new" | "updated";
   warnings?: string[];
   duplicate?: { other_rows: number[]; is_used_row: boolean };
+  woo_stores?: string[];
 };
 export type CsvDuplicateSku = { sunsky_sku: string; rows: number[]; used_row: number };
 export type CsvSkippedRow = { row: number; site_sku: string; csv_title: string; reason: string };
@@ -83,7 +84,7 @@ export function CsvImportResults({ result }: { result: CsvUploadResponse }) {
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap text-xs">
         <span className={cn(pill, "bg-emerald-500/20 text-emerald-400")}>{s.new} new</span>
-        <span className={cn(pill, "bg-sky-500/20 text-sky-400")}>{s.updated} updated</span>
+        <span className={cn(pill, "bg-sky-500/20 text-sky-400")}>{s.updated} existing</span>
         {s.skipped > 0 && <span className={cn(pill, "bg-red-500/20 text-red-400")}>{s.skipped} skipped</span>}
         {dups.length > 0 && (
           <span className={cn(pill, "bg-red-500/20 text-red-400")}>{dups.length} duplicate SKU{dups.length > 1 ? "s" : ""}</span>
@@ -97,6 +98,11 @@ export function CsvImportResults({ result }: { result: CsvUploadResponse }) {
         )}
       </div>
 
+      <p className="text-[11px] text-muted-foreground">
+        New / existing refers to PipelinePro's product list. Products are created in WooCommerce at the pipeline's
+        Upload step — the Woo column shows the stores a product has been uploaded to.
+      </p>
+
       {banner && (
         <div className="text-xs rounded-lg border border-red-500/40 bg-red-500/10 text-red-300 px-3 py-2 font-medium">{banner}</div>
       )}
@@ -109,23 +115,26 @@ export function CsvImportResults({ result }: { result: CsvUploadResponse }) {
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-card">
             <tr className="border-b border-border bg-secondary/30">
-              {["Row", "Result", "Sunsky SKU", "Site SKU", "Title", "Price", "Sale Price", "QTY", "Notes"].map(h => (
-                <th key={h} className="text-left px-3 py-2 text-muted-foreground font-medium whitespace-nowrap">{h}</th>
+              {["R", "Result", "Woo", "Sunsky SKU", "Site SKU", "Title", "Price", "Sale", "QTY", "Notes"].map(h => (
+                <th key={h} className="text-left px-1.5 py-1.5 text-muted-foreground font-medium whitespace-nowrap">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {rows.map(r => (
               <tr key={`${r.row}-${r.status}`} className={cn("border-b border-border/50 last:border-0", r.duplicate ? "bg-red-500/[0.06]" : hasProblem(r) && "bg-amber-500/[0.04]")}>
-                <td className="px-3 py-2 text-muted-foreground">{r.row}</td>
-                <td className="px-3 py-2"><span className={cn("px-2 py-0.5 rounded-md text-[11px] font-medium", badge[r.status])}>{r.status}</span></td>
-                <td className="px-3 py-2 font-mono text-primary whitespace-nowrap">{r.sunsky_sku || "—"}</td>
-                <td className="px-3 py-2 font-mono text-muted-foreground whitespace-nowrap">{r.site_sku || "—"}</td>
-                <td className="px-3 py-2 text-foreground min-w-[220px]">{r.csv_title || "—"}</td>
-                <td className="px-3 py-2 whitespace-nowrap">{r.price ?? "—"}</td>
-                <td className="px-3 py-2 whitespace-nowrap">{r.sale_price ?? "—"}</td>
-                <td className="px-3 py-2 whitespace-nowrap">{r.qty ?? "—"}</td>
-                <td className="px-3 py-2 min-w-[220px]">
+                <td className="px-1.5 py-1.5 text-muted-foreground">{r.row}</td>
+                <td className="px-1.5 py-1.5"><span className={cn("px-1.5 py-0.5 rounded-md text-[11px] font-medium", badge[r.status])}>{r.status === "updated" ? "existing" : r.status}</span></td>
+                <td className="px-1.5 py-1.5 whitespace-nowrap text-[11px]" title={(r.woo_stores ?? []).length ? `Uploaded to: ${(r.woo_stores ?? []).join(", ")}` : "Not uploaded to WooCommerce yet"}>
+                  {(r.woo_stores ?? []).length ? <span className="text-emerald-400">{(r.woo_stores ?? []).join(", ")}</span> : <span className="text-muted-foreground">—</span>}
+                </td>
+                <td className="px-1.5 py-1.5 font-mono text-primary whitespace-nowrap">{r.sunsky_sku || "—"}</td>
+                <td className="px-1.5 py-1.5 font-mono text-muted-foreground whitespace-nowrap">{r.site_sku || "—"}</td>
+                <td className="px-1.5 py-1.5 text-foreground min-w-[150px] max-w-[220px]">{r.csv_title || "—"}</td>
+                <td className="px-1.5 py-1.5 whitespace-nowrap">{r.price ?? "—"}</td>
+                <td className="px-1.5 py-1.5 whitespace-nowrap">{r.sale_price ?? "—"}</td>
+                <td className="px-1.5 py-1.5 whitespace-nowrap">{r.qty ?? "—"}</td>
+                <td className="px-1.5 py-1.5 min-w-[180px]">
                   {r.status === "skipped" && <span className="text-red-400">{r.reason}</span>}
                   {duplicateNote(r.duplicate) && <div className="text-red-400 font-medium">{duplicateNote(r.duplicate)}</div>}
                   {(r.warnings ?? []).map((w, i) => <div key={i} className="text-amber-400">{w}</div>)}
@@ -133,7 +142,7 @@ export function CsvImportResults({ result }: { result: CsvUploadResponse }) {
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={9} className="px-3 py-6 text-center text-muted-foreground">No rows to show.</td></tr>
+              <tr><td colSpan={10} className="px-3 py-6 text-center text-muted-foreground">No rows to show.</td></tr>
             )}
           </tbody>
         </table>

@@ -464,6 +464,25 @@ async def upload_csv(
     # takes a while in the background rather than blocking the upload).
     _spawn_bg(_enrich_csv_products_from_sunsky(job.id, [r["sunsky_sku"] for r in rows]))
 
+    # Client: "Some products are marked as updated but they missing in
+    # WooCommerce" -- "updated" means the product already existed in
+    # PipelinePro, not in WooCommerce (that happens at the pipeline's Upload
+    # step). Show where each product has actually been uploaded: store names
+    # with a WooCommerce product id (PipelinePro's record; a product deleted
+    # by hand in WooCommerce afterwards would still be listed).
+    from models.models import ProductStoreListing as _PSL, Store as _St
+    _woo = (await db.execute(
+        select(M.Product.sku, _St.name)
+        .join(_PSL, _PSL.product_id == M.Product.id)
+        .join(_St, _St.id == _PSL.store_id)
+        .where(M.Product.sku.in_([r["sunsky_sku"] for r in rows]), _PSL.woo_product_id.isnot(None))
+    )).all()
+    _woo_by_sku: dict[str, list[str]] = {}
+    for _sku, _store in _woo:
+        _woo_by_sku.setdefault(_sku, []).append(_store)
+    for r in rows:
+        r["woo_stores"] = sorted(set(_woo_by_sku.get(r["sunsky_sku"], [])))
+
     response: dict = {
         "imported": len(rows),
         "job_id": job.id,
