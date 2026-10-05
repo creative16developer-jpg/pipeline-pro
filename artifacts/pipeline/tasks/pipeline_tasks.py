@@ -901,6 +901,11 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
                                 f"  {product.sku} [{field}]: {result.get('error', 'failed')}")
                     prod_failed = True
                     continue
+                # A field that fell back (AI failed -> template text / empty)
+                # makes the product "fallback" too -- the summary said "2 ok |
+                # 0 fallback" while every field had fallen back (PL-162).
+                if str(result.get("source", "")) in ("logic:fallback", "ai:failed"):
+                    prod_failed = True
                 value = result.get("value", "")
                 source = result.get("source", "logic")
                 if value:

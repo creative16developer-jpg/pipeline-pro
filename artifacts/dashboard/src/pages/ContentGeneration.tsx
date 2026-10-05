@@ -319,7 +319,7 @@ const AI_PROVIDERS: Record<string, { label: string; models: string[]; defaultMod
       "gemini-3.1-pro-preview",
       "gemini-3.1-flash-lite",
     ],
-    defaultModel: "gemini-2.5-flash",
+    defaultModel: "gemini-3.5-flash-lite",   // 2.5 models aren't offered to new Google accounts (PL-162: 404)
   },
 };
 

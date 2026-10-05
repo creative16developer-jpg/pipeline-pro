@@ -934,7 +934,7 @@ async def _generate_gemini(prompt: str, model: Optional[str]) -> str:
     if not api_key:
         raise AIGenerationError("GEMINI_API_KEY not configured — add it in Settings")
     if GEMINI_SERVICE_TIER.get() == "flex":
-        raw = model or "gemini-2.5-flash"
+        raw = model or "gemini-3.5-flash-lite"
         text, _tier = await _generate_gemini_flex(prompt, _GEMINI_DEPRECATED.get(raw, raw), api_key)
         return _strip_markdown_fence(text)
     try:
@@ -942,7 +942,7 @@ async def _generate_gemini(prompt: str, model: Optional[str]) -> str:
     except ImportError:
         raise AIGenerationError("google-generativeai package not installed — run: pip install google-generativeai")
 
-    raw_model = model or "gemini-2.5-flash"
+    raw_model = model or "gemini-3.5-flash-lite"
     # Silently redirect deprecated/removed models to their current equivalent
     resolved_model = _GEMINI_DEPRECATED.get(raw_model, raw_model)
     genai.configure(api_key=api_key)
@@ -1017,7 +1017,7 @@ def get_provider_status() -> dict:
         "gemini": {
             "configured": bool(_get_api_key("GEMINI_API_KEY", "gemini")),
             "label": "Google Gemini",
-            "default_model": "gemini-2.5-flash",
+            "default_model": "gemini-3.5-flash-lite",   # 2.5 not offered to new Google accounts (PL-162: HTTP 404)
             "models": [
                 "gemini-2.5-flash",
                 "gemini-2.5-pro",
