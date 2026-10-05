@@ -527,8 +527,8 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
                         ))}
                         {edit && edit.pid === p.id && edit.kind === "newattr" ? (
                           <span className="inline-flex items-center gap-1">
-                            <input autoFocus placeholder="Attribute name" value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))}
-                                   className={cn(inlineInput, "w-32")} />
+                            <AttrNameInput autoFocus storeId={pl.store_id} value={draft.name} onChange={v => setDraft(d => ({ ...d, name: v }))}
+                                           className={cn(inlineInput, "w-32")} />
                             <AttrValueInput storeId={pl.store_id} attributeName={draft.name} value={draft.value} placeholder="Value"
                                             onChange={v => setDraft(d => ({ ...d, value: v }))} onEnter={saveEdit} onEscape={() => setEdit(null)}
                                             className={cn(inlineInput, "w-40")} />
@@ -2164,11 +2164,11 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                         </div>
                         {editingAttr?.pid === p.id && editingAttr?.attrId === "new" ? (
                           <div className="flex items-center gap-1.5">
-                            <input
+                            <AttrNameInput
                               autoFocus
-                              placeholder="Attribute name"
+                              storeId={pl.store_id}
                               value={attrDraft.name}
-                              onChange={e => setAttrDraft(d => ({ ...d, name: e.target.value }))}
+                              onChange={v => setAttrDraft(d => ({ ...d, name: v }))}
                               className="text-[11px] px-2 py-1 rounded-lg border border-border bg-card w-28 focus:outline-none focus:border-violet-400"
                             />
                             <AttrValueInput
@@ -2497,18 +2497,55 @@ function loadAttrTerms(storeId: number | null | undefined, attributeName: string
   return _attrTermsCache.get(key)!;
 }
 
-// Picking a suggestion replaces the part after the last " and " separator
-// (the separator multi-value attributes use; upload splits on it), so
-// several existing values can be combined; typing a new value still works.
-function applyAttrTermPick(current: string, term: string): string {
-  const parts = (current || "").split(/\s+and\s+/i);
-  parts[parts.length - 1] = term;
-  return parts.map(p => p.trim()).filter(Boolean).join(" and ");
+// Attribute value(s): the same split as upload (job_tasks._split_multi_value):
+// " and " AND commas, trimmed, case-insensitive dedupe. Saved joined with " and ".
+export function splitAttrValues(v: string | null | undefined): string[] {
+  const out: string[] = [];
+  for (const part of String(v ?? "").split(/\s+and\s+|\s*,\s*/i)) {
+    const t = part.trim();
+    if (t && !out.some(o => o.toLowerCase() === t.toLowerCase())) out.push(t);
+  }
+  return out;
+}
+export function addAttrValues(current: string[], add: string[]): string[] {
+  const out = [...current];
+  for (const a of add) {
+    const t = (a || "").trim();
+    if (t && !out.some(o => o.toLowerCase() === t.toLowerCase())) out.push(t);
+  }
+  return out;
 }
 
-// Client feedback (screenshot of Content Review "Тип продукт:" being typed
-// freely): "Need to have predefined values". Value input that suggests the
-// attribute's EXISTING WooCommerce values for the pipeline's store.
+// Dropdown that floats over everything (position: fixed) -- the old one was
+// clipped by the card for the LAST product ("values are none visible") --
+// and opens upwards when there's no room below. Scrolls; no item limit.
+function FloatingList({ anchor, open, children }: { anchor: React.RefObject<HTMLElement | null>; open: boolean; children: React.ReactNode }) {
+  const [pos, setPos] = useState<React.CSSProperties | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = anchor.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = window.innerHeight - r.bottom, maxH = 260;
+      const up = below < 200 && r.top > below;
+      setPos({ position: "fixed", left: r.left, minWidth: Math.max(r.width, 224), zIndex: 60,
+               maxHeight: Math.min(maxH, (up ? r.top : below) - 12),
+               ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }) });
+    };
+    place();
+    window.addEventListener("scroll", place, true); window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, [open, anchor]);
+  if (!open || !pos) return null;
+  return <div style={pos} className="overflow-auto rounded-lg border border-border bg-popover shadow-xl">{children}</div>;
+}
+
+// Client feedback (point 6 follow-up): values missing from the list (only 12
+// were shown), list invisible on the last product (clipped), several values
+// only by typing "and" -- which broke picking -- and no "Add all".
+// Now: chips (one per value, no "and" needed), full scrollable list, "+ Add
+// all", Enter adds typed text as a chip (Enter on an empty box = save),
+// Backspace on an empty box removes the last chip.
 function AttrValueInput({
   storeId, attributeName, value, onChange, onEnter, onEscape, autoFocus, className, placeholder,
 }: {
@@ -2517,43 +2554,96 @@ function AttrValueInput({
   autoFocus?: boolean; className?: string; placeholder?: string;
 }) {
   const [terms, setTerms] = useState<string[]>([]);
+  const [chips, setChips] = useState<string[]>(() => splitAttrValues(value));
+  const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let alive = true;
     loadAttrTerms(storeId, attributeName).then(t => { if (alive) setTerms(t); });
     return () => { alive = false; };
   }, [storeId, attributeName]);
-  const last = (value || "").split(/\s+and\s+/i).pop()!.trim().toLowerCase();
-  const chosen = new Set((value || "").split(/\s+and\s+/i).map(v => v.trim().toLowerCase()));
-  const shown = terms.filter(t => !chosen.has(t.toLowerCase()) || t.toLowerCase() === last)
-    .filter(t => !last || t.toLowerCase().includes(last)).slice(0, 12);
+  // the parent always sees chips + any text still being typed (so ✓ saves it too)
+  const emit = (c: string[], d: string) => onChange(addAttrValues(c, d.trim() ? [d] : []).join(" and "));
+  const setAll = (c: string[], d = "") => { setChips(c); setDraft(d); emit(c, d); };
+  const q = draft.trim().toLowerCase();
+  const offered = terms.filter(t => !chips.some(c => c.toLowerCase() === t.toLowerCase()))
+                       .filter(t => !q || t.toLowerCase().includes(q));
   return (
-    <div className="relative">
+    <div ref={boxRef} className={cn("inline-flex flex-wrap items-center gap-1", className)} onClick={() => setOpen(true)}>
+      {chips.map(c => (
+        <span key={c} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300 text-[11px]">
+          {c}
+          <button type="button" onMouseDown={e => e.preventDefault()} onClick={e => { e.stopPropagation(); setAll(chips.filter(x => x !== c), draft); }}
+                  className="hover:text-red-300">×</button>
+        </span>
+      ))}
       <input
         autoFocus={autoFocus}
-        value={value}
-        placeholder={placeholder ?? (terms.length ? "Pick or type a value" : "Value")}
+        value={draft}
+        placeholder={chips.length ? "" : (placeholder ?? (terms.length ? "Pick or type a value" : "Value"))}
         onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
-        onChange={e => { onChange(e.target.value); setOpen(true); }}
-        onKeyDown={e => { if (e.key === "Enter") onEnter(); if (e.key === "Escape") onEscape(); }}
-        className={className}
+        onChange={e => { setDraft(e.target.value); emit(chips, e.target.value); setOpen(true); }}
+        onKeyDown={e => {
+          if (e.key === "Enter") { e.preventDefault(); if (draft.trim()) setAll(addAttrValues(chips, [draft])); else onEnter(); }
+          else if (e.key === "Escape") onEscape();
+          else if (e.key === "Backspace" && !draft && chips.length) setAll(chips.slice(0, -1));
+        }}
+        className="flex-1 min-w-[6rem] bg-transparent border-none outline-none text-[11px]"
       />
-      {open && shown.length > 0 && (
-        <div className="absolute z-30 left-0 top-full mt-1 min-w-[12rem] max-h-56 overflow-auto rounded-lg border border-border bg-popover shadow-xl">
-          <div className="px-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">Existing values</div>
-          {shown.map(t => (
-            <button
-              key={t}
-              type="button"
-              onMouseDown={e => e.preventDefault()}
-              onClick={() => { onChange(applyAttrTermPick(value, t)); setOpen(false); }}
-              className="block w-full text-left px-2 py-1 text-[11px] hover:bg-secondary"
-            >{t}</button>
-          ))}
-        </div>
-      )}
+      <FloatingList anchor={boxRef} open={open && offered.length > 0}>
+        <div className="px-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">Existing values</div>
+        {offered.length > 1 && (
+          <button type="button" onMouseDown={e => e.preventDefault()} onClick={() => setAll(addAttrValues(chips, offered))}
+                  className="block w-full text-left px-2 py-1 text-[11px] font-medium text-primary hover:bg-secondary border-b border-border/50">
+            + Add all {offered.length}{q ? " matching" : ""}
+          </button>
+        )}
+        {offered.map(t => (
+          <button key={t} type="button" onMouseDown={e => e.preventDefault()} onClick={() => setAll(addAttrValues(chips, [t]))}
+                  className="block w-full text-left px-2 py-1 text-[11px] hover:bg-secondary">{t}</button>
+        ))}
+      </FloatingList>
     </div>
+  );
+}
+
+// Attribute NAME with suggestions (client: "No predefined value (list) for
+// attribute") -- the store's synced WooCommerce attributes.
+const _attrNamesCache = new Map<string, Promise<string[]>>();
+function AttrNameInput({ storeId, value, onChange, autoFocus, className }: {
+  storeId: number | null | undefined; value: string; onChange: (v: string) => void; autoFocus?: boolean; className?: string;
+}) {
+  const [names, setNames] = useState<string[]>([]);
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!storeId) return;
+    const key = String(storeId);
+    if (!_attrNamesCache.has(key)) {
+      _attrNamesCache.set(key, fetch(`/api/stores/${storeId}/woo-attributes`).then(r => r.ok ? r.json() : [])
+        .then((d: any[]) => Array.from(new Set((d ?? []).map(a => String(a.name)))).sort()).catch(() => []));
+    }
+    let alive = true;
+    _attrNamesCache.get(key)!.then(n => { if (alive) setNames(n); });
+    return () => { alive = false; };
+  }, [storeId]);
+  const q = value.trim().toLowerCase();
+  const shown = names.filter(n => !q || n.toLowerCase().includes(q));
+  return (
+    <>
+      <input ref={ref} autoFocus={autoFocus} value={value} placeholder="Attribute name"
+             onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
+             onChange={e => { onChange(e.target.value); setOpen(true); }} className={className} />
+      <FloatingList anchor={ref as any} open={open && shown.length > 0 && !(shown.length === 1 && shown[0] === value)}>
+        <div className="px-2 py-1 text-[10px] text-muted-foreground border-b border-border/50">Existing attributes</div>
+        {shown.map(n => (
+          <button key={n} type="button" onMouseDown={e => e.preventDefault()} onClick={() => { onChange(n); setOpen(false); }}
+                  className="block w-full text-left px-2 py-1 text-[11px] hover:bg-secondary">{n}</button>
+        ))}
+      </FloatingList>
+    </>
   );
 }
 
