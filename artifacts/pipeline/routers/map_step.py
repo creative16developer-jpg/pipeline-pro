@@ -115,6 +115,10 @@ async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappi
         ))).first()
         if clash:
             raise HTTPException(409, "A rule for this Sunsky category with the same title words already exists")
+        if (row.sunsky_cat or "") != (entry.sunsky_cat or ""):
+            # Sunsky category renamed in the edit form: a saved ID belonged
+            # to the old category -- drop it (the list shows IDs by name).
+            row.sunsky_cat_id = None
         row.sunsky_cat = entry.sunsky_cat
         row.title_contains = title
         for k, v in fields.items():

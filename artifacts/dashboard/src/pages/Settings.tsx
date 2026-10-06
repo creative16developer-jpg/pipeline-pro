@@ -277,6 +277,9 @@ function CategoryMappingDictionary() {
   const [newSunskyCat, setNewSunskyCat] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [editTitle, setEditTitle] = useState("");
+  // Client: "Don't see how to edit here" (the Sunsky category name was
+  // read-only in the edit form) -- now editable like in Add Mapping.
+  const [editCat, setEditCat] = useState("");
   const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null; is_global: boolean }>({ woo_cats: [], primary_id: null, profile_id: null, is_global: false });
   const [starredCats, setStarredCats] = useState<{ id: string; name: string }[]>([]);
   const [translating, setTranslating] = useState(false);
@@ -393,6 +396,7 @@ function CategoryMappingDictionary() {
   const startEdit = (m: CatMapping) => {
     setEditingId(m.id);
     setEditTitle(m.title_contains ?? "");
+    setEditCat(m.sunsky_cat);
     setEditSel({ woo_cats: m.woo_cats, primary_id: m.primary_woo_cat_id ?? m.woo_cats[0]?.id ?? null, profile_id: m.profile_id ?? null, is_global: m.is_global ?? false });
   };
 
@@ -460,7 +464,7 @@ function CategoryMappingDictionary() {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([{
-          sunsky_cat: m.sunsky_cat,
+          sunsky_cat: editCat.trim() || m.sunsky_cat,
           title_contains: editTitle.trim(),
           // Same scope (store/global) -> edit this exact rule in place, so
           // changing its title words doesn't create a second rule.
@@ -778,9 +782,17 @@ function CategoryMappingDictionary() {
                   {editingId === m.id ? (
                     <td colSpan={7} className="p-4">
                       <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono text-sm text-foreground">{m.sunsky_cat}</span>
-                          <button onClick={() => setEditingId(null)} className="text-muted-foreground hover:text-foreground">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 space-y-1">
+                            <label className="text-xs font-medium text-muted-foreground">Sunsky Category (ID or Name)</label>
+                            <SearchableCombobox
+                              value={editCat}
+                              onChange={setEditCat}
+                              options={starredCats.map(c => ({ id: c.id, label: c.name, sublabel: c.id }))}
+                              placeholder="e.g. 110358  or  Mobile Accessories"
+                            />
+                          </div>
+                          <button onClick={() => setEditingId(null)} className="text-muted-foreground hover:text-foreground mt-5">
                             <X className="w-4 h-4" />
                           </button>
                         </div>
