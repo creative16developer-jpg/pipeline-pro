@@ -127,6 +127,8 @@ interface CatMapping {
   // "IF title contains" words (client milestone point 2); "" = ordinary
   // rule for the whole Sunsky category.
   title_contains?: string;
+  // Sunsky category ID(s) -- client: "add sunsky category ID as new column"
+  sunsky_cat_ids?: string[];
 }
 
 // Attribute Mapping "If category" suggestions. Client feedback confirmed
@@ -762,6 +764,7 @@ function CategoryMappingDictionary() {
             <thead className="bg-secondary/40 border-b border-border/50">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">Sunsky Category</th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground w-28">Sunsky ID</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground">WooCommerce Categories</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground w-36">Attribute Profile</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-muted-foreground w-20">Used</th>
@@ -773,7 +776,7 @@ function CategoryMappingDictionary() {
               {filtered.map(m => (
                 <tr key={m.id} className={cn("hover:bg-secondary/10 transition-colors", m.is_overridden && "opacity-50")}>
                   {editingId === m.id ? (
-                    <td colSpan={6} className="p-4">
+                    <td colSpan={7} className="p-4">
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <span className="font-mono text-sm text-foreground">{m.sunsky_cat}</span>
@@ -909,6 +912,10 @@ function CategoryMappingDictionary() {
                             </span>
                           )}
                         </div>
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-muted-foreground"
+                          title={(m.sunsky_cat_ids ?? []).length > 1 ? "Sunsky uses this name for several categories — the rule applies to all of them" : undefined}>
+                        {(m.sunsky_cat_ids ?? []).length ? (m.sunsky_cat_ids ?? []).join(", ") : "—"}
                       </td>
                       <td className="px-4 py-3">
                         {m.woo_cats.length > 0 ? (

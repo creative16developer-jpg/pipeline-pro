@@ -629,6 +629,32 @@ async def map_confirm(
 # Store-scoped endpoints (Settings page — Category mapping dictionary)
 # ─────────────────────────────────────────────────────────────────────────────
 
+async def _sunsky_name_to_ids(db) -> dict[str, list[str]]:
+    """Sunsky category name (lower-case) -> its IDs. Client: "add sunsky
+    category ID as new column". Names aren't unique in Sunsky's tree
+    (e.g. "Protection & Cases" under several parents), so a list."""
+    try:
+        from services.enrich_service import get_effective_category_name_map
+        id_to_name = await get_effective_category_name_map(db)
+    except Exception:
+        return {}
+    out: dict[str, list[str]] = {}
+    for cid, name in (id_to_name or {}).items():
+        out.setdefault(str(name).strip().lower(), []).append(str(cid))
+    return out
+
+
+def _sunsky_ids_for(r, name_to_ids: dict[str, list[str]]) -> list[str]:
+    """The rule's own Sunsky ID if saved; a rule saved by ID; else the
+    IDs whose name matches."""
+    if getattr(r, "sunsky_cat_id", None):
+        return [str(r.sunsky_cat_id)]
+    cat = str(r.sunsky_cat or "").strip()
+    if cat.isdigit():
+        return [cat]
+    return sorted(name_to_ids.get(cat.lower(), []), key=lambda x: int(x) if x.isdigit() else 0)
+
+
 @router.get("/stores/{store_id}/category-mappings")
 async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_db)):
     from models.models import AttributeProfile
@@ -671,6 +697,7 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
     # store, so the frontend can show it de-emphasized instead of
     # hiding it.
     merged = list(rows) + list(global_rows)
+    _name_to_ids = await _sunsky_name_to_ids(db)
 
     profile_ids = {r.profile_id for r in merged if r.profile_id}
     profile_names: dict[int, str] = {}
@@ -696,6 +723,7 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
                 "is_global":          r.store_id is None,
                 "is_overridden":      r.store_id is None and (r.sunsky_cat, r.title_contains or "") in own_cats,
                 "title_contains":     r.title_contains or "",
+                "sunsky_cat_ids":     _sunsky_ids_for(r, _name_to_ids),
             }
             for r in merged
         ],
@@ -896,12 +924,14 @@ async def list_global_category_mappings(db: AsyncSession = Depends(get_db)):
         ).scalars().all()
         profile_names = {p.id: p.name for p in profile_rows}
 
+    _name_to_ids = await _sunsky_name_to_ids(db)
     return {
         "store_id": None,
         "mappings": [
             {
                 "id":                 r.id,
                 "sunsky_cat":         r.sunsky_cat,
+                "sunsky_cat_ids":     _sunsky_ids_for(r, _name_to_ids),
                 "woo_cats":           _mapping_woo_cats(r),
                 "primary_woo_cat_id": r.primary_woo_cat_id or r.woo_cat_id,
                 "profile_id":         r.profile_id,
