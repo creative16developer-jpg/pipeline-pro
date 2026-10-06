@@ -75,11 +75,53 @@ def _norm_title_contains(value) -> str:
     return ", ".join(t.strip() for t in str(value or "").split(",") if t.strip())
 
 
+async def _fit_cats_to_store(db, store_id: int, entry: "CategoryMappingUpdate") -> None:
+    """A STORE rule may only hold WooCommerce category IDs of that store.
+
+    Client feedback: "Mapped category missing ... (ID 3079) no longer exists
+    in this store" appearing again and again. One way such a rule is made:
+    a GLOBAL rule keeps the IDs of whichever store it was created in (only
+    its names are used); editing it and switching "Applies To" to one store
+    saved those foreign IDs as a store rule. An ID this store does not have
+    is replaced by this store's category of the same name; if there is none
+    (or several), the save is refused with a clear message. A store with no
+    synced categories is not checked (nothing to compare with)."""
+    store_cats = (await db.execute(
+        select(WooCategory).where(WooCategory.store_id == store_id)
+    )).scalars().all()
+    if not store_cats or not entry.woo_cats:
+        return
+    known = {c.woo_id for c in store_cats}
+    by_name: dict[str, list[int]] = {}
+    for c in store_cats:
+        by_name.setdefault((c.name or "").strip().lower(), []).append(c.woo_id)
+    fixed, swapped = [], {}
+    for wc in entry.woo_cats:
+        if wc.id not in known:
+            _nm = (wc.name or "").strip().lower()
+            # saved names can be a "Parent / Child" label -- try the last part too
+            same = by_name.get(_nm) or by_name.get(_nm.rsplit(" / ", 1)[-1].strip(), [])
+            if len(same) != 1:
+                raise HTTPException(400, (
+                    f"Category \"{wc.name or wc.id}\" (ID {wc.id}) does not exist in this store"
+                    + (" — several categories have that name" if same else "")
+                    + ". Remove it and choose the category from this store's list."))
+            swapped[wc.id] = same[0]
+            wc = WooCatEntry(id=same[0], name=wc.name)
+        if all(f.id != wc.id for f in fixed):
+            fixed.append(wc)
+    entry.woo_cats = fixed
+    if entry.primary_woo_cat_id in swapped:
+        entry.primary_woo_cat_id = swapped[entry.primary_woo_cat_id]
+
+
 async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappingUpdate") -> None:
     """Insert or update one Category Mapping rule (store rule, or global
     when store_id is None). Rules are unique per (store, Sunsky category,
     title words); with entry.id the given rule is edited in place."""
     title = _norm_title_contains(entry.title_contains)
+    if store_id is not None:
+        await _fit_cats_to_store(db, store_id, entry)
     primary_id = entry.primary_woo_cat_id or (entry.woo_cats[0].id if entry.woo_cats else None)
     primary_cat = next((c for c in entry.woo_cats if c.id == primary_id), entry.woo_cats[0] if entry.woo_cats else None)
     fields = {
