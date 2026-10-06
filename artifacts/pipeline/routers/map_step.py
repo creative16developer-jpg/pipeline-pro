@@ -51,6 +51,9 @@ class MappingEntry(BaseModel):
     primary_woo_cat_id: Optional[int] = None
     profile_id: Optional[int] = None
     save_as_rule: bool = True
+    # The operator re-picked the category of an already-mapped Sunsky
+    # category in Cat. Review ("Change") -- always saved, see map_confirm.
+    changed: bool = False
 
 
 class MapConfirmRequest(BaseModel):
@@ -573,7 +576,9 @@ async def map_confirm(
         _cov = coverage.get(entry.sunsky_cat)
         if _cov is not None:
             _has_ordinary = any(not _title_terms(r.title_contains) for r in _cov["store_rules"])
-            if not _cov["unresolved"] and not _has_ordinary:
+            # ...unless the operator explicitly changed it in Cat. Review:
+            # then it IS their choice, saved as this store's ordinary rule.
+            if not _cov["unresolved"] and not _has_ordinary and not entry.changed:
                 continue
 
         # Resolve primary category

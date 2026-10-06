@@ -625,6 +625,12 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
   const [saving, setSaving]   = useState(false);
   const [sel, setSel]         = useState<Record<string, { woo_cat_id: number|null; profile_id: number|null; save_as_rule: boolean }>>({});
   const [newCatForm, setNewCatForm] = useState<Record<string, { open: boolean; name: string; saving: boolean }>>({});
+  // Client feedback on "Already mapped — applied automatically": "doesn't
+  // show for which products is this. Also in this case is wrong, so how to
+  // edit it?" -- each mapped category now lists its products and has a
+  // Change button. changedCats = categories the operator re-picked here.
+  const [changingCat, setChangingCat] = useState<string | null>(null);
+  const [changedCats, setChangedCats] = useState<Record<string, boolean>>({});
 
   const openNewCatForm = (sunsky_cat: string) =>
     setNewCatForm(f => ({ ...f, [sunsky_cat]: { open: true, name: "", saving: false } }));
@@ -767,6 +773,7 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
           primary_woo_cat_id: woo_cat_id,
           profile_id: s?.profile_id ?? c.profile_id ?? null,
           save_as_rule: s?.save_as_rule ?? true,
+          changed: !!changedCats[c.sunsky_cat],
         };
       });
       const r = await fetch(`/api/pipelines/${pl.id}/map-confirm`, {
@@ -908,10 +915,71 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
       {/* Already mapped */}
       {knownCats.length > 0 && (
         <div className="bg-emerald-500/10 border border-emerald-500/30 border-l-[3px] border-l-emerald-500 rounded-lg px-4 py-3 text-[13px] text-emerald-300">
-          <strong>✓ Already mapped — applied automatically</strong><br />
-          <span className="text-[12px] mt-0.5 block">
-            {knownCats.map(formatKnownCategory).join(" · ")}
-          </span>
+          <strong>✓ Already mapped — applied automatically</strong>
+          <div className="mt-1.5 space-y-2">
+            {knownCats.map((c: any) => {
+              const s = sel[c.sunsky_cat];
+              const original = c.primary_woo_cat_id ?? c.woo_cats?.[0]?.id ?? null;
+              const isChanged = !!changedCats[c.sunsky_cat];
+              const hasTitleRules = (c.title_rules ?? []).length > 0;
+              return (
+                <div key={c.sunsky_cat} className="text-[12px]">
+                  <div className="flex items-start gap-2 flex-wrap">
+                    <span>
+                      {isChanged
+                        ? `${c.sunsky_cat} (${c.product_count}) → ${wooOptions.find(o => o.id === s?.woo_cat_id)?.label ?? "?"}`
+                        : formatKnownCategory(c)}
+                    </span>
+                    {isChanged && <span className="text-amber-400">changed — saved when you confirm</span>}
+                    {!hasTitleRules && changingCat !== c.sunsky_cat && (
+                      <button type="button" onClick={() => setChangingCat(c.sunsky_cat)}
+                        className="text-violet-400 hover:underline">Change</button>
+                    )}
+                  </div>
+                  {c.sample_skus?.length > 0 && (
+                    <div className="text-[11px] text-emerald-300/60 font-mono">
+                      {c.sample_skus.join(", ")}
+                      {c.product_count > c.sample_skus.length && ` +${c.product_count - c.sample_skus.length} more`}
+                    </div>
+                  )}
+                  {hasTitleRules && (
+                    <div className="text-[11px] text-emerald-300/60">
+                      Uses "title contains" rules — edit them in Settings → Category Mapping.
+                    </div>
+                  )}
+                  {changingCat === c.sunsky_cat && (
+                    <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                      <select
+                        value={s?.woo_cat_id ?? ""}
+                        onChange={e => {
+                          const v = e.target.value ? parseInt(e.target.value) : null;
+                          setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...(prev[c.sunsky_cat] ?? { profile_id: c.profile_id ?? null, save_as_rule: true }), woo_cat_id: v ?? original } }));
+                          setChangedCats(prev => ({ ...prev, [c.sunsky_cat]: v !== null && v !== original }));
+                        }}
+                        className="min-w-[260px] px-3 py-1.5 border border-border rounded-lg text-[12px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                      >
+                        {wooOptions.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                      </select>
+                      <button type="button" onClick={() => setChangingCat(null)}
+                        className="px-2.5 py-1 rounded-lg bg-card border border-border text-foreground/70 hover:bg-background">Done</button>
+                      {isChanged && (
+                        <button type="button"
+                          onClick={() => {
+                            setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...prev[c.sunsky_cat], woo_cat_id: original } }));
+                            setChangedCats(prev => ({ ...prev, [c.sunsky_cat]: false }));
+                            setChangingCat(null);
+                          }}
+                          className="text-muted-foreground hover:underline">Undo</button>
+                      )}
+                      <span className="text-[11px] text-emerald-300/60 basis-full">
+                        Updates this store's Category Mapping rule for "{c.sunsky_cat}" when you click Confirm &amp; Continue.
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
