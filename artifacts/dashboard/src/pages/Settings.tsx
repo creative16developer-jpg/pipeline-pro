@@ -565,9 +565,8 @@ function CategoryMappingDictionary() {
           Import
         </button>
         <button
-          onClick={() => { setAddingNew(true); setNewSunskyCat(""); setNewSel({ woo_cats: [], primary_id: null, profile_id: null }); }}
-          disabled={addingNew || globalView}
-          title={globalView ? GLOBAL_VIEW_STORE_ONLY_HINT : undefined}
+          onClick={() => { setAddingNew(true); setNewSunskyCat(""); setNewSel({ woo_cats: [], primary_id: null, profile_id: null, is_global: globalView }); }}
+          disabled={addingNew}
           className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 shrink-0"
         >
           <Plus className="w-4 h-4" /> Add Mapping
@@ -578,7 +577,7 @@ function CategoryMappingDictionary() {
         <div className="rounded-xl border border-violet-500/25 bg-violet-500/5 px-4 py-3 text-xs text-muted-foreground">
           Showing <span className="text-foreground font-medium">global rules only</span>. A global rule applies to a store only when that store has
           no rule of its own for the same Sunsky category, and only if the store has the same WooCommerce category names.
-          To add or edit a global rule, pick a store above, then use Add Mapping → "All stores" or Edit on the Global row.
+          Rules added or edited here are global; categories are picked from {stores.find(s => s.id === storeId)?.name ?? "the first store"}'s list.
         </div>
       )}
 
@@ -691,6 +690,11 @@ function CategoryMappingDictionary() {
               global just means the resulting NAMES get reused and
               re-resolved on every other store at real upload time,
               rather than only applying here. */}
+          {globalView ? (
+              <div className="text-[11px] text-muted-foreground rounded-lg border border-violet-500/25 bg-violet-500/5 px-3 py-2">
+                Global rule (all stores). Categories are picked from <span className="text-foreground">{stores.find(s => s.id === storeId)?.name ?? "the first store"}</span>'s list — the rule applies to other stores that have the same category names.
+              </div>
+          ) : (
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">Applies To</label>
             <div className="flex gap-2">
@@ -716,6 +720,7 @@ function CategoryMappingDictionary() {
               </button>
             </div>
           </div>
+          )}
 
           <div className="flex gap-2">
             <button
@@ -828,6 +833,11 @@ function CategoryMappingDictionary() {
                           </select>
                         </div>
 
+                        {globalView ? (
+                          <div className="text-[11px] text-muted-foreground rounded-lg border border-violet-500/25 bg-violet-500/5 px-3 py-2">
+                Global rule (all stores). Categories are picked from <span className="text-foreground">{stores.find(s => s.id === storeId)?.name ?? "the first store"}</span>'s list — the rule applies to other stores that have the same category names.
+              </div>
+                        ) : (
                         <div className="space-y-1">
                           <label className="text-xs font-medium text-muted-foreground">Applies To</label>
                           <div className="flex gap-2">
@@ -853,6 +863,7 @@ function CategoryMappingDictionary() {
                             </button>
                           </div>
                         </div>
+                        )}
 
                         <div className="flex gap-2">
                           <button
@@ -935,9 +946,8 @@ function CategoryMappingDictionary() {
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => startEdit(m)}
-                            disabled={globalView}
                             className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-30 disabled:pointer-events-none"
-                            title={globalView ? "Switch to a store to edit (the category picker needs a store's category list)" : "Edit"}
+                            title="Edit"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
