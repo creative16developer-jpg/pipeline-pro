@@ -408,6 +408,19 @@ def openrouter_retry_wait(err, now: float) -> float:
     return max(2.0, min(65.0, wait))
 
 
+# Client feedback (PL-163): "stuck here ... waiting about 20 minutes for 2
+# products". Every field waited up to 3 x 65 s on a rate-limited model, one
+# field after another (13 min for the first product alone). Two limits now:
+#   - one request waits at most OPENROUTER_MAX_WAIT_S in total, and
+#   - once a model has given up on a 429, further requests to THAT model fail
+#     at once (no request, no wait) for OPENROUTER_COOLDOWN_S -- the rest of
+#     the run falls back immediately and reaches review, where another model
+#     can be chosen. Another model is not affected.
+OPENROUTER_MAX_WAIT_S = 70.0
+OPENROUTER_COOLDOWN_S = 120.0
+_OPENROUTER_LIMITED_UNTIL: dict[str, float] = {}   # model -> time.time() until which it is skipped
+
+
 async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
     api_key = _get_api_key("OPENROUTER_API_KEY", "openrouter")
     if not api_key:
@@ -427,6 +440,13 @@ async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
     # fell straight back to logic. Wait until OpenRouter's reset time
     # (X-RateLimit-Reset, epoch ms; capped) and retry a few times first.
     import asyncio as _aio, time as _t
+    _m = model or OPENROUTER_DEFAULT_MODEL
+    _left = _OPENROUTER_LIMITED_UNTIL.get(_m, 0) - _t.time()
+    if _left > 0:
+        raise AIGenerationError(
+            f"OpenRouter model {_m} is rate-limited — skipped without waiting "
+            f"(try again in about {int(_left) + 1} s, or choose another model)")
+    _waited = 0.0
     response = None
     _or_reasoning: dict = {"max_tokens": 600, "exclude": True}
     for attempt in range(4):
@@ -460,9 +480,13 @@ async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
             break
         except Exception as e:
             status = getattr(e, "status_code", None)
-            if status == 429 and attempt < 3:
-                await _aio.sleep(openrouter_retry_wait(e, _t.time()))
-                continue
+            if status == 429:
+                _wait = openrouter_retry_wait(e, _t.time())
+                if attempt < 3 and _waited + _wait <= OPENROUTER_MAX_WAIT_S:
+                    _waited += _wait
+                    await _aio.sleep(_wait)
+                    continue
+                _OPENROUTER_LIMITED_UNTIL[_m] = _t.time() + OPENROUTER_COOLDOWN_S
             raise AIGenerationError(f"OpenRouter request failed ({model or OPENROUTER_DEFAULT_MODEL}): {e}")
     choices = getattr(response, "choices", None) or []
     text = (choices[0].message.content or "").strip() if choices else ""

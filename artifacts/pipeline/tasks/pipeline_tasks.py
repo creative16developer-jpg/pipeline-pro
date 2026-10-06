@@ -282,6 +282,8 @@ async def _execute_pipeline(pipeline_job_id: int):
                     await db.commit()
                     if stats.get("batch_submitted"):
                         return  # Resumed by the batch-polling task once results are ready
+                    if stats.get("stopped"):
+                        return  # cancelled, or a newer run took over
                     if await _is_cancelled(db, pl.id):
                         return
                 else:
@@ -586,6 +588,14 @@ def _gen_config_path(store_id):
     return base / "content_gen_config.json"
 
 
+# Latest content-generation run per pipeline (id -> token). Client log PL-163:
+# Cancel did not stop a running generation, and Continue 3 s later started a
+# second one beside it -- both ran, the old one still on the old model. A run
+# stops at the next product when the pipeline is cancelled or a newer run
+# for the same pipeline has started.
+_GEN_RUN_TOKEN: dict[int, object] = {}
+
+
 async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regenerate: bool = False) -> dict:
     """Runs one generation pass; the Gemini Flex setting it may switch on
     (GEMINI_SERVICE_TIER) is always reset afterwards, so it can't leak into
@@ -851,8 +861,24 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
                 f"AI={'on (' + ai_provider + ' · ' + _model_label + (' · Flex tier' if _flex else '') + ')' if ai_enabled else 'off (logic only)'}")
 
     ok_count = fallback_count = failed_count = 0
+    _my_run = object()
+    _GEN_RUN_TOKEN[pl.id] = _my_run
+    _stopped = ""
 
     for product in products:
+        if _GEN_RUN_TOKEN.get(pl.id) is not _my_run:
+            _stopped = "superseded"
+        elif await _is_cancelled(db, pl.id):
+            _stopped = "cancelled"
+        if _stopped:
+            await db.commit()
+            await _plog(db, pl.id, "generate", "warn",
+                        "Content generation stopped — "
+                        + ("a newer run for this pipeline has started"
+                           if _stopped == "superseded" else "the pipeline was cancelled")
+                        + f" ({ok_count + fallback_count + failed_count}/{total} products done)")
+            return {"total": total, "ok": ok_count, "fallback": fallback_count,
+                    "failed": failed_count, "stopped": _stopped}
         try:
             raw = product.raw_data or {}
 
@@ -1181,6 +1207,8 @@ async def _enrich_resume_pipeline(pipeline_job_id: int):
                     await db.commit()
                     if stats.get("batch_submitted"):
                         return  # Resumed by the batch-polling task once results are ready
+                    if stats.get("stopped"):
+                        return  # cancelled, or a newer run took over
                     if await _is_cancelled(db, pl.id):
                         return
                 else:
@@ -1622,6 +1650,8 @@ async def _continue_pipeline(pipeline_job_id: int, from_step: str):
                     await db.commit()
                     if stats.get("batch_submitted"):
                         return  # Resumed by the batch-polling task once results are ready
+                    if stats.get("stopped"):
+                        return  # cancelled, or a newer run took over
                     if await _is_cancelled(db, pl.id):
                         return
                 elif from_idx <= 2:
@@ -1914,6 +1944,8 @@ async def _regenerate_content(pipeline_job_id: int):
                                 + (f" (this pipeline started with {_fmt(_old_gs)})" if _fmt(_old_gs) != _fmt(_new_gs) and _old_gs else ""))
                     await db.commit()
                 stats = await _run_generate(db, pl, cfg, force_sync=True, force_regenerate=True)
+                if stats.get("stopped"):
+                    return   # cancelled / a newer run took over -- leave its status alone
 
                 pl.status = "content_review"
                 pl.current_step = "content_review"
