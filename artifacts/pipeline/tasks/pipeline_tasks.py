@@ -1035,10 +1035,17 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
         product_dicts.append(prod_dict)
 
         sunsky_cat = extract_sunsky_category(raw, category_name_map)
+        _ex_diag: dict = {}
         attrs = await extract_attributes(
             prod_dict, gen_cfg, db=db,
             store_id=pl.store_id, sunsky_category=sunsky_cat,
+            diag=_ex_diag,
         )
+        if _ex_diag.get("ai_error") and _ex_diag.get("ai_asked"):
+            await _plog(db, pl.id, "enrich", "warn",
+                        f"{product.sku}: AI gave no answer for "
+                        f"{', '.join(_ex_diag['ai_asked'])} — {_ex_diag['ai_error']}. "
+                        f"Shown as \"missing\" — set them by hand or re-run.")
 
         # TEMPORARY diagnostic logging — visible in both pm2 logs and the
         # Pipeline Log panel — to pin down a live-vs-isolated-test mismatch

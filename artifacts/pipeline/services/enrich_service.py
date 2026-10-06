@@ -484,17 +484,49 @@ def _build_group_prompt(products: list[dict]) -> str:
     )
 
 
-async def _call_ai(prompt: str, gen_cfg: dict) -> Optional[str]:
+async def _call_ai(prompt: str, gen_cfg: dict, diag: Optional[dict] = None) -> Optional[str]:
+    """Returns the AI's raw answer, or None. The reason for a None is put in
+    diag["ai_error"] (it used to be swallowed, so a failed call was
+    indistinguishable from "nothing to extract")."""
     try:
         from pipeline.ai_generator import generate_with_ai, AIGenerationError
         gs = gen_cfg.get("globalSettings") or {}
         if not gs.get("ai_enabled", False):
+            if diag is not None:
+                diag["ai_error"] = "AI is turned off in Content Generation settings"
             return None
         provider = gs.get("ai_provider", "openai")
         model = gs.get("ai_model") or None
         return await generate_with_ai("_raw", {}, provider, model, {"_prompt_override": prompt})
-    except Exception:
+    except Exception as exc:
+        if diag is not None:
+            diag["ai_error"] = f"{type(exc).__name__}: {exc}"[:300]
         return None
+
+
+def _apply_not_found(ai_results: list, active_rules: list[dict], resolved_lower: set) -> None:
+    """if_not_found handling for configured attributes the AI did not return."""
+    found_lower = {r["attribute"].lower() for r in ai_results} | resolved_lower
+    for rule in active_rules:
+        if rule["woo_attr_name"].lower() in found_lower:
+            continue
+        action = rule["if_not_found"]
+        if action == "use_default" and rule["default_value"]:
+            ai_results.append({
+                "attribute":  rule["woo_attr_name"],
+                "raw_value":  rule["default_value"],
+                "confidence": 1.0,
+                "source":     "default",
+                "flagged":    False,
+            })
+        elif action == "flag":
+            ai_results.append({
+                "attribute":  rule["woo_attr_name"],
+                "raw_value":  "",
+                "confidence": 0.0,
+                "source":     "ai",
+                "flagged":    True,
+            })
 
 
 def _parse_json_array(raw: Optional[str]) -> Optional[list]:
@@ -520,9 +552,13 @@ async def extract_attributes(
     db: Optional["AsyncSession"] = None,
     store_id: Optional[int] = None,
     sunsky_category: Optional[str] = None,
+    diag: Optional[dict] = None,
 ) -> list[AttrResult]:
     """
     Extract attributes from a single product.
+
+    diag (optional dict) is filled with "ai_asked" (attribute names sent to
+    the AI) and "ai_error" (why the AI gave no usable answer), for the log.
 
     Priority order (Developer Guidelines v2.0, Section 6.2):
       1. Non-AI Attribute Mapping rules (fixed_value / from_sunsky) — always
@@ -590,8 +626,12 @@ async def extract_attributes(
     have_configured_rules = bool(rule_map)
     if active_rules or not have_configured_rules:
         prompt = _build_extract_prompt(product, active_rules)
-        raw = await _call_ai(prompt, gen_cfg)
+        if diag is not None:
+            diag["ai_asked"] = [r["woo_attr_name"] for r in active_rules]
+        raw = await _call_ai(prompt, gen_cfg, diag)
         parsed = _parse_json_array(raw)
+        if parsed is None and diag is not None and raw and "ai_error" not in diag:
+            diag["ai_error"] = "the AI answer was not a valid attribute list"
     else:
         raw = None
         parsed = None
@@ -639,28 +679,7 @@ async def extract_attributes(
 
         # Apply if_not_found rules for attributes the AI skipped
         if active_rules:
-            found_lower = {r["attribute"].lower() for r in ai_results} | resolved_lower
-            for rule in active_rules:
-                if rule["woo_attr_name"].lower() not in found_lower:
-                    action = rule["if_not_found"]
-                    if action == "leave_blank":
-                        pass
-                    elif action == "use_default" and rule["default_value"]:
-                        ai_results.append({
-                            "attribute":  rule["woo_attr_name"],
-                            "raw_value":  rule["default_value"],
-                            "confidence": 1.0,
-                            "source":     "default",
-                            "flagged":    False,
-                        })
-                    elif action == "flag":
-                        ai_results.append({
-                            "attribute":  rule["woo_attr_name"],
-                            "raw_value":  "",
-                            "confidence": 0.0,
-                            "source":     "ai",
-                            "flagged":    True,
-                        })
+            _apply_not_found(ai_results, active_rules, resolved_lower)
 
         if not ai_results:
             # AI returned parsable JSON but nothing usable — fall back to
@@ -690,6 +709,13 @@ async def extract_attributes(
                 rule = active_rule_map.get(item["attribute"].lower())
                 if rule:
                     item["flagged"] = item["confidence"] < rule["confidence_threshold"]
+            # Client feedback: "Didn't catch the compatible brand and
+            # compatible model" -- with nothing at all shown for them. When
+            # the AI call fails or returns nothing usable, the configured AI
+            # attributes used to disappear silently (if_not_found only ran
+            # when the AI answered). Now they show as "missing" for review,
+            # same as when the AI answers but leaves one out.
+            _apply_not_found(ai_results, active_rules, resolved_lower)
 
     combined = resolved + selector_results + ai_results
     return sorted(combined, key=lambda x: -x["confidence"])
