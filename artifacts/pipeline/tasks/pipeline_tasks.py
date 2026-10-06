@@ -573,6 +573,19 @@ async def _generation_context_extras(db, pl_id: int, product) -> dict:
     return extras
 
 
+def _gen_config_path(store_id):
+    """Saved Content Generation settings for a store: its own file if the
+    store has custom settings (client: "how can I control the content
+    generation option for different store? Right now they are all
+    global"), else the global file. Same files as routers/content.py."""
+    base = Path(__file__).parent.parent / "config_store"
+    if store_id:
+        p = base / f"content_gen_config_store_{int(store_id)}.json"
+        if p.exists():
+            return p
+    return base / "content_gen_config.json"
+
+
 async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regenerate: bool = False) -> dict:
     """Runs one generation pass; the Gemini Flex setting it may switch on
     (GEMINI_SERVICE_TIER) is always reset afterwards, so it can't leak into
@@ -618,7 +631,7 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
     # Re-generate). Generate now uses the CURRENT saved Content Generation
     # settings when the step runs, stores them on the pipeline, and logs the
     # change. Falls back to the pipeline's copy if nothing is saved.
-    _cur_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+    _cur_path = _gen_config_path(getattr(pl, "store_id", None))
     if _cur_path.exists():
         try:
             _current = json.loads(_cur_path.read_text())
@@ -641,7 +654,7 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
                 pass
     gen_cfg = cfg.get("content_gen_config", {})
     if not gen_cfg:
-        saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+        saved_path = _gen_config_path(getattr(pl, "store_id", None))
         if saved_path.exists():
             try:
                 gen_cfg = json.loads(saved_path.read_text())
@@ -981,7 +994,7 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
     # Same as Generate (client PL-159): the AI extraction uses the CURRENT
     # saved Content Generation settings (provider/model), not the copy
     # taken at pipeline start.
-    _cur_path_e = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+    _cur_path_e = _gen_config_path(getattr(pl, "store_id", None))
     if _cur_path_e.exists():
         try:
             _cur_e = json.loads(_cur_path_e.read_text())
@@ -992,7 +1005,7 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
             pass
     gen_cfg = cfg.get("content_gen_config", {})
     if not gen_cfg:
-        saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+        saved_path = _gen_config_path(getattr(pl, "store_id", None))
         if saved_path.exists():
             try:
                 gen_cfg = json.loads(saved_path.read_text())
@@ -1397,7 +1410,7 @@ async def _poll_batch_pipelines():
                 # this batch, so the DAG re-run here uses identical field modes.
                 gen_cfg = pl.config.get("content_gen_config") if pl.config else None
                 if not gen_cfg:
-                    saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+                    saved_path = _gen_config_path(getattr(pl, "store_id", None))
                     if saved_path.exists():
                         try:
                             gen_cfg = json.loads(saved_path.read_text())
@@ -1877,7 +1890,7 @@ async def _regenerate_content(pipeline_job_id: int):
                 import json
                 cfg = dict(pl.config or {})
                 _old_gs = (cfg.get("content_gen_config") or {}).get("globalSettings") or {}
-                _saved_path = Path(__file__).parent.parent / "config_store" / "content_gen_config.json"
+                _saved_path = _gen_config_path(getattr(pl, "store_id", None))
                 _current = None
                 if _saved_path.exists():
                     try:

@@ -1,3 +1,5 @@
+import { useStores } from "@/hooks/use-stores";
+import { readSavedStore, saveStore } from "@/hooks/use-selected-store";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -940,9 +942,24 @@ export default function ContentGeneration() {
   const [running, setRunning] = useState(false);
   const [job, setJob] = useState<GenerationJob | null>(null);
 
-  // ── Load saved config + provider status on mount ─────────────────────────
+  // ── Store: global defaults or one store's own settings ──────────────────
+  // Client: "how can I control the content generation option for different
+  // store? Right now they are all global". null = global defaults; a store
+  // uses its custom settings if it has them, else the global ones.
+  const { data: cgStores } = useStores();
+  const [cgStore, setCgStore] = useState<number | null>(() => { const v = readSavedStore(); return typeof v === "number" ? v : null; });
+  const [customStoreIds, setCustomStoreIds] = useState<number[]>([]);
+  const reloadCustomIds = () =>
+    fetch("/api/generate/store-configs").then(r => r.ok ? r.json() : { store_ids: [] })
+      .then(d => setCustomStoreIds(d.store_ids ?? [])).catch(() => {});
+  useEffect(() => { reloadCustomIds(); }, []);
+  const cgStoreName = ((cgStores ?? []) as any[]).find(st => st.id === cgStore)?.name;
+  const cgStoreCustom = cgStore !== null && customStoreIds.includes(cgStore);
+  const cfgQuery = cgStore !== null ? `?store_id=${cgStore}` : "";
+
+  // ── Load saved config + provider status on mount / store change ─────────
   useEffect(() => {
-    fetch("/api/generate/saved-config")
+    fetch(`/api/generate/saved-config${cfgQuery}`)
       .then((r) => r.json())
       .then((data) => {
         const migrated = migrateConfig(data);
@@ -950,18 +967,29 @@ export default function ContentGeneration() {
         setSavedConfig(migrated);
       })
       .catch(() => { setSavedConfig(DEFAULT_CONFIG); });
-
+  }, [cfgQuery]);
+  useEffect(() => {
     fetch("/api/generate/providers")
       .then((r) => r.json())
       .then((data) => setProviderStatus(data))
       .catch(() => {});
   }, []);
 
+  const handleRevertToGlobal = async () => {
+    if (cgStore === null) return;
+    const r = await fetch(`/api/generate/saved-config?store_id=${cgStore}`, { method: "DELETE" });
+    if (!r.ok) { toast({ title: "Revert failed", variant: "destructive" }); return; }
+    await reloadCustomIds();
+    const d = await fetch(`/api/generate/saved-config?store_id=${cgStore}`).then(x => x.json());
+    const migrated = migrateConfig(d); setConfig(migrated); setSavedConfig(migrated);
+    toast({ title: "Using global settings", description: `${cgStoreName ?? "This store"} now follows the global Content Generation settings.` });
+  };
+
   // ── Save config to server ────────────────────────────────────────────────
   const handleSaveConfig = async () => {
     setSaving(true);
     try {
-      const r = await fetch("/api/generate/saved-config", {
+      const r = await fetch(`/api/generate/saved-config${cfgQuery}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(config),
@@ -971,7 +999,10 @@ export default function ContentGeneration() {
       setJustSaved(true);
       if (justSavedTimer.current) clearTimeout(justSavedTimer.current);
       justSavedTimer.current = setTimeout(() => setJustSaved(false), 2500);
-      toast({ title: "Config saved", description: "Pipelines will use this config for content generation." });
+      if (cgStore !== null) reloadCustomIds();
+      toast({ title: "Config saved", description: cgStore !== null
+        ? `Custom settings saved for ${cgStoreName ?? "this store"} — its pipelines use them.`
+        : "Global settings saved — used by every store without custom settings." });
     } catch (e: any) {
       toast({ title: "Save failed", description: e.message, variant: "destructive" });
     } finally {
@@ -1125,6 +1156,32 @@ export default function ContentGeneration() {
             Test on Sample Product
           </button>
         </div>
+      </div>
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 py-3 rounded-xl border border-border/50 bg-card">
+        <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Settings for</label>
+        <select
+          value={cgStore === null ? "" : String(cgStore)}
+          onChange={e => { const v = e.target.value === "" ? null : Number(e.target.value); setCgStore(v); saveStore(v === null ? "global" : v); }}
+          className="bg-background border border-border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-primary sm:w-64"
+        >
+          <option value="">Global default (all stores)</option>
+          {((cgStores ?? []) as any[]).map(st => (
+            <option key={st.id} value={st.id}>{st.name}{customStoreIds.includes(st.id) ? " — custom" : ""}</option>
+          ))}
+        </select>
+        <p className="text-xs text-muted-foreground flex-1">
+          {cgStore === null
+            ? "Used by every store that has no custom settings."
+            : cgStoreCustom
+              ? `${cgStoreName ?? "This store"} has its own settings — its pipelines use them.`
+              : `${cgStoreName ?? "This store"} uses the global settings (shown). Change and Save to give it its own settings.`}
+        </p>
+        {cgStoreCustom && (
+          <button type="button" onClick={handleRevertToGlobal}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground shrink-0">
+            Use global settings
+          </button>
+        )}
       </div>
       {hasUnsavedChanges && (
         <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500/8 border border-amber-500/15 text-xs text-amber-400/80">

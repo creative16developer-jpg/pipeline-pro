@@ -195,24 +195,56 @@ def _migrate_config(raw: dict) -> dict:
     }
 
 
+def _store_config_path(store_id: int):
+    return _CONFIG_DIR / f"content_gen_config_store_{int(store_id)}.json"
+
+
 @router.get("/saved-config")
-async def get_saved_config():
-    """Return the persisted generation config, migrated to current schema."""
-    if _SAVED_CONFIG_PATH.exists():
-        try:
-            raw = json.loads(_SAVED_CONFIG_PATH.read_text())
-            return _migrate_config(raw)
-        except Exception:
-            pass
+async def get_saved_config(store_id: Optional[int] = None):
+    """The persisted generation config, migrated to current schema. With
+    store_id: that store's custom settings if it has them, else the global
+    ones (what its pipelines use)."""
+    paths = ([_store_config_path(store_id)] if store_id else []) + [_SAVED_CONFIG_PATH]
+    for path in paths:
+        if path.exists():
+            try:
+                return _migrate_config(json.loads(path.read_text()))
+            except Exception:
+                pass
     return DEFAULT_CONFIG
 
 
+@router.get("/store-configs")
+async def list_store_configs():
+    """Store ids that have their own Content Generation settings."""
+    ids = []
+    if _CONFIG_DIR.exists():
+        for f in _CONFIG_DIR.glob("content_gen_config_store_*.json"):
+            try:
+                ids.append(int(f.stem.rsplit("_", 1)[1]))
+            except ValueError:
+                pass
+    return {"store_ids": sorted(ids)}
+
+
 @router.post("/saved-config")
-async def save_config(config: GenerateConfig):
-    """Persist the generation config to disk so pipelines load it automatically."""
+async def save_config(config: GenerateConfig, store_id: Optional[int] = None):
+    """Persist the generation config so pipelines load it automatically.
+    With store_id: custom settings for that store only."""
     _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    _SAVED_CONFIG_PATH.write_text(json.dumps(config.model_dump(), indent=2))
-    return {"saved": True, "path": str(_SAVED_CONFIG_PATH)}
+    path = _store_config_path(store_id) if store_id else _SAVED_CONFIG_PATH
+    path.write_text(json.dumps(config.model_dump(), indent=2))
+    return {"saved": True, "path": str(path), "store_id": store_id}
+
+
+@router.delete("/saved-config")
+async def delete_store_config(store_id: int):
+    """Remove a store's custom settings -- it uses the global ones again."""
+    path = _store_config_path(store_id)
+    existed = path.exists()
+    if existed:
+        path.unlink()
+    return {"deleted": existed, "store_id": store_id}
 
 
 @router.get("/openrouter-models")

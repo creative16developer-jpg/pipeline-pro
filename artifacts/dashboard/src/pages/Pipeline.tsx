@@ -630,7 +630,7 @@ export default function Pipeline() {
       let contentGenConfig = {};
       if (includeGenerate) {
         try {
-          const r = await fetch("/api/generate/saved-config");
+          const r = await fetch(`/api/generate/saved-config${storeId ? `?store_id=${storeId}` : ""}`);
           if (r.ok) contentGenConfig = await r.json();
         } catch (_) {}
       }

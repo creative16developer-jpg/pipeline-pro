@@ -1237,7 +1237,7 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
       .then(setData)
       .catch(() => toast({ title: "Failed to load content data", variant: "destructive" }))
       .finally(() => setLoading(false));
-    fetch(`/api/generate/saved-config`)
+    fetch(`/api/generate/saved-config${pl.store_id ? `?store_id=${pl.store_id}` : ""}`)
       .then(r => r.ok ? r.json() : null)
       .then(cfg => { if (cfg?.globalSettings) setAiEnabled(!!cfg.globalSettings.ai_enabled); })
       .catch(() => {});
