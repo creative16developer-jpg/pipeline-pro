@@ -649,16 +649,22 @@ async def get_product_detail(item_no: str) -> Optional[dict]:
         return None
 
 
-async def download_product_images(item_no: str, size: str = "middle", watermark: int = 0) -> Optional[bytes]:
+async def download_product_images(item_no: str, size: str = "middle") -> Optional[bytes]:
     """
     Download all product images as a ZIP archive.
-      POST product!getImages.do  with params itemNo, size, watermark
+      POST product!getImages.do  with params itemNo, size
     Returns raw ZIP bytes, or None if the product has no images / not found.
+
+    The `watermark` param is deliberately NOT sent. Client feedback: a faint
+    "0" in the centre of every image imported by the pipeline. Confirmed
+    against the live API (same SKU, three requests): `watermark=0` makes
+    Sunsky stamp the literal text "0" on every image; leaving the param out
+    returns clean images.
     """
     try:
         return await _post_binary(
             "product!getImages.do",
-            {"itemNo": item_no, "size": size, "watermark": watermark},
+            {"itemNo": item_no, "size": size},
         )
     except Exception as exc:
         print(f"[sunsky_client] download_product_images({item_no!r}) failed: {exc}")

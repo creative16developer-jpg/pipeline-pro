@@ -883,6 +883,10 @@ async def _run_fetch(db, job):
 # PROCESS — download + compress images with retry; scoped to a fetch job
 # ---------------------------------------------------------------------------
 
+# Suffix on the source key of images downloaded AFTER the Sunsky watermark fix
+# (clean, no "0" stamp). ZIP images whose key lacks it are the old stamped ones.
+_ZIP_CLEAN = "?nowm"
+
 async def _run_process(db, job):
     from models.models import Product, ProductStatus, Image, ImageStatus, LogLevel
     from pipeline.image_processor import ImageProcessor
@@ -896,12 +900,29 @@ async def _run_process(db, job):
     # in place rather than creating new DB rows.
     from sqlalchemy import or_ as _or
     if force_rerun:
+        # Already-UPLOADED products are normally left alone (their processed
+        # images are reused), with one exception: images downloaded before
+        # the watermark fix carry Sunsky's "0" stamp (see
+        # sunsky_client.download_product_images). Those are recognised by a
+        # ZIP source key WITHOUT the _ZIP_CLEAN marker and re-downloaded on a
+        # Force Re-run; the new key also misses Upload's media cache, so the
+        # clean images replace the old ones in WooCommerce.
+        _stamped_images = (
+            select(Image.id).where(
+                Image.product_id == Product.id,
+                Image.original_url.like("sunsky-zip://%"),
+                Image.original_url.notlike(f"%{_ZIP_CLEAN}"),
+            ).exists()
+        )
+        from sqlalchemy import and_ as _and
         eligible_status = _or(
             Product.status == ProductStatus.pending,
             Product.status == ProductStatus.processed,
+            _and(Product.status == ProductStatus.uploaded, _stamped_images),
         )
         await _log(db, job.id, LogLevel.info,
-                   "force_rerun=True — including already-processed products")
+                   "force_rerun=True — including already-processed products, and uploaded "
+                   "products whose images still have the old Sunsky \"0\" stamp")
     else:
         eligible_status = Product.status == ProductStatus.pending
 
@@ -1082,7 +1103,7 @@ async def _run_process(db, job):
                         if processed_path:
                             db.add(Image(
                                 product_id=product.id,
-                                original_url=f"sunsky-zip://{item_no}/{name}",
+                                original_url=f"sunsky-zip://{item_no}/{name}{_ZIP_CLEAN}",
                                 processed_path=processed_path,
                                 position=pos,
                                 status=ImageStatus.compressed,
@@ -1095,7 +1116,7 @@ async def _run_process(db, job):
                         else:
                             db.add(Image(
                                 product_id=product.id,
-                                original_url=f"sunsky-zip://{item_no}/{name}",
+                                original_url=f"sunsky-zip://{item_no}/{name}{_ZIP_CLEAN}",
                                 position=pos,
                                 status=ImageStatus.failed,
                                 is_main=(pos == 0),
