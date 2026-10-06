@@ -1,3 +1,4 @@
+import { useRememberedStore, readSavedStore, pickSavedStore, saveStore } from "@/hooks/use-selected-store";
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearch, Link, useLocation } from "wouter";
 import {
@@ -255,7 +256,7 @@ const GLOBAL_VIEW_STORE_ONLY_HINT = 'Switch to a store to use this. To add or ed
 function CategoryMappingDictionary() {
   const { toast } = useToast();
   const [stores, setStores] = useState<any[]>([]);
-  const [storeId, setStoreId] = useState<number | null>(null);
+  const [storeId, setStoreId, setStoreIdQuiet] = useRememberedStore();
   // Client feedback: "in this dropdown we should add global then admin can
   // see global rules". Global rules were only visible mixed into each
   // store's list (Global badge). globalView lists ONLY global rules, via
@@ -297,7 +298,8 @@ function CategoryMappingDictionary() {
       .then(d => {
         const list = Array.isArray(d) ? d : (d.stores ?? []);
         setStores(list);
-        if (list.length > 0) setStoreId(list[0].id);
+        if (list.length > 0) setStoreIdQuiet(pickSavedStore(list));
+        if (readSavedStore() === "global") setGlobalView(true);
       })
       .catch(() => {});
     fetch("/api/attr-profiles")
@@ -530,7 +532,7 @@ function CategoryMappingDictionary() {
           onChange={e => {
             setEditingId(null);
             setAddingNew(false);
-            if (e.target.value === "global") { setGlobalView(true); return; }
+            if (e.target.value === "global") { setGlobalView(true); saveStore("global"); return; }
             setGlobalView(false);
             setStoreId(Number(e.target.value));
           }}
@@ -1035,7 +1037,7 @@ function AIExtractionRulesTab() {
   const [deleting, setDeleting] = useState<number | null>(null);
 
   const [stores, setStores] = useState<any[]>([]);
-  const [storeId, setStoreId] = useState<number | null>(null);
+  const [storeId, setStoreId, setStoreIdQuiet] = useRememberedStore();
   const [wooAttrs, setWooAttrs] = useState<any[]>([]);
   const [syncing, setSyncing] = useState(false);
 
@@ -1081,7 +1083,7 @@ function AIExtractionRulesTab() {
       .then(d => {
         const list = Array.isArray(d) ? d : (d.stores ?? []);
         setStores(list);
-        if (list.length > 0) setStoreId(list[0].id);
+        if (list.length > 0) setStoreIdQuiet(pickSavedStore(list));
       })
       .catch(() => {});
   }, []);
@@ -1529,7 +1531,7 @@ function AttributeProfilesTab() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const [stores, setStores] = useState<any[]>([]);
-  const [storeId, setStoreId] = useState<number | null>(null);
+  const [storeId, setStoreId, setStoreIdQuiet] = useRememberedStore();
   const [wooAttrs, setWooAttrs] = useState<any[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [selectedAttr, setSelectedAttr] = useState("");
@@ -1554,7 +1556,7 @@ function AttributeProfilesTab() {
       .then(d => {
         const list = Array.isArray(d) ? d : (d.stores ?? []);
         setStores(list);
-        if (list.length > 0) setStoreId(list[0].id);
+        if (list.length > 0) setStoreIdQuiet(pickSavedStore(list));
       })
       .catch(() => {});
   }, []);
@@ -1864,7 +1866,7 @@ function InventoryMappingTab() {
   // storeId === null now means "viewing/editing the Global Default"
   // (a deliberate selection, not "not loaded yet" -- storesLoaded
   // covers that separately).
-  const [storeId, setStoreId] = useState<number | null>(null);
+  const [storeId, setStoreId, setStoreIdQuiet] = useRememberedStore();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [cfg, setCfg] = useState<any>(null);
@@ -1875,7 +1877,7 @@ function InventoryMappingTab() {
       .then(d => {
         const list = Array.isArray(d) ? d : (d.stores ?? []);
         setStores(list);
-        if (list.length > 0) setStoreId(list[0].id);
+        if (list.length > 0) setStoreIdQuiet(pickSavedStore(list));
         setStoresLoaded(true);
       });
   }, []);
@@ -3147,6 +3149,10 @@ function AttrMappingModal({
   const [storeCatOptions, setStoreCatOptions] = useState<{ id: string; name: string }[]>([]);
   const [sunskyCatNames, setSunskyCatNames] = useState<string[]>([]);
   const { data: modalStores } = useStores();
+  // Client: "Attribute Mapping doesn't have an option for store (I can't
+  // select which attribute for which store)". The rule's store is now a
+  // field in the editor (new rule: the selected store; edit: its own).
+  const [ruleStoreId, setRuleStoreId] = useState<number | null>(rule ? rule.store_id : storeId);
 
   // Sunsky category names for the "If category" suggestions -- see
   // buildCategoryConditionOptions. Sources: every Sunsky category that
@@ -3344,7 +3350,7 @@ function AttrMappingModal({
         // "All Stores" view silently turned it into a global rule -- and
         // the grouped attribute screen shows rules of several stores
         // together. New rules still use the selected store (null = global).
-        store_id: rule ? rule.store_id : storeId,
+        store_id: ruleStoreId,
         woo_attr_name: form.woo_attr_name.trim(),
         rule_type: form.rule_type,
         source_field: form.rule_type === "from_sunsky" ? (form.source_field || null) : null,
@@ -3678,6 +3684,18 @@ function AttrMappingModal({
             )}
             {/* Client request (point 2): same "if title contains" as Category Mapping */}
             <div className="mt-3">
+              <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Applies to</label>
+              <select
+                className="mt-1 w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
+                value={ruleStoreId === null ? "" : String(ruleStoreId)}
+                onChange={e => setRuleStoreId(e.target.value === "" ? null : Number(e.target.value))}
+              >
+                <option value="">All stores (global)</option>
+                {((modalStores ?? []) as any[]).map(st => <option key={st.id} value={st.id}>Only {st.name}</option>)}
+              </select>
+              <p className="text-[11px] text-muted-foreground mt-1">A store rule is checked before global rules for that store.</p>
+            </div>
+            <div className="mt-3">
               <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">And title contains (optional)</label>
               <input
                 className="mt-1 w-full px-3 py-2 rounded-lg bg-secondary border border-border text-sm text-foreground focus:outline-none focus:border-primary/60"
@@ -3862,7 +3880,8 @@ function AttributeMappingTab() {
   // inconsistency, rather than assuming one specific shape.
   const stores = Array.isArray(storesData) ? storesData : ((storesData as any)?.stores ?? []);
   const { toast } = useToast();
-  const [storeId, setStoreId] = useState<number | null>(null);
+  // remembered store choice; "global" = All stores (global)
+  const [storeId, setStoreId] = useRememberedStore((() => { const v = readSavedStore(); return typeof v === "number" ? v : null; })());
   const [rules, setRules] = useState<AttrMappingRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalRule, setModalRule] = useState<AttrMappingRule | "new" | null>(null);

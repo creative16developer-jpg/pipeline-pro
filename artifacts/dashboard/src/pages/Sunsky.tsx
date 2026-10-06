@@ -1,3 +1,4 @@
+import { readSavedStore, saveStore } from "@/hooks/use-selected-store";
 import { CsvImportResults, type CsvUploadResponse } from "@/components/CsvImportResults";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { CloudDownload, Info, Search, ChevronRight, Upload, Trash2, FileText, CheckCircle2, Hash, Tag } from "lucide-react";
@@ -30,7 +31,7 @@ async function fetchLevel(parentId: string, signal?: AbortSignal): Promise<Categ
 export default function Sunsky() {
   const { toast } = useToast();
   const [stores, setStores] = useState<Store[]>([]);
-  const [storeId, setStoreId] = useState<string>("");
+  const [storeId, setStoreId] = useState<string>(() => { const v = readSavedStore(); return typeof v === "number" ? String(v) : ""; });
   const [parentCats, setParentCats] = useState<Category[]>([]);
   const [childCats, setChildCats] = useState<Category[]>([]);
   const [parentLoading, setParentLoading] = useState(true);
@@ -309,7 +310,7 @@ export default function Sunsky() {
               <label className="text-sm font-medium text-foreground">
                 Target Store <span className="text-muted-foreground font-normal">(optional — links this fetch job to a store)</span>
               </label>
-              <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className={inputClass}>
+              <select value={storeId} onChange={(e) => { setStoreId(e.target.value); if (e.target.value) saveStore(Number(e.target.value)); }} className={inputClass}>
                 <option value="">— No store (unlinked fetch) —</option>
                 {stores.map((s) => (
                   <option key={s.id} value={String(s.id)}>

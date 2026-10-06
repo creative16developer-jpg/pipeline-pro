@@ -1,3 +1,4 @@
+import { readSavedStore, saveStore } from "@/hooks/use-selected-store";
 import { CsvImportResults, type CsvUploadResponse } from "@/components/CsvImportResults";
 import { useState, useEffect, useRef } from "react";
 import { useLocation, useSearch } from "wouter";
@@ -343,7 +344,7 @@ export default function Pipeline() {
   const [productSource, setProductSource] = useState<ProductSource>(defaultSource);
 
   // ── Store ──────────────────────────────────────────────────────────────────
-  const [storeId, setStoreId] = useState("");
+  const [storeId, setStoreId] = useState(() => { const v = readSavedStore(); return typeof v === "number" ? String(v) : ""; });   // remembered store choice
 
   // ── Sunsky fetch mode ──────────────────────────────────────────────────────
   // Category selection goes as deep as Sunsky's tree actually goes (was
@@ -737,7 +738,7 @@ export default function Pipeline() {
           <div className="mt-1.5 flex gap-2 items-center">
             <select
               value={storeId}
-              onChange={(e) => setStoreId(e.target.value)}
+              onChange={(e) => { setStoreId(e.target.value); if (e.target.value) saveStore(Number(e.target.value)); }}
               className={inputCls}
             >
               <option value="">— Select a store —</option>
