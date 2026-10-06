@@ -1327,6 +1327,14 @@ export default function ContentGeneration() {
                       if (!isEnabled) {
                         patch.ai_provider = id;
                         patch.ai_model = "";
+                      } else if (config.globalSettings.ai_provider === id) {
+                        // Client: "enable two or more, then disable them -- the
+                        // model dropdown still shows the disabled provider's
+                        // models". Turning OFF the active provider now hands
+                        // "active" to another enabled one (with a key first).
+                        const others = Object.keys(AI_PROVIDERS).filter(p => p !== id && (newEnabled[p] ?? true));
+                        const next = others.find(p => providerStatus[p]?.configured) ?? others[0];
+                        if (next) { patch.ai_provider = next; patch.ai_model = ""; }
                       }
                       patchGlobal(patch);
                     };
@@ -1405,8 +1413,12 @@ export default function ContentGeneration() {
                   </div>
                 )}
 
-                {/* Model selector */}
-                {config.globalSettings.ai_provider === "openrouter" ? (
+                {/* Model selector -- only for an ENABLED active provider */}
+                {!(config.globalSettings.ai_providers_enabled?.[config.globalSettings.ai_provider] ?? true) ? (
+                  <div className="p-3 rounded-xl bg-secondary/30 border border-border/40 text-xs text-muted-foreground">
+                    No AI provider is enabled — turn one on above to choose a model.
+                  </div>
+                ) : config.globalSettings.ai_provider === "openrouter" ? (
                   <OpenRouterModelPicker
                     value={config.globalSettings.ai_model || ""}
                     onChange={(m) => patchGlobal({ ai_model: m })}
