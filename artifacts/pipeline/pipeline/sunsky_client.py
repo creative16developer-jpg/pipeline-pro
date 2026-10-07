@@ -512,6 +512,22 @@ async def get_category_name_map_safe(timeout: float = 20.0) -> dict[str, str]:
     entire pipeline run indefinitely. Callers should treat an empty dict
     here the same as "no name available for this ID."
     """
+    # Client: "is there any specific reason to load so slow here?" (Settings
+    # -> Category Mapping stuck on "Loading mappings..."). When the saved
+    # category list was older than its 6-hour lifetime, EVERY caller came
+    # through here, started its own full tree walk (minutes long), waited the
+    # whole `timeout`, cancelled the walk and then returned the saved list
+    # anyway -- 20 s per page load, and extra Sunsky API calls each time.
+    # A saved list is now returned at once; refreshing it is the job of the
+    # background loop in main.py. If this process's copy is stale, the copy on
+    # disk (which that loop rewrites) is re-read first. Only a completely
+    # empty list still waits, as before.
+    if _category_name_cache:
+        import time as _time
+        if (_time.time() - _category_cache_fetched_at) >= _CATEGORY_CACHE_TTL_SECONDS:
+            _load_category_cache_from_disk()
+            _load_category_full_cache_from_disk()
+        return _category_name_cache
     try:
         return await asyncio.wait_for(get_category_name_map(), timeout=timeout)
     except asyncio.TimeoutError:
