@@ -1210,6 +1210,16 @@ async def _run_process(db, job):
 # IMAGE RESOLUTION HELPER
 # ---------------------------------------------------------------------------
 
+# How many of ONE product's images are sent to WordPress at the same time.
+# Client: "Is there any way we can speed up the upload process?" -- the log
+# showed ~90% of Upload was images going up one by one (~8 s each, 5 per
+# product). 1 = one at a time, exactly as before. Env: UPLOAD_IMAGE_CONCURRENCY.
+try:
+    _UPLOAD_IMAGE_CONCURRENCY = max(1, int(__import__("os").environ.get("UPLOAD_IMAGE_CONCURRENCY", "3")))
+except ValueError:
+    _UPLOAD_IMAGE_CONCURRENCY = 3
+
+
 async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> list:
     """
     For a product, return a list of image entries to send to WooCommerce
@@ -1305,6 +1315,48 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
             print(f"[_resolve_product_images] {product.sku}: product-level cache has {len(uploaded_cache)} "
                   f"entries: {list(uploaded_cache.keys())}")
 
+            def _wp_upload_args(img) -> dict:
+                """File name / alt / caption / description for one image."""
+                ext = Path(img.processed_path).suffix or ".webp"
+                n, first = img.position + 1, img.position == 0
+                return {
+                    "filename": f"{base_slug}-{n}{ext}",
+                    "alt_text": (base_alt if first else f"{base_alt} - {n}") if base_alt else None,
+                    "caption": (base_caption if first else f"{base_caption} - {n}") if base_caption else None,
+                    "description": (base_description if first else f"{base_description} - {n}") if base_description else None,
+                }
+
+            # Send the images that are not in the cache to WordPress several at
+            # a time (network only -- no database work happens in here). The
+            # loop below then handles every image in position order exactly as
+            # before, taking each upload's result from _uploaded instead of
+            # waiting for it one by one.
+            _seen_keys: set = set()
+            _to_upload = []
+            for _img in processed_images:
+                _key = f"{store.id}:{_img.original_url}" if _img.original_url else ""
+                if _key and ((uploaded_cache.get(_key) or {}).get("wp_url") or _key in _seen_keys):
+                    continue        # cached already, or same source as an earlier image
+                if _key:
+                    _seen_keys.add(_key)
+                _to_upload.append(_img)
+            _uploaded: dict = {}
+            if _to_upload:
+                _sem = asyncio.Semaphore(_UPLOAD_IMAGE_CONCURRENCY)
+
+                async def _upload_one(_i):
+                    async with _sem:
+                        return await wc.upload_image_to_wordpress(
+                            store, _i.processed_path, **_wp_upload_args(_i))
+
+                _results = await asyncio.gather(*[_upload_one(_i) for _i in _to_upload],
+                                                return_exceptions=True)
+                for _i, _r in zip(_to_upload, _results):
+                    if isinstance(_r, BaseException):
+                        print(f"[_resolve_product_images] {product.sku} pos={_i.position}: upload error {_r}")
+                        _r = (None, None)       # reported below as "WP upload failed"
+                    _uploaded[_i.id] = _r
+
             for img in processed_images:
                 # Client feedback confirmed live: the SAME product
                 # (globally shared across stores, unique by sunsky_id --
@@ -1359,15 +1411,10 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
                 # per-position numbering, independent of image_names'
                 # stored single-string preview value (which only ever
                 # represented what image #1 would look like).
-                ext = Path(img.processed_path).suffix or ".webp"
-                wp_filename = f"{base_slug}-{img.position + 1}{ext}"
-                wp_alt = (base_alt if img.position == 0 else f"{base_alt} - {img.position + 1}") if base_alt else None
-                wp_caption = (base_caption if img.position == 0 else f"{base_caption} - {img.position + 1}") if base_caption else None
-                wp_description = (base_description if img.position == 0 else f"{base_description} - {img.position + 1}") if base_description else None
-                wp_url, wp_media_id = await wc.upload_image_to_wordpress(
-                    store, img.processed_path, filename=wp_filename, alt_text=wp_alt,
-                    caption=wp_caption, description=wp_description,
-                )
+                _args = _wp_upload_args(img)
+                wp_filename = _args["filename"]
+                wp_url, wp_media_id = _uploaded.pop(img.id, None) or await wc.upload_image_to_wordpress(
+                    store, img.processed_path, **_args)
                 if wp_url:
                     images.append({"id": wp_media_id, "src": wp_url})
                     img.wp_media_url = wp_url
