@@ -2017,6 +2017,20 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
                             className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
                           />
                         </div>
+                        {/* Client: "tags are not visible in the last review step."
+                            Generated and uploaded all along (and editable via the
+                            save endpoint), there was just no field for them here. */}
+                        <div className="sm:col-span-2">
+                          <label className="block text-[12px] font-medium text-foreground/70 mb-1">
+                            Tags <span className="font-normal text-foreground/40">(separated by commas)</span>
+                          </label>
+                          <input
+                            value={getField(p, "tags")}
+                            onChange={e => setDraftField(p.id, "tags", e.target.value)}
+                            placeholder="No tags"
+                            className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
+                          />
+                        </div>
                       </div>
 
                       {/* Client feedback: "3 fields missing for review and
