@@ -2302,8 +2302,9 @@ function SunskyCategoriesTab() {
                     className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-secondary/20 px-3 py-2"
                   >
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-foreground truncate">
-                        {r.name} <span className="text-[11px] font-normal font-mono text-muted-foreground">ID {r.id}</span>
+                      <div className="text-sm font-medium text-foreground flex items-baseline gap-1.5 min-w-0">
+                        <span className="truncate">{r.name}</span>
+                        <span className="shrink-0 text-[11px] font-normal font-mono text-muted-foreground">ID {r.id}</span>
                       </div>
                       {r.path.length > 1 && (
                         <div className="text-[11px] text-muted-foreground truncate">
@@ -2373,8 +2374,10 @@ function SunskyCategoriesTab() {
                   className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-amber-500/5 border border-amber-500/20"
                 >
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">
-                      {s.name} <span className="text-[11px] font-normal font-mono text-muted-foreground">ID {s.id}</span>
+                    {/* the name shortens when space is tight, the ID never does */}
+                    <p className="text-sm font-medium text-foreground flex items-baseline gap-1.5 min-w-0">
+                      <span className="truncate">{s.name}</span>
+                      <span className="shrink-0 text-[11px] font-normal font-mono text-muted-foreground">ID {s.id}</span>
                     </p>
                     {s.parentName && (
                       <p className="text-xs text-muted-foreground">{s.parentName}</p>
