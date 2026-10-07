@@ -54,6 +54,9 @@ class MappingEntry(BaseModel):
     # The operator re-picked the category of an already-mapped Sunsky
     # category in Cat. Review ("Change") -- always saved, see map_confirm.
     changed: bool = False
+    # Sunsky category ID of this card (rules are per Sunsky ID). None = an
+    # older dashboard build: the batch's ID for that name is used, as before.
+    sunsky_cat_id: Optional[str] = None
 
 
 class MapConfirmRequest(BaseModel):
@@ -144,18 +147,29 @@ async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappi
     edit_id = entry.id
     if not edit_id:
         # Adding words that an existing rule already has (any case) updates
-        # that rule instead of creating a duplicate.
-        edit_id = (await db.execute(select(SunskyCategoryMapping.id).where(
+        # that rule instead of creating a duplicate. Rules are per Sunsky
+        # category ID now, so several rules can share name + words: the
+        # name-only one (no Sunsky ID) is the one a save-by-name means; a
+        # single existing rule is updated whatever its ID, as before.
+        _same = (await db.execute(select(SunskyCategoryMapping).where(
             scope, SunskyCategoryMapping.sunsky_cat == entry.sunsky_cat, same_words,
-        ))).scalars().first()
+        ).order_by(SunskyCategoryMapping.id))).scalars().all()
+        _name_only = [r for r in _same if not (r.sunsky_cat_id or "").strip()]
+        if _name_only:
+            edit_id = _name_only[0].id
+        elif len(_same) == 1:
+            edit_id = _same[0].id
     if edit_id:
         row = await db.get(SunskyCategoryMapping, edit_id)
         if row is None or row.store_id != store_id:
             raise HTTPException(404, "Rule not found")
+        # a clash = another rule with the same name, words AND Sunsky ID
+        _row_cid = "" if (row.sunsky_cat or "") != (entry.sunsky_cat or "") else (row.sunsky_cat_id or "")
         clash = (await db.execute(select(SunskyCategoryMapping.id).where(
             scope,
             SunskyCategoryMapping.sunsky_cat == entry.sunsky_cat,
             same_words,
+            func.coalesce(SunskyCategoryMapping.sunsky_cat_id, "") == _row_cid,
             SunskyCategoryMapping.id != row.id,
         ))).first()
         if clash:
@@ -169,18 +183,12 @@ async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappi
         for k, v in fields.items():
             setattr(row, k, v)
         return
-    stmt = pg_insert(SunskyCategoryMapping).values(
+    # No rule to update: a new name-only rule (applies to every Sunsky
+    # category with this name that has no rule of its own).
+    db.add(SunskyCategoryMapping(
         store_id=store_id, sunsky_cat=entry.sunsky_cat, title_contains=title, times_used=0, **fields,
-    )
-    if store_id is None:
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["sunsky_cat", "title_contains"],
-            index_where=SunskyCategoryMapping.store_id.is_(None),
-            set_=fields,
-        )
-    else:
-        stmt = stmt.on_conflict_do_update(index_elements=["store_id", "sunsky_cat", "title_contains"], set_=fields)
-    await db.execute(stmt)
+    ))
+    await db.flush()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -252,17 +260,24 @@ async def _category_coverage(db, pl, products, category_name_map) -> dict:
     for r in store_rules:
         by_cat.setdefault(r.sunsky_cat, []).append(r)
     broken_ids = await _broken_rule_ids(db, pl.store_id, store_rules)
-    cov: dict[str, dict] = {}
+    # Keyed by (category name, Sunsky category ID): two Sunsky categories
+    # can share a name ("Protection & Cases" = 111932 and 111943) and are
+    # mapped separately (job_tasks._choose_cat_rule). "store_rules" = the
+    # rules that can apply to THIS ID (its own, or name-only ones).
+    from tasks.job_tasks import _rule_cat_id
+    cov: dict[tuple, dict] = {}
     for p in products:
         cat = _extract_sunsky_cat(p.raw_data or {}, category_name_map)
         if not cat:
             continue
-        c = cov.setdefault(cat, {"products": [], "unresolved": [], "rules_used": {}, "broken": [],
-                                 "store_rules": by_cat.get(cat, [])})
+        cid = _extract_sunsky_cat_id(p.raw_data or {})
+        c = cov.setdefault((cat, cid), {
+            "products": [], "unresolved": [], "rules_used": {}, "broken": [],
+            "store_rules": [r for r in by_cat.get(cat, []) if not cid or _rule_cat_id(r) in ("", cid)]})
         c["products"].append(p)
         try:
             status, rule, g = await _cat_rule_for_product(
-                db, pl.store_id, cat, _product_titles(p), by_cat.get(cat, []), broken_ids
+                db, pl.store_id, cat, _product_titles(p), by_cat.get(cat, []), broken_ids, cat_id=cid
             )
         except Exception as _cov_e:
             logger.warning(f"[map-data] rule check failed for {cat!r}: {_cov_e}")
@@ -309,8 +324,9 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
     # ... if I don't see the products on cat.review how to determine the
     # categories." Previously this only tracked counts, with no way to
     # see which specific products they represented.
-    cat_counts: dict[str, int] = {}
-    cat_skus: dict[str, list[str]] = {}
+    # all keyed by (category name, Sunsky category ID) -- see _category_coverage
+    cat_counts: dict[tuple, int] = {}
+    cat_skus: dict[tuple, list[str]] = {}
     # Client feedback: "it should automatically show selected in review
     # step all [Sunsky's own ancestor categories] with selected and it
     # should assign as well." Confirmed the client's chosen approach
@@ -326,10 +342,10 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
         raw = p.raw_data or {}
         cat = _extract_sunsky_cat(raw, category_name_map)
         if cat:
-            cat_counts[cat] = cat_counts.get(cat, 0) + 1
-            cat_skus.setdefault(cat, []).append(p.site_sku or p.sku or f"#{p.id}")
-            if cat not in cat_raw_id:
-                cat_raw_id[cat] = str(raw.get("categoryId") or raw.get("catId") or raw.get("category_id") or "").strip()
+            _ck = (cat, _extract_sunsky_cat_id(raw))
+            cat_counts[_ck] = cat_counts.get(_ck, 0) + 1
+            cat_skus.setdefault(_ck, []).append(p.site_sku or p.sku or f"#{p.id}")
+            cat_raw_id[_ck] = _ck[1]
 
     # Load saved mappings for this store
     saved_rows = (
@@ -395,11 +411,17 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
     # WooCommerce category no longer exists does not count.
     coverage = await _category_coverage(db, pl, products, category_name_map)
     global_saved: dict[int, SunskyCategoryMapping] = {r.id: r for r in global_rows}
-    for cat, count in sorted(cat_counts.items(), key=lambda x: -x[1]):
-        cov = coverage.get(cat) or {"products": [], "unresolved": [], "rules_used": {}, "broken": [], "store_rules": []}
+    _same_name: dict[str, int] = {}
+    for (_n, _i) in cat_counts:
+        _same_name[_n] = _same_name.get(_n, 0) + 1
+    from tasks.job_tasks import _choose_cat_rule as _md_choose
+    for (cat, cat_cid), count in sorted(cat_counts.items(), key=lambda x: -x[1]):
+        _ck = (cat, cat_cid)
+        cov = coverage.get(_ck) or {"products": [], "unresolved": [], "rules_used": {}, "broken": [], "store_rules": []}
         unresolved = cov["unresolved"]
         used = list(cov["rules_used"].values())
-        ordinary = next((r for r in cov["store_rules"] if not _title_terms(r.title_contains)), None)
+        # the ordinary rule for THIS Sunsky ID (its own first, else a name-only one)
+        ordinary = _md_choose([r for r in cov["store_rules"] if not _title_terms(r.title_contains)], None, cat_cid)
         broken_ids: list[int] = []
         broken_titles: list[str] = []
         for _br, _missing in cov["broken"]:
@@ -435,18 +457,18 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             source = "store" if main["rule"] is not None else "global"
             profile_id = main_rule.profile_id if main_rule else None
             times_used = main_rule.times_used if main_rule else 0
-            shown_count, shown_skus = count, cat_skus.get(cat, [])[:10]
+            shown_count, shown_skus = count, cat_skus.get(_ck, [])[:10]
         else:
             woo_cat_list, primary_id, source = [], None, None
             profile_id = ordinary.profile_id if ordinary else None
             times_used = ordinary.times_used if ordinary else 0
             shown_count = len(unresolved) or count
-            shown_skus = [p.site_sku or p.sku or f"#{p.id}" for p in unresolved][:10] or cat_skus.get(cat, [])[:10]
+            shown_skus = [p.site_sku or p.sku or f"#{p.id}" for p in unresolved][:10] or cat_skus.get(_ck, [])[:10]
 
         sunsky_ancestor_matches: list[dict] = []
-        if source is None and cat_raw_id.get(cat):
+        if source is None and cat_raw_id.get(_ck):
             try:
-                sunsky_path = _build_sunsky_path(cat_raw_id[cat])
+                sunsky_path = _build_sunsky_path(cat_raw_id[_ck])
                 for ancestor in sunsky_path[:-1]:
                     match = woo_cat_by_name.get(str(ancestor.get("name", "")).strip().lower())
                     if match:
@@ -455,6 +477,11 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
                 logger.warning(f"[map-data] Sunsky ancestor match failed for {cat!r}: {_sap_e}")
         categories.append({
             "sunsky_cat":         cat,
+            # Sunsky category ID of this card, and a key that stays unique
+            # when two cards share the name (the frontend keys its state by it)
+            "sunsky_cat_id":      cat_cid,
+            "card_key":           f"{cat}|{cat_cid}",
+            "same_name_in_batch": _same_name.get(cat, 1) > 1,
             "product_count":      shown_count,
             "sample_skus":        shown_skus,
             "woo_cats":           woo_cat_list,
@@ -471,7 +498,10 @@ async def get_map_data(pipeline_id: int, db: AsyncSession = Depends(get_db)):
             "total_in_category":  count,
         })
 
-    categorized_count = sum(c["product_count"] for c in categories)
+    # total_in_category, not product_count: a card whose products are partly
+    # covered by "title contains" rules shows only the REMAINING ones, and
+    # counting those made a phantom "Uncategorised Products" card appear.
+    categorized_count = sum(c.get("total_in_category", c["product_count"]) for c in categories)
     uncategorized_count = total_products - categorized_count
     if uncategorized_count > 0:
         fetch_job = await db.get(Job, pl.fetch_job_id) if pl.fetch_job_id else None
@@ -570,87 +600,69 @@ async def map_confirm(
     coverage = await _category_coverage(db, pl, batch_products, category_name_map)
     from tasks.job_tasks import _title_terms
 
+    from tasks.job_tasks import _choose_cat_rule, _rule_cat_id
     for entry in req.mappings:
         if not entry.sunsky_cat or not entry.woo_cats:
             continue
-        _cov = coverage.get(entry.sunsky_cat)
+        cid = (entry.sunsky_cat_id if entry.sunsky_cat_id is not None
+               else name_to_cat_id.get(entry.sunsky_cat.strip().lower(), "")) or ""
+        _cov = coverage.get((entry.sunsky_cat, cid))
+        # the ordinary rule (no title words) that applies to THIS Sunsky ID:
+        # its own rule first, else a name-only one
+        _ordinary = None
         if _cov is not None:
-            _has_ordinary = any(not _title_terms(r.title_contains) for r in _cov["store_rules"])
+            _ordinary = _choose_cat_rule(
+                [r for r in _cov["store_rules"] if not _title_terms(r.title_contains)], None, cid)
             # ...unless the operator explicitly changed it in Cat. Review:
             # then it IS their choice, saved as this store's ordinary rule.
-            if not _cov["unresolved"] and not _has_ordinary and not entry.changed:
+            if not _cov["unresolved"] and _ordinary is None and not entry.changed:
                 continue
 
         # Resolve primary category
         primary_id = entry.primary_woo_cat_id or (entry.woo_cats[0].id if entry.woo_cats else None)
         primary_cat = next((c for c in entry.woo_cats if c.id == primary_id), entry.woo_cats[0] if entry.woo_cats else None)
+        fields = {
+            "woo_cat_id":         primary_cat.id if primary_cat else None,
+            "woo_cat_name":       primary_cat.name if primary_cat else None,
+            "woo_cats_json":      json.dumps([{"id": c.id, "name": c.name} for c in entry.woo_cats]),
+            "primary_woo_cat_id": primary_id,
+            "profile_id":         entry.profile_id or None,
+            "last_used_at":       datetime.now(timezone.utc),
+            "updated_at":         datetime.now(timezone.utc),
+        }
 
-        cats_json = json.dumps([{"id": c.id, "name": c.name} for c in entry.woo_cats])
-        profile_id = entry.profile_id or None
-        sunsky_cat_id = name_to_cat_id.get(entry.sunsky_cat.strip().lower())
-
-        if entry.save_as_rule:
-            stmt = (
-                pg_insert(SunskyCategoryMapping)
-                .values(
-                    store_id=pl.store_id,
-                    sunsky_cat=entry.sunsky_cat,
-                    sunsky_cat_id=sunsky_cat_id,
-                    woo_cat_id=primary_cat.id if primary_cat else None,
-                    woo_cat_name=primary_cat.name if primary_cat else None,
-                    woo_cats_json=cats_json,
-                    primary_woo_cat_id=primary_id,
-                    profile_id=profile_id,
-                    times_used=1,
-                    last_used_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
-                )
-                .on_conflict_do_update(
-                    index_elements=["store_id", "sunsky_cat", "title_contains"],
-                    set_={
-                        "sunsky_cat_id":      sunsky_cat_id,
-                        "woo_cat_id":         primary_cat.id if primary_cat else None,
-                        "woo_cat_name":       primary_cat.name if primary_cat else None,
-                        "woo_cats_json":      cats_json,
-                        "primary_woo_cat_id": primary_id,
-                        "profile_id":         profile_id,
-                        "times_used":         SunskyCategoryMapping.__table__.c.times_used + 1,
-                        "last_used_at":       datetime.now(timezone.utc),
-                        "updated_at":         datetime.now(timezone.utc),
-                    },
-                )
-            )
-            await db.execute(stmt)
+        # Which rule receives this choice (rules are per Sunsky category ID):
+        #  - the rule of this very ID                      -> updated;
+        #  - a name-only rule that is simply being confirmed -> updated, as before;
+        #  - a name-only rule the operator is replacing (Change, or its
+        #    category is missing), or no rule at all        -> a NEW rule for
+        #    this ID, so other Sunsky categories with the same name keep theirs.
+        _new_choice = _cov is None or bool(_cov["unresolved"]) or entry.changed
+        target = None
+        if _ordinary is not None and (_rule_cat_id(_ordinary) == cid or not cid or not _new_choice):
+            target = _ordinary
+        elif _cov is None:
+            # not a product category of this batch (e.g. the "CSV Import" /
+            # "Uncategorised Products" card): the rule saved under that name
+            target = (await db.execute(
+                select(SunskyCategoryMapping).where(
+                    SunskyCategoryMapping.store_id == pl.store_id,
+                    SunskyCategoryMapping.sunsky_cat == entry.sunsky_cat,
+                    SunskyCategoryMapping.title_contains == "",
+                    func.coalesce(SunskyCategoryMapping.sunsky_cat_id, "") == cid,
+                ).limit(1)
+            )).scalars().first()
+        if target is not None:
+            for k, v in fields.items():
+                setattr(target, k, v)
+            if entry.save_as_rule:
+                target.times_used = (target.times_used or 0) + 1
         else:
-            stmt = (
-                pg_insert(SunskyCategoryMapping)
-                .values(
-                    store_id=pl.store_id,
-                    sunsky_cat=entry.sunsky_cat,
-                    sunsky_cat_id=sunsky_cat_id,
-                    woo_cat_id=primary_cat.id if primary_cat else None,
-                    woo_cat_name=primary_cat.name if primary_cat else None,
-                    woo_cats_json=cats_json,
-                    primary_woo_cat_id=primary_id,
-                    profile_id=profile_id,
-                    times_used=0,
-                    last_used_at=datetime.now(timezone.utc),
-                    updated_at=datetime.now(timezone.utc),
-                )
-                .on_conflict_do_update(
-                    index_elements=["store_id", "sunsky_cat", "title_contains"],
-                    set_={
-                        "sunsky_cat_id":      sunsky_cat_id,
-                        "woo_cats_json":      cats_json,
-                        "primary_woo_cat_id": primary_id,
-                        "woo_cat_id":         primary_cat.id if primary_cat else None,
-                        "woo_cat_name":       primary_cat.name if primary_cat else None,
-                        "profile_id":         profile_id,
-                        "updated_at":         datetime.now(timezone.utc),
-                    },
-                )
-            )
-            await db.execute(stmt)
+            db.add(SunskyCategoryMapping(
+                store_id=pl.store_id, sunsky_cat=entry.sunsky_cat, sunsky_cat_id=(cid or None),
+                title_contains="", times_used=1 if entry.save_as_rule else 0, **fields,
+            ))
+        await db.flush()
 
     await db.commit()
 
@@ -890,30 +902,30 @@ async def import_category_mappings_file(
     for sunsky_cat, woo_cat_list in grouped.items():
         primary_cat = woo_cat_list[0]
         cats_json = json.dumps([{"id": c.woo_id, "name": c.name} for c in woo_cat_list])
-        stmt = (
-            pg_insert(SunskyCategoryMapping)
-            .values(
-                store_id=store_id,
-                sunsky_cat=sunsky_cat,
-                woo_cat_id=primary_cat.woo_id,
-                woo_cat_name=primary_cat.name,
-                woo_cats_json=cats_json,
-                primary_woo_cat_id=primary_cat.woo_id,
-                times_used=0,
-                updated_at=datetime.now(timezone.utc),
-            )
-            .on_conflict_do_update(
-                index_elements=["store_id", "sunsky_cat", "title_contains"],
-                set_={
-                    "woo_cat_id":         primary_cat.woo_id,
-                    "woo_cat_name":       primary_cat.name,
-                    "woo_cats_json":      cats_json,
-                    "primary_woo_cat_id": primary_cat.woo_id,
-                    "updated_at":         datetime.now(timezone.utc),
-                },
-            )
-        )
-        await db.execute(stmt)
+        # Rules are per Sunsky category ID: an import by NAME updates the
+        # name-only rule, or the single existing rule of that name (as
+        # before); otherwise it adds a name-only rule.
+        _imp_fields = {
+            "woo_cat_id":         primary_cat.woo_id,
+            "woo_cat_name":       primary_cat.name,
+            "woo_cats_json":      cats_json,
+            "primary_woo_cat_id": primary_cat.woo_id,
+            "updated_at":         datetime.now(timezone.utc),
+        }
+        _imp_same = (await db.execute(select(SunskyCategoryMapping).where(
+            SunskyCategoryMapping.store_id == store_id,
+            SunskyCategoryMapping.sunsky_cat == sunsky_cat,
+            SunskyCategoryMapping.title_contains == "",
+        ).order_by(SunskyCategoryMapping.id))).scalars().all()
+        _imp_target = next((r for r in _imp_same if not (r.sunsky_cat_id or "").strip()), None) \
+            or (_imp_same[0] if len(_imp_same) == 1 else None)
+        if _imp_target is not None:
+            for _k, _v in _imp_fields.items():
+                setattr(_imp_target, _k, _v)
+        else:
+            db.add(SunskyCategoryMapping(store_id=store_id, sunsky_cat=sunsky_cat, title_contains="",
+                                         times_used=0, **_imp_fields))
+        await db.flush()
         imported += 1
 
     await db.commit()

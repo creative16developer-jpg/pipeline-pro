@@ -92,8 +92,10 @@ async def _unmapped_sunsky_categories(db, pl) -> list[str]:
         if not cat or cat in unmapped:
             continue
         try:
+            from tasks.job_tasks import _raw_cat_id
             status, _, _ = await _cat_rule_for_product(
-                db, pl.store_id, cat, _product_titles(p), rules_by_cat.get(cat, []), broken_ids
+                db, pl.store_id, cat, _product_titles(p), rules_by_cat.get(cat, []), broken_ids,
+                cat_id=_raw_cat_id(p.raw_data),
             )
         except Exception:
             status = None
@@ -1090,7 +1092,8 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
         # extraction produced, is surfaced as an unresolved row requiring
         # manual entry in the Review step — rather than silently missing.
         from tasks.job_tasks import _product_titles as _ee_titles
-        expected_attrs = await load_profile_attrs_for_category(db, pl.store_id, sunsky_cat, _ee_titles(product))
+        from tasks.job_tasks import _raw_cat_id as _ee_cat_id
+        expected_attrs = await load_profile_attrs_for_category(db, pl.store_id, sunsky_cat, _ee_titles(product), _ee_cat_id(raw))
         if expected_attrs:
             present_lower = {a["attribute"].strip().lower() for a in attrs}
             for exp_attr in expected_attrs:

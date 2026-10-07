@@ -363,7 +363,17 @@ def _product_titles(product=None, raw: dict | None = None, current_name: str | N
     return out
 
 
-def _choose_cat_rule(rows, titles: list[str] | None):
+def _raw_cat_id(raw: dict | None) -> str:
+    """A product's Sunsky category ID from its raw data ("" if none)."""
+    raw = raw or {}
+    return str(raw.get("categoryId") or raw.get("catId") or raw.get("category_id") or "").strip()
+
+
+def _rule_cat_id(r) -> str:
+    return str(getattr(r, "sunsky_cat_id", None) or "").strip()
+
+
+def _choose_cat_rule(rows, titles: list[str] | None, cat_id: str | None = None):
     """Pick which Category Mapping rule applies to ONE product, among the
     rules of one Sunsky category (one store, or the global rules).
 
@@ -377,9 +387,22 @@ def _choose_cat_rule(rows, titles: list[str] | None):
     product's titles wins. Otherwise the rule WITHOUT title words (the
     ordinary rule for the whole category) is the fallback. None = no rule
     applies. With titles=None/[] only the ordinary rule can match -- exactly
-    the behaviour before this feature."""
+    the behaviour before this feature.
+
+    cat_id (client, PL-164): Sunsky uses the same NAME for several
+    categories ("Protection & Cases" = 111932, 111943, ...), and the rule
+    made for one was applied to all of them. A rule that has a Sunsky ID
+    saved now applies ONLY to products of that ID; a rule without an ID
+    still applies to every category of that name. A rule for the product's
+    own ID is preferred over a name-only rule. cat_id None/"" (ID not
+    known) = no ID filtering, as before."""
     titles_l = [t.lower() for t in (titles or []) if t]
-    ordered = sorted([r for r in rows if r is not None], key=lambda r: r.id or 0)
+    cid = str(cat_id or "").strip()
+    rows = [r for r in rows if r is not None]
+    if cid:
+        rows = [r for r in rows if _rule_cat_id(r) in ("", cid)]
+    # own-ID rules first, then name-only rules. creation order inside each
+    ordered = sorted(rows, key=lambda r: (0 if (cid and _rule_cat_id(r) == cid) else 1, r.id or 0))
     for r in ordered:
         terms = _title_terms(getattr(r, "title_contains", ""))
         if terms and any(term in t for term in terms for t in titles_l):
@@ -413,7 +436,7 @@ async def _broken_rule_ids(db, store_id: int, rules) -> dict[int, list[int]]:
 
 
 async def _cat_rule_for_product(db, store_id: int, sunsky_cat: str, titles: list[str] | None,
-                                store_rows=None, broken_ids: dict | None = None):
+                                store_rows=None, broken_ids: dict | None = None, cat_id: str | None = None):
     """Which Category Mapping rule covers ONE product -- the single
     decision the pause check, Cat. Review and its Confirm all share.
     Returns (status, store_rule, global_resolved):
@@ -432,20 +455,21 @@ async def _cat_rule_for_product(db, store_id: int, sunsky_cat: str, titles: list
                 SunskyCategoryMapping.sunsky_cat == sunsky_cat,
             )
         )).scalars().all()
-    rule = _choose_cat_rule(store_rows, titles)
+    rule = _choose_cat_rule(store_rows, titles, cat_id)
     if rule is not None:
         if broken_ids is None:
             broken_ids = await _broken_rule_ids(db, store_id, [rule])
         if rule.id in broken_ids:
             return "broken", rule, None
         return "store", rule, None
-    g = await _resolve_category_mapping(db, store_id, sunsky_cat, titles)
+    g = await _resolve_category_mapping(db, store_id, sunsky_cat, titles, cat_id)
     if g and g.get("source") == "global":
         return "global", None, g
     return None, None, None
 
 
-async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str, titles: list[str] | None = None) -> Optional[dict]:
+async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str, titles: list[str] | None = None,
+                                    cat_id: str | None = None) -> Optional[dict]:
     """Resolves a Sunsky category name to WooCommerce category ID(s) for
     a specific store (and, when titles are given, a specific product).
     Store rules first -- the rule applying to this product is picked by
@@ -469,7 +493,7 @@ async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str, titles: 
             SunskyCategoryMapping.sunsky_cat == sunsky_cat,
         )
     )).scalars().all()
-    mapping = _choose_cat_rule(store_rows, titles)
+    mapping = _choose_cat_rule(store_rows, titles, cat_id)
 
     if mapping:
         woo_cat_ids: list[int] = []
@@ -488,7 +512,7 @@ async def _resolve_category_mapping(db, store_id: int, sunsky_cat: str, titles: 
             SunskyCategoryMapping.sunsky_cat == sunsky_cat,
         )
     )).scalars().all()
-    global_mapping = _choose_cat_rule(global_rows, titles)
+    global_mapping = _choose_cat_rule(global_rows, titles, cat_id)
     if not global_mapping or not global_mapping.woo_cats_json:
         return None
 
@@ -1727,7 +1751,8 @@ async def _run_upload(db, job):
                         sunsky_cat = upload_category_name_map.get(cat_id, cat_id)
                     if sunsky_cat and job.store_id:
                         resolved_cat = await _resolve_category_mapping(
-                            db, job.store_id, sunsky_cat, _product_titles(product)
+                            db, job.store_id, sunsky_cat, _product_titles(product),
+                            _raw_cat_id(product.raw_data),
                         )
                         if resolved_cat:
                             woo_cat_ids = resolved_cat["woo_cat_ids"]
@@ -2320,7 +2345,7 @@ async def _run_upload(db, job):
                                 _SCM2.store_id == job.store_id,
                                 _SCM2.sunsky_cat.ilike(_cand),
                             )
-                        )).scalars().all(), _p2_titles)
+                        )).scalars().all(), _p2_titles, sunsky_cat_id)
                         if _mapping2:
                             _matched_key = _cand
                             break
@@ -2362,7 +2387,7 @@ async def _run_upload(db, job):
                                     _SCM2.store_id.is_(None),
                                     _SCM2.sunsky_cat.ilike(_cand),
                                 )
-                            )).scalars().all(), _p2_titles)
+                            )).scalars().all(), _p2_titles, sunsky_cat_id)
                             if _global_mapping2:
                                 _global_matched_key = _cand
                                 break
@@ -2800,7 +2825,7 @@ async def _sync_rule_category_ids(db, store_id: int, raw_p: dict, sunsky_cat_id,
     for cand in candidates:
         m = _choose_cat_rule((await db.execute(
             _ssel_scm(_SSCM).where(_SSCM.store_id == store_id, _SSCM.sunsky_cat.ilike(cand))
-        )).scalars().all(), titles)
+        )).scalars().all(), titles, sunsky_cat_id)
         if m:
             ids: list[int] = []
             if m.woo_cats_json:
@@ -2813,7 +2838,7 @@ async def _sync_rule_category_ids(db, store_id: int, raw_p: dict, sunsky_cat_id,
     for cand in candidates:
         g = _choose_cat_rule((await db.execute(
             _ssel_scm(_SSCM).where(_SSCM.store_id.is_(None), _SSCM.sunsky_cat.ilike(cand))
-        )).scalars().all(), titles)
+        )).scalars().all(), titles, sunsky_cat_id)
         if g:
             resolved = None
             if g.woo_cats_json:
@@ -3431,11 +3456,21 @@ async def _run_sync(db, job):
                                     woo_cat_name=_cat_name,
                                     woo_cats_json=_json_local.dumps([{"id": woo_id, "name": _cat_name}]),
                                     primary_woo_cat_id=woo_id,
-                                ).on_conflict_do_nothing(
-                                    # the ordinary rule (title_contains '') --
-                                    # matches uq_category_mapping_store_title
-                                    index_elements=["store_id", "sunsky_cat", "title_contains"],
                                 )
+                                # Rules are per Sunsky category ID now (see
+                                # _choose_cat_rule): only add this automatic
+                                # rule when no ordinary rule already covers
+                                # this category -- its own ID, or a
+                                # name-only rule. Never touches an existing row.
+                                from sqlalchemy import select as _sel_sync_scm, func as _fn_sync_scm
+                                _covered = (await db.execute(
+                                    _sel_sync_scm(_SCM_SYNC.id).where(
+                                        _SCM_SYNC.store_id == job.store_id,
+                                        _SCM_SYNC.sunsky_cat == _cat_name,
+                                        _SCM_SYNC.title_contains == "",
+                                        _fn_sync_scm.coalesce(_SCM_SYNC.sunsky_cat_id, "").in_(["", str(cat_id)]),
+                                    ).limit(1)
+                                )).first()
                                 # Client feedback (live test, PL-115/116):
                                 # "which category it should assign in
                                 # WooCommerce" -- confirmed a real bug here:
@@ -3459,7 +3494,8 @@ async def _run_sync(db, job):
                                 # genuinely blank/never-set one) without ever
                                 # touching an existing row, whatever its
                                 # current value.
-                                await db.execute(_stmt)
+                                if not _covered:
+                                    await db.execute(_stmt)
                                 await db.commit()
                         except Exception as _sync_map_e:
                             await _log(db, job.id, LogLevel.warn,

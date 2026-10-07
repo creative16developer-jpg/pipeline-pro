@@ -618,6 +618,12 @@ function EnrichReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void 
 // Category Review — "Category Assignment Required" (status = review)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Key of one Category Review card. Cards used to be keyed by the Sunsky
+// category NAME, but Sunsky uses the same name for several categories
+// ("Protection & Cases" = 111932, 111943, ...) and rules are saved per Sunsky
+// ID, so two cards can share a name -- card_key (name|id) keeps them apart.
+const ck = (c: any): string => c.card_key ?? c.sunsky_cat;
+
 function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void }) {
   const { toast } = useToast();
   const [data, setData]     = useState<any>(null);
@@ -667,7 +673,7 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
         setData(d);
         const init: Record<string, any> = {};
         (d.categories ?? []).forEach((c: any) => {
-          init[c.sunsky_cat] = {
+          init[ck(c)] = {
             woo_cat_id: c.primary_woo_cat_id ?? c.woo_cats?.[0]?.id ?? null,
             profile_id: c.profile_id ?? null,
             save_as_rule: true,
@@ -732,7 +738,7 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
     setSaving(true);
     try {
       const mappings = cats.map(c => {
-        const s = sel[c.sunsky_cat];
+        const s = sel[ck(c)];
         const woo_cat_id = s?.woo_cat_id ?? c.woo_cats?.[0]?.id ?? null;
         // Client feedback confirmed live via screenshot: "In the flow
         // was marked 3 categories but the product is added only in
@@ -769,11 +775,12 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
           : c.woo_cats ?? [];
         return {
           sunsky_cat: c.sunsky_cat,
+          sunsky_cat_id: c.sunsky_cat_id ?? null,
           woo_cats,
           primary_woo_cat_id: woo_cat_id,
           profile_id: s?.profile_id ?? c.profile_id ?? null,
           save_as_rule: s?.save_as_rule ?? true,
-          changed: !!changedCats[c.sunsky_cat],
+          changed: !!changedCats[ck(c)],
         };
       });
       const r = await fetch(`/api/pipelines/${pl.id}/map-confirm`, {
@@ -802,9 +809,9 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
 
       {/* New categories */}
       {newCats.map((c: any) => {
-        const s = sel[c.sunsky_cat] ?? { woo_cat_id: null, profile_id: null, save_as_rule: true };
+        const s = sel[ck(c)] ?? { woo_cat_id: null, profile_id: null, save_as_rule: true };
         return (
-          <div key={c.sunsky_cat} className="bg-card border border-border rounded-[10px] p-5">
+          <div key={ck(c)} className="bg-card border border-border rounded-[10px] p-5">
             <div className="flex items-center gap-3 mb-1 flex-wrap">
               {c.broken_missing_ids?.length > 0 ? (
                 <span
@@ -815,6 +822,12 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
                 <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[12px] font-medium bg-amber-500/15 text-amber-400">Unmapped</span>
               )}
               <strong className="text-[15px]">{c.sunsky_cat}</strong>
+              {c.sunsky_cat_id && (
+                <span className="text-[12px] text-muted-foreground font-mono"
+                  title="Sunsky category ID. Rules are saved per Sunsky ID: Sunsky uses the same name for several categories.">
+                  Sunsky ID {c.sunsky_cat_id}
+                </span>
+              )}
               <span className="text-[12px] text-muted-foreground/60">{c.product_count} product{c.product_count !== 1 ? "s" : ""} in this batch</span>
             </div>
             {c.covered_by_title_rules > 0 && (
@@ -846,7 +859,7 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
                 <label className="block text-[12px] font-medium text-foreground/70 mb-1.5">WooCommerce Category</label>
                 <select
                   value={s.woo_cat_id ?? ""}
-                  onChange={e => setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...s, woo_cat_id: e.target.value ? parseInt(e.target.value) : null } }))}
+                  onChange={e => setSel(prev => ({ ...prev, [ck(c)]: { ...s, woo_cat_id: e.target.value ? parseInt(e.target.value) : null } }))}
                   className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
                 >
                   <option value="">Select category…</option>
@@ -860,7 +873,7 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
                 <label className="block text-[12px] font-medium text-foreground/70 mb-1.5">Attribute Profile</label>
                 <select
                   value={s.profile_id ?? ""}
-                  onChange={e => setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...s, profile_id: e.target.value ? parseInt(e.target.value) : null } }))}
+                  onChange={e => setSel(prev => ({ ...prev, [ck(c)]: { ...s, profile_id: e.target.value ? parseInt(e.target.value) : null } }))}
                   className="w-full px-3 py-2 border border-border rounded-lg text-[13px] text-foreground bg-card focus:outline-none focus:border-violet-400"
                 >
                   <option value="">— No profile —</option>
@@ -872,7 +885,7 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
               <span className={cn(
                 "w-4 h-4 min-w-[16px] border-2 rounded flex items-center justify-center mt-0.5 text-[11px] transition-colors",
                 s.save_as_rule ? "bg-violet-600 border-violet-600 text-white" : "border-border bg-card"
-              )} onClick={() => setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...s, save_as_rule: !s.save_as_rule } }))}>
+              )} onClick={() => setSel(prev => ({ ...prev, [ck(c)]: { ...s, save_as_rule: !s.save_as_rule } }))}>
                 {s.save_as_rule && "✓"}
               </span>
               <div>
@@ -880,31 +893,31 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
                 <div className="text-[12px] text-muted-foreground/60 mt-0.5">Future pipelines with this Sunsky category will not pause again.</div>
               </div>
             </label>
-            {newCatForm[c.sunsky_cat]?.open ? (
+            {newCatForm[ck(c)]?.open ? (
               <div className="mt-3 flex items-center gap-2 flex-wrap">
                 <input
                   autoFocus
                   type="text"
                   placeholder="New category name…"
-                  value={newCatForm[c.sunsky_cat]?.name ?? ""}
-                  onChange={e => setNewCatForm(f => ({ ...f, [c.sunsky_cat]: { ...f[c.sunsky_cat], name: e.target.value } }))}
-                  onKeyDown={e => { if (e.key === "Enter") handleCreateCategory(c.sunsky_cat, pl.store_id); if (e.key === "Escape") setNewCatForm(f => ({ ...f, [c.sunsky_cat]: { open: false, name: "", saving: false } })); }}
+                  value={newCatForm[ck(c)]?.name ?? ""}
+                  onChange={e => setNewCatForm(f => ({ ...f, [ck(c)]: { ...f[ck(c)], name: e.target.value } }))}
+                  onKeyDown={e => { if (e.key === "Enter") handleCreateCategory(ck(c), pl.store_id); if (e.key === "Escape") setNewCatForm(f => ({ ...f, [ck(c)]: { open: false, name: "", saving: false } })); }}
                   className="flex-1 min-w-[180px] px-3 py-1.5 border border-border rounded-lg text-[13px] text-foreground bg-background focus:outline-none focus:border-violet-400"
                 />
                 <button
-                  onClick={() => handleCreateCategory(c.sunsky_cat, pl.store_id)}
-                  disabled={newCatForm[c.sunsky_cat]?.saving || !newCatForm[c.sunsky_cat]?.name.trim()}
+                  onClick={() => handleCreateCategory(ck(c), pl.store_id)}
+                  disabled={newCatForm[ck(c)]?.saving || !newCatForm[ck(c)]?.name.trim()}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-[12px] font-medium disabled:opacity-50 transition-colors">
-                  {newCatForm[c.sunsky_cat]?.saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />} Create
+                  {newCatForm[ck(c)]?.saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />} Create
                 </button>
                 <button
-                  onClick={() => setNewCatForm(f => ({ ...f, [c.sunsky_cat]: { open: false, name: "", saving: false } }))}
+                  onClick={() => setNewCatForm(f => ({ ...f, [ck(c)]: { open: false, name: "", saving: false } }))}
                   className="px-3 py-1.5 rounded-lg bg-card border border-border text-foreground/60 text-[12px] hover:bg-background transition-colors">
                   Cancel
                 </button>
               </div>
             ) : (
-              <button onClick={() => openNewCatForm(c.sunsky_cat)} className="inline-flex items-center gap-1 text-violet-400 text-[12px] mt-3 hover:underline">
+              <button onClick={() => openNewCatForm(ck(c))} className="inline-flex items-center gap-1 text-violet-400 text-[12px] mt-3 hover:underline">
                 <Plus className="w-3 h-3" /> Create new WooCommerce category
               </button>
             )}
@@ -918,21 +931,22 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
           <strong>✓ Already mapped — applied automatically</strong>
           <div className="mt-1.5 space-y-2">
             {knownCats.map((c: any) => {
-              const s = sel[c.sunsky_cat];
+              const s = sel[ck(c)];
               const original = c.primary_woo_cat_id ?? c.woo_cats?.[0]?.id ?? null;
-              const isChanged = !!changedCats[c.sunsky_cat];
+              const isChanged = !!changedCats[ck(c)];
               const hasTitleRules = (c.title_rules ?? []).length > 0;
               return (
-                <div key={c.sunsky_cat} className="text-[12px]">
+                <div key={ck(c)} className="text-[12px]">
                   <div className="flex items-start gap-2 flex-wrap">
                     <span>
                       {isChanged
                         ? `${c.sunsky_cat} (${c.product_count}) → ${wooOptions.find(o => o.id === s?.woo_cat_id)?.label ?? "?"}`
                         : formatKnownCategory(c)}
                     </span>
+                    {c.sunsky_cat_id && <span className="text-emerald-300/60 font-mono">ID {c.sunsky_cat_id}</span>}
                     {isChanged && <span className="text-amber-400">changed — saved when you confirm</span>}
-                    {!hasTitleRules && changingCat !== c.sunsky_cat && (
-                      <button type="button" onClick={() => setChangingCat(c.sunsky_cat)}
+                    {!hasTitleRules && changingCat !== ck(c) && (
+                      <button type="button" onClick={() => setChangingCat(ck(c))}
                         className="text-violet-400 hover:underline">Change</button>
                     )}
                   </div>
@@ -947,14 +961,14 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
                       Uses "title contains" rules — edit them in Settings → Category Mapping.
                     </div>
                   )}
-                  {changingCat === c.sunsky_cat && (
+                  {changingCat === ck(c) && (
                     <div className="mt-1.5 flex items-center gap-2 flex-wrap">
                       <select
                         value={s?.woo_cat_id ?? ""}
                         onChange={e => {
                           const v = e.target.value ? parseInt(e.target.value) : null;
-                          setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...(prev[c.sunsky_cat] ?? { profile_id: c.profile_id ?? null, save_as_rule: true }), woo_cat_id: v ?? original } }));
-                          setChangedCats(prev => ({ ...prev, [c.sunsky_cat]: v !== null && v !== original }));
+                          setSel(prev => ({ ...prev, [ck(c)]: { ...(prev[ck(c)] ?? { profile_id: c.profile_id ?? null, save_as_rule: true }), woo_cat_id: v ?? original } }));
+                          setChangedCats(prev => ({ ...prev, [ck(c)]: v !== null && v !== original }));
                         }}
                         className="min-w-[260px] px-3 py-1.5 border border-border rounded-lg text-[12px] text-foreground bg-card focus:outline-none focus:border-violet-400"
                       >
@@ -965,8 +979,8 @@ function CategoryReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => voi
                       {isChanged && (
                         <button type="button"
                           onClick={() => {
-                            setSel(prev => ({ ...prev, [c.sunsky_cat]: { ...prev[c.sunsky_cat], woo_cat_id: original } }));
-                            setChangedCats(prev => ({ ...prev, [c.sunsky_cat]: false }));
+                            setSel(prev => ({ ...prev, [ck(c)]: { ...prev[ck(c)], woo_cat_id: original } }));
+                            setChangedCats(prev => ({ ...prev, [ck(c)]: false }));
                             setChangingCat(null);
                           }}
                           className="text-muted-foreground hover:underline">Undo</button>

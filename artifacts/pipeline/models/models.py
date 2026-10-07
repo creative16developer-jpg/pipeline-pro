@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, Float, DateTime,
-    ForeignKey, JSON, Enum as SAEnum, UniqueConstraint
+    ForeignKey, JSON, Enum as SAEnum, UniqueConstraint, Index, text
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -411,7 +411,15 @@ class SunskyCategoryMapping(Base):
     # take precedence for matching products -- see job_tasks._choose_cat_rule.
     # Global rules (store_id NULL) get a partial unique index on
     # (sunsky_cat, title_contains) -- migrations/add_category_mapping_title_contains.sql.
-    __table_args__ = (UniqueConstraint("store_id", "sunsky_cat", "title_contains", name="uq_category_mapping_store_title"),)
+    # Rules are per Sunsky category ID too (client, PL-164: Sunsky uses the
+    # same name for several categories): a rule with sunsky_cat_id applies
+    # to that ID only, one without it to every category of that name -- so
+    # the ID is part of what makes a rule unique.
+    __table_args__ = (
+        Index("uq_category_mapping_store_id_title",
+              "store_id", "sunsky_cat", text("COALESCE(sunsky_cat_id, '')"), "title_contains",
+              unique=True, postgresql_where=text("store_id IS NOT NULL")),
+    )
 
     id                 = Column(Integer, primary_key=True, index=True)
     store_id           = Column(Integer, ForeignKey("stores.id", ondelete="CASCADE"), nullable=True, index=True)

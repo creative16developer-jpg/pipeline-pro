@@ -575,7 +575,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         ]
         _cd_product_titles = _cd_titles(p)
         if _cd_rows_for_cat:
-            _cd_rule = _cd_choose(_cd_rows_for_cat, _cd_product_titles)
+            _cd_rule = _cd_choose(_cd_rows_for_cat, _cd_product_titles, sunsky_cat_id)
             if _cd_rule is None or not _cd_rule.woo_cat_id:
                 _mapped_val, is_mapped, resolved_woo_cat, mapped_cats_json = None, False, None, None
                 category_missing_ids = None
@@ -609,7 +609,7 @@ async def get_content_data(pl_id: int, db: AsyncSession = Depends(get_db)):
         if _mapped_val is None and sunsky_cat_name:
             try:
                 from tasks.job_tasks import _resolve_category_mapping as _cd_resolve_cat
-                _global_resolved = await _cd_resolve_cat(db, pl.store_id, sunsky_cat_name, _cd_product_titles)
+                _global_resolved = await _cd_resolve_cat(db, pl.store_id, sunsky_cat_name, _cd_product_titles, sunsky_cat_id)
                 if _global_resolved:
                     _mapped_val = f"[global] {sunsky_cat_name}"
                     is_mapped = True
