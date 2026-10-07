@@ -484,17 +484,23 @@ def search_categories_by_name(query: str, limit: int = 50) -> list[dict]:
     # name" -- typing 111943 found nothing, the search only looked at names.
     # A number is matched against category IDs too: the exact ID first, then
     # IDs starting with it, then names as before.
-    exact, by_id, by_name = [], [], []
+    # Categories whose name IS the query come before those that merely
+    # contain it, so every same-name category is listed even when many
+    # others match (Category Mapping asks "which IDs are called X?").
+    exact, same_name, by_id, by_name = [], [], [], []
     for cid, entry in _category_full_cache.items():
         sid = str(cid)
+        nm = entry["name"].strip().lower()
         if q.isdigit() and sid == q:
             exact.append(cid)
+        elif nm == q:
+            same_name.append(cid)
         elif q.isdigit() and sid.startswith(q):
             by_id.append(cid)
-        elif q in entry["name"].lower():
+        elif q in nm:
             by_name.append(cid)
     results = []
-    for cid in (exact + by_id + by_name)[:limit]:
+    for cid in (exact + same_name + by_id + by_name)[:limit]:
         results.append({"id": cid, "name": _category_full_cache[cid]["name"], "path": build_category_path(cid)})
     return results
 

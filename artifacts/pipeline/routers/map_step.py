@@ -73,6 +73,9 @@ class CategoryMappingUpdate(BaseModel):
     # Set when editing an existing rule: that exact row is updated (so
     # changing its title words edits it instead of adding a second rule).
     id: Optional[int] = None
+    # Which Sunsky category the rule is for: an ID = that category only;
+    # "" = every category with this name; None (older dashboard) = unchanged.
+    sunsky_cat_id: Optional[str] = None
 
 
 def _norm_title_contains(value) -> str:
@@ -144,6 +147,11 @@ async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappi
     # "Waterproof" and "waterproof" are the SAME rule -- compare lower-cased
     # (the unique index itself is case-sensitive).
     same_words = func.lower(SunskyCategoryMapping.title_contains) == title.lower()
+    # Client: "create a rule for 111329 and the pipeline automatically add
+    # all these other category IDs" -- a rule added in Settings was saved by
+    # NAME only, so it covered every Sunsky category called "Lens Filter".
+    # The dashboard now sends which category the rule is for.
+    want_cid = None if entry.sunsky_cat_id is None else str(entry.sunsky_cat_id).strip()
     edit_id = entry.id
     if not edit_id:
         # Adding words that an existing rule already has (any case) updates
@@ -155,7 +163,13 @@ async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappi
             scope, SunskyCategoryMapping.sunsky_cat == entry.sunsky_cat, same_words,
         ).order_by(SunskyCategoryMapping.id))).scalars().all()
         _name_only = [r for r in _same if not (r.sunsky_cat_id or "").strip()]
-        if _name_only:
+        if want_cid is not None:
+            # the dashboard said which Sunsky category (an ID, or "" = all
+            # with this name): only the rule for exactly that is updated
+            _exact = [r for r in _same if (r.sunsky_cat_id or "").strip() == want_cid]
+            if _exact:
+                edit_id = _exact[0].id
+        elif _name_only:
             edit_id = _name_only[0].id
         elif len(_same) == 1:
             edit_id = _same[0].id
@@ -164,7 +178,10 @@ async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappi
         if row is None or row.store_id != store_id:
             raise HTTPException(404, "Rule not found")
         # a clash = another rule with the same name, words AND Sunsky ID
-        _row_cid = "" if (row.sunsky_cat or "") != (entry.sunsky_cat or "") else (row.sunsky_cat_id or "")
+        if want_cid is not None:
+            _row_cid = want_cid
+        else:
+            _row_cid = "" if (row.sunsky_cat or "") != (entry.sunsky_cat or "") else (row.sunsky_cat_id or "")
         clash = (await db.execute(select(SunskyCategoryMapping.id).where(
             scope,
             SunskyCategoryMapping.sunsky_cat == entry.sunsky_cat,
@@ -174,7 +191,9 @@ async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappi
         ))).first()
         if clash:
             raise HTTPException(409, "A rule for this Sunsky category with the same title words already exists")
-        if (row.sunsky_cat or "") != (entry.sunsky_cat or ""):
+        if want_cid is not None:
+            row.sunsky_cat_id = want_cid or None
+        elif (row.sunsky_cat or "") != (entry.sunsky_cat or ""):
             # Sunsky category renamed in the edit form: a saved ID belonged
             # to the old category -- drop it (the list shows IDs by name).
             row.sunsky_cat_id = None
@@ -186,7 +205,8 @@ async def _save_category_rule(db, store_id: Optional[int], entry: "CategoryMappi
     # No rule to update: a new name-only rule (applies to every Sunsky
     # category with this name that has no rule of its own).
     db.add(SunskyCategoryMapping(
-        store_id=store_id, sunsky_cat=entry.sunsky_cat, title_contains=title, times_used=0, **fields,
+        store_id=store_id, sunsky_cat=entry.sunsky_cat, sunsky_cat_id=(want_cid or None),
+        title_contains=title, times_used=0, **fields,
     ))
     await db.flush()
 
@@ -787,6 +807,8 @@ async def list_category_mappings(store_id: int, db: AsyncSession = Depends(get_d
                 "is_overridden":      r.store_id is None and (r.sunsky_cat, r.title_contains or "") in own_cats,
                 "title_contains":     r.title_contains or "",
                 "sunsky_cat_ids":     _sunsky_ids_for(r, _name_to_ids),
+                # the ID the rule is limited to ("" = every category with this name)
+                "sunsky_cat_id":      (r.sunsky_cat_id or ""),
             }
             for r in merged
         ],
@@ -995,6 +1017,8 @@ async def list_global_category_mappings(db: AsyncSession = Depends(get_db)):
                 "id":                 r.id,
                 "sunsky_cat":         r.sunsky_cat,
                 "sunsky_cat_ids":     _sunsky_ids_for(r, _name_to_ids),
+                # the ID the rule is limited to ("" = every category with this name)
+                "sunsky_cat_id":      (r.sunsky_cat_id or ""),
                 "woo_cats":           _mapping_woo_cats(r),
                 "primary_woo_cat_id": r.primary_woo_cat_id or r.woo_cat_id,
                 "profile_id":         r.profile_id,

@@ -130,6 +130,8 @@ interface CatMapping {
   title_contains?: string;
   // Sunsky category ID(s) -- client: "add sunsky category ID as new column"
   sunsky_cat_ids?: string[];
+  // The ID the rule is limited to; "" = every Sunsky category with this name.
+  sunsky_cat_id?: string;
 }
 
 // Attribute Mapping "If category" suggestions. Client feedback confirmed
@@ -184,10 +186,13 @@ function buildCategoryConditionOptions(
 // select it outright; keep typing to filter; click outside or Escape closes
 // the list without losing whatever's currently in the input.
 function SearchableCombobox({
-  value, onChange, options, placeholder, emptyHint, onPick,
+  value, onChange, options, placeholder, emptyHint, onPick, onPickOption,
 }: {
   value: string;
   onChange: (v: string) => void;
+  // Called (after onChange/onPick) with the suggestion that was clicked, so
+  // the caller can use its id -- two suggestions can share a label.
+  onPickOption?: (o: { id: string; label: string }) => void;
   // When set, choosing a suggestion calls onPick instead of onChange
   // (multi-value inputs add a chip rather than replacing the text).
   onPick?: (v: string) => void;
@@ -237,7 +242,7 @@ function SearchableCombobox({
                 key={o.key ?? o.id}
                 type="button"
                 onMouseDown={e => e.preventDefault()}
-                onClick={() => { if (onPick) onPick(o.label); else onChange(o.label); setOpen(false); }}
+                onClick={() => { if (onPick) onPick(o.label); else onChange(o.label); onPickOption?.(o); setOpen(false); }}
                 className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center justify-between gap-2"
               >
                 <span className="font-sans">{o.label}</span>
@@ -246,6 +251,59 @@ function SearchableCombobox({
             ))
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// Which Sunsky category a Category Mapping rule is for. Client: "Just create
+// a rule for category mapping for 111329 and the pipeline automatically add
+// all these other category IDs" -- Sunsky uses one NAME for several
+// categories ("Lens Filter" = 8 IDs) and a rule added here was saved by name,
+// so it covered all of them. Lists every Sunsky category with exactly this
+// name (ID + where it sits in the tree) plus "all with this name".
+function SunskyIdChoice({ name, value, onChange }: { name: string; value: string; onChange: (v: string) => void }) {
+  const [matches, setMatches] = useState<{ id: string; path: string }[]>([]);
+  const nm = name.trim();
+  useEffect(() => {
+    if (!nm) { setMatches([]); return; }
+    let live = true;
+    const timer = setTimeout(() => {
+      fetch(`/api/sunsky/categories/search?q=${encodeURIComponent(nm)}`)
+        .then(r => r.ok ? r.json() : [])
+        .then((d: any[]) => {
+          if (!live) return;
+          setMatches((Array.isArray(d) ? d : [])
+            .filter(r => String(r.name ?? "").trim().toLowerCase() === nm.toLowerCase() || String(r.id) === nm)
+            .map(r => ({ id: String(r.id), path: (r.path ?? []).slice(0, -1).map((x: any) => x.name).join(" › ") })));
+        })
+        .catch(() => { if (live) setMatches([]); });
+    }, 300);
+    return () => { live = false; clearTimeout(timer); };
+  }, [nm]);
+  if (!nm) return null;
+  const known = matches.some(m => m.id === value);
+  return (
+    <div className="space-y-1">
+      <label className="text-xs font-medium text-muted-foreground">Applies to which Sunsky category</label>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary"
+      >
+        {value && !known && <option value={value}>ID {value}</option>}
+        {matches.map(m => (
+          <option key={m.id} value={m.id}>ID {m.id}{m.path ? ` — ${m.path}` : ""}</option>
+        ))}
+        <option value="">
+          {matches.length > 1 ? `All ${matches.length} Sunsky categories named "${nm}"` : `Every Sunsky category named "${nm}"`}
+        </option>
+      </select>
+      {value === "" && matches.length > 1 && (
+        <p className="text-[11px] text-amber-400">
+          Sunsky has {matches.length} different categories named "{nm}" ({matches.map(m => m.id).join(", ")}).
+          This rule will apply to all of them — choose one ID above to limit it to that category.
+        </p>
       )}
     </div>
   );
@@ -281,6 +339,10 @@ function CategoryMappingDictionary() {
   // Client: "Don't see how to edit here" (the Sunsky category name was
   // read-only in the edit form) -- now editable like in Add Mapping.
   const [editCat, setEditCat] = useState("");
+  // Sunsky category ID each form's rule is for ("" = all with that name).
+  // Picking a starred category sets it. typing a name clears it.
+  const [newCatId, setNewCatId] = useState("");
+  const [editCatId, setEditCatId] = useState("");
   const [newSel, setNewSel] = useState<{ woo_cats: WooCatEntry[]; primary_id: number | null; profile_id: number | null; is_global: boolean }>({ woo_cats: [], primary_id: null, profile_id: null, is_global: false });
   const [starredCats, setStarredCats] = useState<{ id: string; name: string }[]>([]);
   const [translating, setTranslating] = useState(false);
@@ -399,6 +461,7 @@ function CategoryMappingDictionary() {
     setEditingId(m.id);
     setEditTitle(m.title_contains ?? "");
     setEditCat(m.sunsky_cat);
+    setEditCatId(m.sunsky_cat_id ?? "");
     setEditSel({ woo_cats: m.woo_cats, primary_id: m.primary_woo_cat_id ?? m.woo_cats[0]?.id ?? null, profile_id: m.profile_id ?? null, is_global: m.is_global ?? false });
   };
 
@@ -437,6 +500,7 @@ function CategoryMappingDictionary() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([{
           sunsky_cat: newSunskyCat.trim(),
+          sunsky_cat_id: newCatId,
           title_contains: newTitle.trim(),
           woo_cats: newSel.woo_cats,
           primary_woo_cat_id: primary_id,
@@ -447,6 +511,7 @@ function CategoryMappingDictionary() {
       toast({ title: newSel.is_global ? "Global mapping added" : "Mapping added" });
       setAddingNew(false);
       setNewSunskyCat("");
+      setNewCatId("");
       setNewTitle("");
       setNewSel({ woo_cats: [], primary_id: null, profile_id: null, is_global: false });
       reload();
@@ -467,6 +532,7 @@ function CategoryMappingDictionary() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify([{
           sunsky_cat: editCat.trim() || m.sunsky_cat,
+          sunsky_cat_id: editCatId,
           title_contains: editTitle.trim(),
           // Same scope (store/global) -> edit this exact rule in place, so
           // changing its title words doesn't create a second rule.
@@ -622,7 +688,8 @@ function CategoryMappingDictionary() {
             <label className="text-xs font-medium text-muted-foreground">Sunsky Category (ID or Name)</label>
             <SearchableCombobox
               value={newSunskyCat}
-              onChange={setNewSunskyCat}
+              onChange={v => { setNewSunskyCat(v); setNewCatId(""); }}
+              onPickOption={o => setNewCatId(o.id)}
               options={starredCats.map(c => ({ id: c.id, label: c.name, sublabel: c.id }))}
               placeholder="e.g. 110358  or  Mobile Accessories"
               emptyHint={starredCats.length === 0
@@ -630,6 +697,7 @@ function CategoryMappingDictionary() {
                 : "No matches in your starred categories — you can still type a new ID or name freely."}
             />
           </div>
+          <SunskyIdChoice name={newSunskyCat} value={newCatId} onChange={setNewCatId} />
 
           <div className="space-y-1">
             <label className="text-xs font-medium text-muted-foreground">If title contains (optional)</label>
@@ -789,10 +857,12 @@ function CategoryMappingDictionary() {
                             <label className="text-xs font-medium text-muted-foreground">Sunsky Category (ID or Name)</label>
                             <SearchableCombobox
                               value={editCat}
-                              onChange={setEditCat}
+                              onChange={v => { setEditCat(v); setEditCatId(""); }}
+                              onPickOption={o => setEditCatId(o.id)}
                               options={starredCats.map(c => ({ id: c.id, label: c.name, sublabel: c.id }))}
                               placeholder="e.g. 110358  or  Mobile Accessories"
                             />
+                            <SunskyIdChoice name={editCat} value={editCatId} onChange={setEditCatId} />
                           </div>
                           <button onClick={() => setEditingId(null)} className="text-muted-foreground hover:text-foreground mt-5">
                             <X className="w-4 h-4" />
@@ -928,7 +998,10 @@ function CategoryMappingDictionary() {
                         </div>
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-muted-foreground"
-                          title={(m.sunsky_cat_ids ?? []).length > 1 ? "Sunsky uses this name for several categories — the rule applies to all of them" : undefined}>
+                          title={(m.sunsky_cat_ids ?? []).length > 1 ? "Sunsky uses this name for several categories — this rule has no ID of its own, so it applies to all of them. Edit the rule to limit it to one." : undefined}>
+                        {(m.sunsky_cat_ids ?? []).length > 1 && !m.sunsky_cat_id && (
+                          <div className="font-sans text-[11px] text-amber-400 mb-0.5">all with this name:</div>
+                        )}
                         {(m.sunsky_cat_ids ?? []).length ? (m.sunsky_cat_ids ?? []).join(", ") : "—"}
                       </td>
                       <td className="px-4 py-3">
