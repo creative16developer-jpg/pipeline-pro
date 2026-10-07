@@ -241,7 +241,7 @@ export default function Products() {
                 <th className="p-4 font-medium">SKU</th>
                 <th className="p-4 font-medium">Product</th>
                 <th className="p-4 font-medium">Category</th>
-                <th className="p-4 font-medium">Woo SKU / Pipeline</th>
+                <th className="p-4 font-medium">Last upload</th>
                 <th className="p-4 font-medium">Price</th>
                 <th className="p-4 font-medium">Status</th>
                 <th className="p-4 font-medium">Images</th>
@@ -304,7 +304,7 @@ export default function Products() {
                             <div key={i} title={`${u.action === "created" ? "Created" : "Updated"} in WooCommerce${u.woo_product_id ? ` (product #${u.woo_product_id})` : ""}${u.uploaded_at ? ` on ${new Date(u.uploaded_at).toLocaleString()}` : ""}${u.woo_sku_recorded ? "" : " — SKU shown is the product's current Site SKU (older upload, SKU not recorded)"}`}>
                               <div className="font-mono text-xs text-foreground">{u.woo_sku || "—"}</div>
                               <div className="text-[11px] text-muted-foreground">
-                                {u.pipeline_job_id ? <span className="text-primary font-medium">PL-{u.pipeline_job_id}</span> : "manual upload"}
+                                {u.pipeline_job_id ? <>uploaded by <span className="text-primary font-medium">PL-{u.pipeline_job_id}</span></> : "manual upload"}
                                 {u.store_name ? ` · ${u.store_name}` : ""}
                               </div>
                             </div>
@@ -313,7 +313,20 @@ export default function Products() {
                       )}
                     </td>
                     <td className="p-4 text-sm font-medium">{product.price ? `$${product.price}` : '—'}</td>
-                    <td className="p-4"><StatusBadge status={product.status} /></td>
+                    <td className="p-4">
+                      <StatusBadge status={product.status} />
+                      {/* Client (PU1088B): "Why this product looks like pending
+                          but the pipeline is finished?" -- Status is the product's
+                          CURRENT state; the Last upload column is its upload
+                          history. An uploaded product is set back to Pending when
+                          it is imported again or its Sunsky data changes. */}
+                      {product.status !== "uploaded" && ((product as any).uploads ?? []).length > 0 && (
+                        <div className="text-[11px] text-muted-foreground mt-1 max-w-[150px] leading-tight"
+                          title="This product was uploaded before and has been queued again (imported again, or its Sunsky data changed). Run a pipeline that includes it to upload it again.">
+                          queued again since its last upload
+                        </div>
+                      )}
+                    </td>
                     <td className="p-4">
                       <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
                         <ImageIcon className="w-4 h-4" /> {(product as any).imageCount}
