@@ -1131,7 +1131,7 @@ export default function ContentGeneration() {
             type="button"
             onClick={() => {
               setConfig(DEFAULT_CONFIG);
-              toast({ title: "Reset to defaults", description: "Click Save Config to apply. Derive mode set for computed fields." });
+              toast({ title: "Reset to defaults", description: "Click Save to apply. Derive mode set for computed fields." });
             }}
             className="px-4 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 border shadow-sm bg-secondary text-muted-foreground border-border hover:text-foreground hover:bg-secondary/80"
             title="Reset all field modes to smart defaults (derive for computed fields)"
@@ -1145,7 +1145,13 @@ export default function ContentGeneration() {
             className="px-4 py-2.5 rounded-xl font-semibold text-sm transition-all flex items-center gap-2 border shadow-sm bg-amber-400 text-black border-amber-300 hover:bg-amber-300"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            Save Config
+            {/* Client: "I am not sure how this setting - use global settings
+                works". The button now says exactly WHERE this save goes. */}
+            {cgStore === null
+              ? "Save global settings"
+              : cgStoreCustom
+                ? `Save for ${cgStoreName ?? "this store"}`
+                : `Save as custom for ${cgStoreName ?? "this store"}`}
           </button>
           <button
             onClick={handleRun}
@@ -1171,16 +1177,27 @@ export default function ContentGeneration() {
         </select>
         <p className="text-xs text-muted-foreground flex-1">
           {cgStore === null
-            ? "Used by every store that has no custom settings."
+            ? "The global settings: used by every store that has no custom settings of its own."
             : cgStoreCustom
-              ? `${cgStoreName ?? "This store"} has its own settings — its pipelines use them.`
-              : `${cgStoreName ?? "This store"} uses the global settings (shown). Change and Save to give it its own settings.`}
+              ? `${cgStoreName ?? "This store"} has its own settings, separate from the global ones (including which AI providers are on). Its pipelines use these; changing the global settings does not affect it.`
+              : `${cgStoreName ?? "This store"} follows the global settings, shown below. Saving here creates separate settings for ${cgStoreName ?? "this store"} only — to change all stores, choose "Global default" above.`}
         </p>
+        {/* Something always sits here, so nothing "disappears" (client: "Had
+            button here and I click on it, and it disappear"): a button while
+            the store has its own settings, a status label once it follows
+            the global ones. */}
         {cgStoreCustom && (
           <button type="button" onClick={handleRevertToGlobal}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground shrink-0">
-            Use global settings
+                  title="Deletes this store's own settings. The store then follows the global settings again."
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border bg-secondary hover:bg-secondary/80 text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap">
+            Remove custom settings — use global
           </button>
+        )}
+        {cgStore !== null && !cgStoreCustom && (
+          <span className="px-3 py-1.5 rounded-lg text-xs font-medium border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 whitespace-nowrap"
+                title="This store has no settings of its own. It uses the global settings.">
+            ✓ Following global settings
+          </span>
         )}
       </div>
       {hasUnsavedChanges && (
