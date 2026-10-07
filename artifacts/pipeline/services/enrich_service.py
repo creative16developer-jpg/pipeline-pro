@@ -229,7 +229,23 @@ def condition_category_values(condition_value) -> list[str]:
     return [v.strip().lower() for v in str(condition_value or "").split("\n") if v.strip()]
 
 
-def _rule_matches_product(rule: dict, sunsky_category: str, resolved_woo_category: str = "") -> bool:
+_COND_CAT_ID_RE = re.compile(r"\[\s*(\d+)\s*\]\s*$")
+
+
+def condition_cat_id(value: str) -> str:
+    """Sunsky category ID of an If-category value written "Name [ID]"
+    ("" when the value is a plain name).
+
+    Client: "I need to select sunsky category in 'if category' not woo
+    category" -- Sunsky has several categories with the same name
+    ("Lens Filter" = 8 IDs), so a name alone can't say which one. A value
+    ending in [ID] applies to that Sunsky category only."""
+    m = _COND_CAT_ID_RE.search(str(value or ""))
+    return m.group(1) if m else ""
+
+
+def _rule_matches_product(rule: dict, sunsky_category: str, resolved_woo_category: str = "",
+                          sunsky_cat_id: str = "") -> bool:
     if rule["condition_type"] == "always":
         print(f"[enrich_service] rule {rule.get('woo_attr_name')!r} matched via condition_type='always'")
         return True
@@ -263,7 +279,16 @@ def _rule_matches_product(rule: dict, sunsky_category: str, resolved_woo_categor
         # vocabulary work correctly.
         sunsky_lower = (sunsky_category or "").strip().lower()
         woo_lower = (resolved_woo_category or "").strip().lower()
-        matched = sunsky_lower in conds or (bool(woo_lower) and woo_lower in conds)
+        # A value written "Name [ID]" is one Sunsky category: it matches by
+        # that ID only, never by name. Plain names match as before.
+        prod_cid = str(sunsky_cat_id or "").strip()
+        id_conds = {condition_cat_id(c) for c in conds} - {""}
+        name_conds = [c for c in conds if not condition_cat_id(c)]
+        matched = (
+            (bool(prod_cid) and prod_cid in id_conds)
+            or sunsky_lower in name_conds
+            or (bool(woo_lower) and woo_lower in name_conds)
+        )
         # Client feedback confirmed live (twice, both directions): a
         # rule scoped to "If category" still matched products it
         # shouldn't have (Активност on unrelated GoPro cases even after
@@ -274,7 +299,7 @@ def _rule_matches_product(rule: dict, sunsky_category: str, resolved_woo_categor
         # this logs exactly what's being compared on every check so a
         # real test run shows the actual values involved.
         print(f"[enrich_service] if_category check: rule condition_value={cond!r} "
-              f"vs sunsky_category={sunsky_lower!r} vs resolved_woo_category={woo_lower!r} "
+              f"vs sunsky_category={sunsky_lower!r} (id {prod_cid or '-'}) vs resolved_woo_category={woo_lower!r} "
               f"→ {'MATCH' if matched else 'no match'}")
         return matched
     # Any other condition_type isn't in the current schema (only "always" /
@@ -344,7 +369,8 @@ def product_titles_for_rules(product: dict) -> list[str]:
 
 
 def apply_mapping_rules(
-    product: dict, rules: list[dict], sunsky_category: str, resolved_woo_category: str = ""
+    product: dict, rules: list[dict], sunsky_category: str, resolved_woo_category: str = "",
+    sunsky_cat_id: str = "",
 ) -> tuple[list[AttrResult], list[dict]]:
     """
     Evaluate AttributeMappingRule rows against one product.
@@ -374,7 +400,7 @@ def apply_mapping_rules(
         attr_key = rule["woo_attr_name"].strip().lower()
         if attr_key in seen_attrs:
             continue
-        if not _rule_matches_product(rule, sunsky_category, resolved_woo_category):
+        if not _rule_matches_product(rule, sunsky_category, resolved_woo_category, sunsky_cat_id):
             continue
         # "and title contains" -- a rule with title words applies only to
         # products whose title contains one of them.
@@ -677,11 +703,12 @@ async def extract_attributes(
     mapping_rules = await _load_mapping_rules(db, store_id)
     _ea_titles = [str(product.get(k) or "").strip() for k in ("name", "title") if str(product.get(k) or "").strip()]
     from tasks.job_tasks import _raw_cat_id as _ea_cat_id
+    _ea_cid = _ea_cat_id(product.get("raw_data") or product)
     resolved_woo_category = await _resolve_woo_category_name(
-        db, store_id, sunsky_category or "", _ea_titles, _ea_cat_id(product.get("raw_data") or product))
+        db, store_id, sunsky_category or "", _ea_titles, _ea_cid)
 
     resolved, ai_extract_from_mapping = apply_mapping_rules(
-        product, mapping_rules, sunsky_category or "", resolved_woo_category
+        product, mapping_rules, sunsky_category or "", resolved_woo_category, _ea_cid
     )
     resolved_lower = {r["attribute"].strip().lower() for r in resolved}
 

@@ -150,6 +150,12 @@ const _SYNTHETIC_SUNSKY_LABELS = new Set(["csv import", "uncategorised products"
 function buildCategoryConditionOptions(
   wooCats: { id: string; name: string }[],
   sunskyNames: string[],
+  // Sunsky categories known with their ID (starred + Category Mapping
+  // rules for one ID). Client: "I need to select sunsky category in 'if
+  // category' not woo category" -- Sunsky has several categories with the
+  // same name, so each ID is offered as its own "Name [ID]" entry, which
+  // the backend (enrich_service.condition_cat_id) matches by ID only.
+  sunskyIds: { id: string; name: string }[] = [],
 ): { id: string; label: string; sublabel: string; key: string }[] {
   const byKey = new Map<string, { label: string; woo: boolean; sunsky: boolean }>();
   for (const c of wooCats) {
@@ -166,17 +172,26 @@ function buildCategoryConditionOptions(
     const e = byKey.get(k);
     if (e) e.sunsky = true; else byKey.set(k, { label: name, woo: false, sunsky: true });
   }
-  return Array.from(byKey.entries())
-    .sort((a, b) => a[1].label.localeCompare(b[1].label))
+  const out = Array.from(byKey.entries())
     .map(([k, e]) => ({
       // id is also searched by SearchableCombobox's filter, so it's the
       // name itself (never a prefix like "sunsky:" that would make every
       // Sunsky entry match a query like "sun").
       id: e.label,
       label: e.label,
-      sublabel: e.woo && e.sunsky ? "Sunsky + Woo" : e.sunsky ? "Sunsky" : "Woo",
+      sublabel: e.woo && e.sunsky ? "Sunsky (any ID) + Woo" : e.sunsky ? "Sunsky — any ID with this name" : "Woo",
       key: k,
     }));
+  const seenIds = new Set<string>();
+  for (const c of sunskyIds) {
+    const id = String(c?.id ?? "").trim();
+    const name = (c?.name || "").trim();
+    if (!/^\d+$/.test(id) || !name || seenIds.has(id) || _SYNTHETIC_SUNSKY_LABELS.has(name.toLowerCase())) continue;
+    seenIds.add(id);
+    const label = `${name} [${id}]`;
+    out.push({ id: label, label, sublabel: `Sunsky — only ID ${id}`, key: `id:${id}` });
+  }
+  return out.sort((a, b) => a.label.localeCompare(b.label));
 }
 
 // Searchable combobox: free-text input (still supports typing a raw ID or a
@@ -3233,6 +3248,7 @@ function AttrMappingModal({
   const [wooAttrOptions, setWooAttrOptions] = useState<{ id: string; name: string }[]>([]);
   const [storeCatOptions, setStoreCatOptions] = useState<{ id: string; name: string }[]>([]);
   const [sunskyCatNames, setSunskyCatNames] = useState<string[]>([]);
+  const [sunskyCatIds, setSunskyCatIds] = useState<{ id: string; name: string }[]>([]);
   const { data: modalStores } = useStores();
   // Client: "Attribute Mapping doesn't have an option for store (I can't
   // select which attribute for which store)". The rule's store is now a
@@ -3254,9 +3270,17 @@ function AttrMappingModal({
     Promise.all([getJson("/api/sunsky/starred-categories"), ...mappingUrls.map(getJson)]).then(([starred, ...maps]) => {
       if (cancelled) return;
       const names: string[] = [];
-      for (const c of (Array.isArray(starred) ? starred : [])) if (c?.name) names.push(c.name);
-      for (const m of maps) for (const r of (m?.mappings ?? [])) if (r?.sunsky_cat) names.push(r.sunsky_cat);
+      const ids: { id: string; name: string }[] = [];
+      for (const c of (Array.isArray(starred) ? starred : [])) if (c?.name) {
+        names.push(c.name);
+        if (c?.id) ids.push({ id: String(c.id), name: c.name });
+      }
+      for (const m of maps) for (const r of (m?.mappings ?? [])) if (r?.sunsky_cat) {
+        names.push(r.sunsky_cat);
+        if (r?.sunsky_cat_id) ids.push({ id: String(r.sunsky_cat_id), name: r.sunsky_cat });
+      }
       setSunskyCatNames(names);
+      setSunskyCatIds(ids);
     });
     return () => { cancelled = true; };
   }, [storeId, modalStores]);
@@ -3313,8 +3337,8 @@ function AttrMappingModal({
     [wooAttrOptions]
   );
   const storeCatComboOptions = useMemo(
-    () => buildCategoryConditionOptions(storeCatOptions, sunskyCatNames),
-    [storeCatOptions, sunskyCatNames]
+    () => buildCategoryConditionOptions(storeCatOptions, sunskyCatNames, sunskyCatIds),
+    [storeCatOptions, sunskyCatNames, sunskyCatIds]
   );
 
   useEffect(() => {
@@ -3764,6 +3788,7 @@ function AttrMappingModal({
                 </div>
                 <p className="text-[11px] text-muted-foreground mt-1">
                   Add one or more categories — the rule applies if the product's Sunsky category or its mapped WooCommerce category is ANY of them.
+                  {" "}An entry with a Sunsky ID, like <span className="font-mono">Lens Filter [111329]</span>, applies to that one Sunsky category only; a name without an ID applies to every Sunsky category with that name. Search by name or ID.
                 </p>
                 {!storeId && storeCatComboOptions.length > 0 && (
                   <p className="text-[11px] text-muted-foreground mt-1">
