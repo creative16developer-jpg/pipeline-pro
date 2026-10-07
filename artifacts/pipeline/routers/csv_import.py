@@ -287,9 +287,21 @@ async def upload_csv(
                 errors.append(f"Row {i + 2}: invalid QTY '{qty_raw}' — QTY ignored")
                 row_warn.append(f"Invalid QTY '{qty_raw}' — ignored")
 
+        # Client (PL-164, XT085): a row with Sale Price 12.90 and NO Price went
+        # to the shop at 2.33 -- with no price in the CSV, the product took
+        # Sunsky's wholesale price, and WooCommerce then ignored the higher
+        # "sale" price. A lone Sale Price is the price the operator wants:
+        # it becomes the Price ("" clears an older sale price on re-import).
+        if price is None and sale_price is not None:
+            price, sale_price = sale_price, ""
+            row_warn.append("No Price in the CSV — the Sale Price is used as the price")
+        elif price is None:
+            row_warn.append("No Price in the CSV — the Sunsky wholesale price will be used. "
+                            "Set the price in Content Review before upload")
+
         # WooCommerce only applies a sale price LOWER than the regular price
         # (client's own CSV had Sale Price 70 vs Price 59 -> shop showed 59).
-        if price is not None and sale_price is not None and float(sale_price) >= float(price):
+        if price is not None and sale_price and float(sale_price) >= float(price):
             row_warn.append("Sale Price is not lower than Price — WooCommerce will ignore the sale price")
         rows.append({
             "row": i + 2,
@@ -386,7 +398,7 @@ async def upload_csv(
             if r["price"] is not None:
                 existing.price = r["price"]
             if r["sale_price"] is not None:
-                existing.sale_price = r["sale_price"]
+                existing.sale_price = r["sale_price"] or None
             if r["qty"] is not None:
                 existing.stock_quantity = r["qty"]
             r["result"] = "updated"
@@ -405,7 +417,7 @@ async def upload_csv(
         if r["price"] is not None:
             values["price"] = r["price"]
         if r["sale_price"] is not None:
-            values["sale_price"] = r["sale_price"]
+            values["sale_price"] = r["sale_price"] or None
         if r["qty"] is not None:
             values["stock_quantity"] = r["qty"]
 
@@ -420,7 +432,7 @@ async def upload_csv(
         if r["price"] is not None:
             conflict_set["price"] = r["price"]
         if r["sale_price"] is not None:
-            conflict_set["sale_price"] = r["sale_price"]
+            conflict_set["sale_price"] = r["sale_price"] or None
         if r["qty"] is not None:
             conflict_set["stock_quantity"] = r["qty"]
 
