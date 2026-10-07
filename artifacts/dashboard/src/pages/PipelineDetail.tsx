@@ -1128,9 +1128,15 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
     const pendingIds = Object.keys(drafts)
       .map(Number)
       .filter(pid => hasDraft(pid));
-    if (pendingIds.length === 0) return;
+    if (pendingIds.length === 0 && unsavedBrandProducts().length === 0) return;
     setSavingAll(true);
     try {
+      const brandCount = unsavedBrandProducts().length;
+      const brandsOk = await flushBrands();
+      if (pendingIds.length === 0) {
+        if (brandsOk) toast({ title: `Saved ${brandCount} brand${brandCount === 1 ? "" : "s"}` });
+        return;
+      }
       const results = await Promise.allSettled(
         pendingIds.map(async pid => {
           const changes = drafts[pid];
@@ -1410,7 +1416,7 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   const [brandDraft, setBrandDraft] = useState<Record<number, string>>({});
   const [savingBrand, setSavingBrand] = useState<Record<number, boolean>>({});
 
-  const saveBrand = async (p: any) => {
+  const saveBrand = async (p: any, quiet = false): Promise<boolean> => {
     const value = (brandDraft[p.id] ?? p.brand ?? "").trim();
     setSavingBrand(s => ({ ...s, [p.id]: true }));
     try {
@@ -1420,13 +1426,35 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
         body: JSON.stringify({ store_id: pl.store_id, brand_name: value || null }),
       });
       if (!r.ok) throw new Error(await r.text());
-      toast({ title: value ? "Brand saved" : "Brand override cleared" });
+      if (!quiet) toast({ title: value ? "Brand saved" : "Brand override cleared" });
       setBrandDraft(d => ({ ...d, [p.id]: value }));
+      // keep the loaded product in step, so it no longer counts as unsaved
+      setData((prev: any) => ({
+        ...prev,
+        products: (prev?.products ?? []).map((x: any) =>
+          x.id === p.id ? { ...x, brand: value, brand_source: value ? "manual" : "auto" } : x),
+      }));
+      return true;
     } catch (e: any) {
       toast({ title: "Failed to save brand", description: e.message, variant: "destructive" });
+      return false;
     } finally {
       setSavingBrand(s => ({ ...s, [p.id]: false }));
     }
+  };
+  // Client feedback (PL-163): "Not added brand in woo after manual adding in
+  // the pipeline." Brand has its own Save button and was not part of "Save
+  // all changes" or the unsaved-edits check, so a brand that was typed but
+  // not saved with that one button was silently dropped at Upload. Typed
+  // brands are now saved automatically by Save all changes and by Upload.
+  const unsavedBrandProducts = (): any[] =>
+    (data?.products ?? []).filter((p: any) =>
+      brandDraft[p.id] !== undefined && brandDraft[p.id].trim() !== (p.brand ?? "").trim());
+  const flushBrands = async (): Promise<boolean> => {
+    const pending = unsavedBrandProducts();
+    if (pending.length === 0) return true;
+    const ok = await Promise.all(pending.map(p => saveBrand(p, true)));
+    return ok.every(Boolean);
   };
   const [attrSaving, setAttrSaving] = useState(false);
 
@@ -1568,6 +1596,10 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
     }
     setSaving(true);
     try {
+      if (!(await flushBrands())) {
+        toast({ title: "Upload not started", description: "A typed brand could not be saved — fix it and try again.", variant: "destructive" });
+        return;
+      }
       const r = await fetch(`/api/pipelines/${pl.id}/content-confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2288,7 +2320,10 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
         <div className="flex items-center justify-between pt-3 border-t border-border flex-wrap gap-3">
           <div className="flex gap-2 flex-wrap">
             {(() => {
-              const pendingCount = Object.keys(drafts).filter(pid => hasDraft(Number(pid))).length;
+              const pendingCount = new Set([
+                ...Object.keys(drafts).map(Number).filter(pid => hasDraft(pid)),
+                ...unsavedBrandProducts().map((p: any) => p.id),   // a typed, unsaved brand counts too
+              ]).size;
               return pendingCount > 0 && (
                 <button
                   onClick={handleSaveAllProducts}
