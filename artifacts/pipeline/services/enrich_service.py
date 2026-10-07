@@ -423,7 +423,88 @@ def apply_mapping_rules(
     return resolved, ai_extract_rules
 
 
-def _build_extract_prompt(product: dict, rules: list[dict]) -> str:
+async def _load_store_attr_terms(db: Optional["AsyncSession"], store_id: Optional[int]) -> dict[str, list[str]]:
+    """{attribute name (lower): [existing value names]} from this store's
+    synced WooCommerce attributes -- the same list the review screen offers
+    as "Existing values"."""
+    if db is None or not store_id:
+        return {}
+    try:
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+        from models.models import WooAttribute
+        rows = (await db.execute(
+            select(WooAttribute).options(selectinload(WooAttribute.terms))
+            .where(WooAttribute.store_id == store_id)
+        )).scalars().all()
+        return {(wa.name or "").strip().lower(): [t.name for t in wa.terms if t.name] for wa in rows}
+    except Exception as exc:
+        print(f"[enrich] could not load existing attribute values: {exc}")
+        return {}
+
+
+def _match_existing_term(value: str, terms: list[str]) -> str:
+    """The store's existing value that `value` stands for, else `value`.
+    Client feedback (PL-164): the AI wrote "Osmo Action 3" while the store
+    already has "DJI Osmo Action 3", so a new, wrong value was created.
+    Matches (case-insensitive): the same text; or the same text with ONE
+    extra leading word on either side (a brand: "DJI Osmo Action 3" vs
+    "Osmo Action 3") when exactly one existing value fits."""
+    norm = lambda x: " ".join(str(x).split()).lower()
+    v = norm(value)
+    if not v or not terms:
+        return value
+    for t in terms:
+        if norm(t) == v:
+            return t
+    def one_word_prefix(longer: str, shorter: str) -> bool:
+        return longer.endswith(" " + shorter) and " " not in longer[: -len(shorter) - 1].strip()
+    hits = [t for t in terms if one_word_prefix(norm(t), v) or one_word_prefix(v, norm(t))]
+    return hits[0] if len(hits) == 1 else value
+
+
+def _merge_and_match(results: list, terms_by_attr: dict[str, list[str]]) -> list:
+    """(1) Several results for the SAME attribute become one, values joined
+    with ", " -- PL-164: the AI returned three "Съвместим модел" entries
+    (Osmo Action 5 Pro / 4 / 3) and only the last survived, because one
+    value is stored per attribute. (2) Each value is replaced by the store's
+    existing value when one matches (_match_existing_term)."""
+    import re as _re
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for r in results:
+        key = r["attribute"].strip().lower()
+        if key not in merged:
+            merged[key] = dict(r)
+            order.append(key)
+            continue
+        m = merged[key]
+        if r.get("raw_value"):
+            m["raw_value"] = f'{m["raw_value"]}, {r["raw_value"]}' if m.get("raw_value") else r["raw_value"]
+        m["confidence"] = min(m.get("confidence", 1.0), r.get("confidence", 1.0))
+        m["flagged"] = bool(m.get("flagged")) or bool(r.get("flagged"))
+    out = []
+    for key in order:
+        m = merged[key]
+        terms = terms_by_attr.get(key) or []
+        raw = str(m.get("raw_value") or "")
+        if raw and terms:
+            whole = _match_existing_term(raw, terms)
+            if whole != raw:
+                m["raw_value"] = whole
+            else:
+                parts, seen = [], set()
+                for part in [x.strip() for x in _re.split(r"\s+and\s+|\s*,\s*", raw, flags=_re.IGNORECASE) if x.strip()]:
+                    hit = _match_existing_term(part, terms)
+                    if hit.lower() not in seen:
+                        seen.add(hit.lower())
+                        parts.append(hit)
+                m["raw_value"] = ", ".join(parts)
+        out.append(m)
+    return out
+
+
+def _build_extract_prompt(product: dict, rules: list[dict], terms_by_attr: Optional[dict] = None) -> str:
     raw = product.get("raw_data") or product
     name = product.get("name", "")
     params = _parse_params_table(raw.get("paramsTable", ""))
@@ -437,7 +518,12 @@ def _build_extract_prompt(product: dict, rules: list[dict]) -> str:
                 hint = f' — {r["instruction"]}'
             src = r["source_fields"]
             src_note = "" if src == "both" else f" [from {src} only]"
-            attr_lines.append(f'  "{r["woo_attr_name"]}"{hint}{src_note}')
+            existing = (terms_by_attr or {}).get(r["woo_attr_name"].strip().lower()) or []
+            ex_note = ""
+            if existing:
+                shown = " | ".join(existing[:150])[:3000]
+                ex_note = f"\n      existing values: {shown}"
+            attr_lines.append(f'  "{r["woo_attr_name"]}"{hint}{src_note}{ex_note}')
         attrs_block = "\n".join(attr_lines)
         attr_section = f"Extract ONLY these attributes:\n{attrs_block}"
     else:
@@ -473,6 +559,9 @@ def _build_extract_prompt(product: dict, rules: list[dict]) -> str:
         f"\"for Insta360 X3/X4/X5\") — return ALL of them in raw_value, never just one: each as "
         f"its full name, separated by a comma and a space "
         f"(\"Osmo Action 5 Pro, Osmo Action 4, Osmo Action 3\"; \"X3, X4, X5\").\n"
+        f"When an attribute lists \"existing values\", write the existing value that means the same thing, "
+        f"exactly as it is spelled there (\"DJI Osmo Action 3\", not \"Osmo Action 3\"); write a new value "
+        f"only when none of the existing ones fits.\n"
         f"Only return the JSON array — no explanation.\n\n"
         f"{source_block}"
     )
@@ -634,8 +723,9 @@ async def extract_attributes(
     # configured, it just didn't need the AI. Only genuinely unconfigured
     # stores (rule_map empty from the start) get the free-form fallback.
     have_configured_rules = bool(rule_map)
+    terms_by_attr = await _load_store_attr_terms(db, store_id)
     if active_rules or not have_configured_rules:
-        prompt = _build_extract_prompt(product, active_rules)
+        prompt = _build_extract_prompt(product, active_rules, terms_by_attr)
         if diag is not None:
             diag["ai_asked"] = [r["woo_attr_name"] for r in active_rules]
         raw = await _call_ai(prompt, gen_cfg, diag)
@@ -727,6 +817,7 @@ async def extract_attributes(
             # same as when the AI answers but leaves one out.
             _apply_not_found(ai_results, active_rules, resolved_lower)
 
+    ai_results = _merge_and_match(ai_results, terms_by_attr)
     combined = resolved + selector_results + ai_results
     return sorted(combined, key=lambda x: -x["confidence"])
 
