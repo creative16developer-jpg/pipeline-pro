@@ -463,6 +463,16 @@ def _build_extract_prompt(product: dict, rules: list[dict]) -> str:
         f"{attr_section}\n"
         f"Return a JSON array. Each element: {{\"attribute\": \"Color\", \"raw_value\": \"Black\", \"confidence\": 0.92}}\n"
         f"confidence is 0.0–1.0 (your certainty the extraction is correct).\n"
+        # Client feedback: title "For DJI Osmo Action 5 Pro / 4 / 3 ..." gave
+        # Compatible model = "Osmo Action 3" only. Titles list several models
+        # in a short form; every one of them is wanted, each as a full name.
+        # Comma-separated values become separate terms at upload
+        # (job_tasks._split_multi_value).
+        f"When the title or specs list SEVERAL values for one attribute — for example several "
+        f"compatible models written in short form (\"for DJI Osmo Action 5 Pro / 4 / 3\", "
+        f"\"for Insta360 X3/X4/X5\") — return ALL of them in raw_value, never just one: each as "
+        f"its full name, separated by a comma and a space "
+        f"(\"Osmo Action 5 Pro, Osmo Action 4, Osmo Action 3\"; \"X3, X4, X5\").\n"
         f"Only return the JSON array — no explanation.\n\n"
         f"{source_block}"
     )
