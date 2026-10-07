@@ -227,6 +227,11 @@ function SearchableCombobox({
         value={value}
         onChange={e => { onChange(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
+        // Client: "If I add one value and then click again I can't see the
+        // list anymore." Choosing a suggestion closes the list but leaves the
+        // box focused, so clicking it again fired no focus event and nothing
+        // reopened it. A click now opens the list too.
+        onClick={() => setOpen(true)}
         onKeyDown={e => { if (e.key === "Escape") setOpen(false); }}
         className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-primary placeholder:font-sans placeholder:text-muted-foreground"
       />
@@ -3638,6 +3643,11 @@ function AttrMappingModal({
                         disabled={!form.woo_attr_name.trim()}
                         onChange={e => { setTermSearch(e.target.value); setTermPickerOpen(true); }}
                         onFocus={() => setTermPickerOpen(true)}
+                        // Client: "If I add one value and then click again I
+                        // can't see the list anymore." Adding a value closed
+                        // the list but left this box focused, so clicking it
+                        // again fired no focus event. A click reopens it.
+                        onClick={() => setTermPickerOpen(true)}
                         onBlur={() => setTimeout(() => setTermPickerOpen(false), 150)}
                         onKeyDown={e => {
                           if (e.key === "Enter" && termSearch.trim()) {
