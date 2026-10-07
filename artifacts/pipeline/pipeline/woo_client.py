@@ -3,6 +3,7 @@ WooCommerce REST API v3 client.
 Uses HTTP Basic Auth: consumer_key:consumer_secret (Base64) over HTTPS.
 """
 
+import html
 import re
 import httpx
 import base64
@@ -643,12 +644,12 @@ async def create_woo_category(store: Store, name: str, parent_woo_id: int = 0) -
                                           "parent": parent_woo_id})
             if r2.is_success:
                 for cat in r2.json():
-                    if (cat.get("name", "").lower() == name.lower()
+                    if (html.unescape(cat.get("name", "")).lower() == name.lower()
                             and int(cat.get("parent") or 0) == parent_woo_id):
                         return cat
                 # Also accept any match by name if parent doesn't matter
                 for cat in r2.json():
-                    if cat.get("name", "").lower() == name.lower():
+                    if html.unescape(cat.get("name", "")).lower() == name.lower():
                         return cat
 
             # Last resort: search by slug
@@ -743,7 +744,7 @@ async def create_woo_brand(store: Store, name: str) -> dict:
             r2 = await client.get(url, headers=auth, params={"search": name, "per_page": 20})
             if r2.is_success:
                 for b in r2.json():
-                    if b.get("name", "").lower() == name.lower():
+                    if html.unescape(b.get("name", "")).lower() == name.lower():
                         return b
 
             r3 = await client.get(url, headers=auth, params={"slug": slug, "per_page": 5})
@@ -828,7 +829,7 @@ async def create_woo_attribute(store: Store, name: str) -> dict:
             r2 = await client.get(url, headers=auth, params={"per_page": 100})
             if r2.is_success:
                 for attr in r2.json():
-                    if attr.get("name", "").lower() == name.lower():
+                    if html.unescape(attr.get("name", "")).lower() == name.lower():
                         return attr
 
         # Slug collision: retry with a unique hash suffix
@@ -874,6 +875,20 @@ async def create_attribute_term(store: Store, attr_id: int, term_name: str) -> d
             headers=_auth_header(store),
             json={"name": term_name},
         )
+        # The value already exists: WooCommerce answers 400 "term_exists" and
+        # names the existing term's ID -- use it instead of failing. (Seen
+        # live, PL-166: "Could not create term 'Protection & Cases' ... 400":
+        # WooCommerce returns names HTML-escaped ("Protection &amp; Cases"),
+        # so the existing value was not recognised and created again.)
+        if resp.status_code == 400:
+            try:
+                err = resp.json()
+            except Exception:
+                err = {}
+            if err.get("code") == "term_exists":
+                existing_id = (err.get("data") or {}).get("resource_id")
+                if existing_id:
+                    return {"id": int(existing_id), "name": term_name}
         resp.raise_for_status()
         return resp.json()
 
@@ -1005,3 +1020,28 @@ async def set_product_categories(
         result = resp.json()
         print(f"[woo_client.set_product_categories] woo_id={woo_id} WooCommerce response meta_data: {result.get('meta_data')!r}")
         return result
+
+
+# ── Plain-text names ──────────────────────────────────────────────────────────
+# WooCommerce's REST API returns term names HTML-escaped ("Protection &amp;
+# Cases"). Every caller looks names up as plain text ("Protection & Cases"),
+# so a name with "&" (or quotes, <, >) was never recognised as existing and
+# the pipeline tried to create it again -- live, PL-166: "Could not create
+# term 'Protection & Cases' for attr 35: 400". The list functions below now
+# return names unescaped, once, for categories, brands, attributes and
+# attribute values alike.
+def _with_plain_names(fn):
+    async def _wrapped(*args, **kwargs):
+        items = await fn(*args, **kwargs)
+        for item in items or []:
+            if isinstance(item, dict) and isinstance(item.get("name"), str):
+                item["name"] = html.unescape(item["name"])
+        return items
+    _wrapped.__name__ = fn.__name__
+    _wrapped.__doc__ = fn.__doc__
+    return _wrapped
+
+
+for _fn_name in ("get_categories", "get_all_woo_categories", "get_all_woo_brands",
+                 "get_all_woo_attributes", "get_product_attributes", "get_attribute_terms"):
+    globals()[_fn_name] = _with_plain_names(globals()[_fn_name])

@@ -437,7 +437,9 @@ async def _load_store_attr_terms(db: Optional["AsyncSession"], store_id: Optiona
             select(WooAttribute).options(selectinload(WooAttribute.terms))
             .where(WooAttribute.store_id == store_id)
         )).scalars().all()
-        return {(wa.name or "").strip().lower(): [t.name for t in wa.terms if t.name] for wa in rows}
+        import html as _html   # names synced before the fix may still be HTML-escaped ("&amp;")
+        return {_html.unescape(wa.name or "").strip().lower(): [_html.unescape(t.name) for t in wa.terms if t.name]
+                for wa in rows}
     except Exception as exc:
         print(f"[enrich] could not load existing attribute values: {exc}")
         return {}
