@@ -1876,6 +1876,17 @@ def _tidy_lead_punct(value: str) -> str:
     return out
 
 
+def _clean_slug(value: str) -> str:
+    """Only the slug itself. Client (AI-mode slug, gemma-3-12b):
+    ":/insta-360-luna-ultra-12-in-1-..." and "sufficient for
+    SEO.insta-360-luna-ultra-jsr-cb-..." -- the model wrote extra words /
+    symbols around the slug, which would break the product URL. Keeps the
+    longest a-z0-9 run joined by hyphens; a value without one is slugified."""
+    v = (value or "").strip().lower()
+    runs = re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)+", v)
+    return max(runs, key=len) if runs else _slugify(v)
+
+
 def _brand_cleaner(product: dict):
     """Removes the blocked brand from one generated field value (safety net
     in case a model still writes it)."""
@@ -1888,7 +1899,9 @@ def _brand_cleaner(product: dict):
         v = nv = r["value"]
         if brand:
             nv = _drop_brand_slug(v, brand) if f in ("slug", "image_names") else _drop_brand_text(v, pat)
-        if f not in ("slug", "image_names"):
+        if f == "slug":
+            nv = _clean_slug(nv) or nv
+        elif f != "image_names":
             nv = _tidy_lead_punct(nv)
         if nv != v:
             r = {**r, "value": nv}
