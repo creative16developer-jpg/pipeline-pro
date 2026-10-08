@@ -1069,6 +1069,9 @@ async def _run_enrich_extraction(db, pl, cfg: dict) -> int:
             store_id=pl.store_id, sunsky_category=sunsky_cat,
             diag=_ex_diag,
         )
+        if _ex_diag.get("ai_retried"):
+            await _plog(db, pl.id, "enrich", "info",
+                        f"{product.sku}: first AI answer could not be read — asked again, second answer OK")
         if _ex_diag.get("ai_error") and _ex_diag.get("ai_asked"):
             await _plog(db, pl.id, "enrich", "warn",
                         f"{product.sku}: AI gave no answer for "

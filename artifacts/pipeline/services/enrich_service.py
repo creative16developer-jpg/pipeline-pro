@@ -491,7 +491,67 @@ def _match_existing_term(value: str, terms: list[str]) -> str:
     return hits[0] if len(hits) == 1 else value
 
 
-def _merge_and_match(results: list, terms_by_attr: dict[str, list[str]]) -> list:
+def _expand_from_title(value: str, terms: list[str], titles: list[str]) -> str:
+    """The longer existing value that `value` was cut short from, else `value`.
+    PL-168: the AI wrote "Insta360 Luna" for "Insta360 Luna Ultra ..." filters;
+    "Insta360 Luna" isn't a value in the shop, so it was skipped at upload.
+    An existing value that STARTS with the AI's text and appears in the
+    product's title (whole, or without its first word -- the brand) is used
+    instead -- only when exactly one existing value fits."""
+    norm = lambda x: " ".join(str(x).split()).lower()
+    v = norm(value)
+    tl = " " + " ".join(norm(t) for t in titles if t) + " "
+    if not v or not terms or not tl.strip():
+        return value
+    def in_title(t: str) -> bool:
+        n = norm(t)
+        rest = n.split(" ", 1)[1] if " " in n else ""
+        return f" {n} " in tl or (bool(rest) and len(rest.split()) >= 2 and f" {rest} " in tl)
+    hits = [t for t in terms if norm(t).startswith(v + " ") and in_title(t)]
+    return hits[0] if len(hits) == 1 else value
+
+
+def _fill_from_related(ai_results: list, active_rules: list[dict], terms_by_attr: dict[str, list[str]],
+                       titles: list[str]) -> list:
+    """Fill an attribute the AI left out from another AI value's first word.
+    PL-168: the AI returned "Съвместим модел: Insta360 Luna Ultra" but no
+    "Съвместима Марка" for 6 of 9 products. When the first word of another
+    AI value ("Insta360") is an EXISTING value of the missing attribute and
+    also appears in the product title, that value is used. Nothing new is
+    ever created this way."""
+    import re as _re
+    norm = lambda x: " ".join(str(x).split()).lower()
+    tl = " " + " ".join(norm(t) for t in titles if t) + " "
+    have = {r["attribute"].strip().lower() for r in ai_results if str(r.get("raw_value") or "").strip()}
+    out = list(ai_results)
+    for rule in active_rules:
+        key = rule["woo_attr_name"].strip().lower()
+        terms = terms_by_attr.get(key) or []
+        if key in have or not terms:
+            continue
+        by_norm = {norm(t): t for t in terms}
+        found: list[str] = []
+        for r in ai_results:
+            if r["attribute"].strip().lower() == key or not str(r.get("raw_value") or "").strip():
+                continue
+            for part in _re.split(r"\s+and\s+|\s*,\s*", str(r["raw_value"]), flags=_re.IGNORECASE):
+                words = part.split()
+                if len(words) < 2:
+                    continue
+                t = by_norm.get(norm(words[0]))
+                if t and f" {norm(t)} " in tl and t not in found:
+                    found.append(t)
+        if not found:
+            continue
+        out = [r for r in out if r["attribute"].strip().lower() != key]   # drop the "not found" mark
+        out.append({"attribute": rule["woo_attr_name"], "raw_value": ", ".join(found),
+                    "confidence": 0.9, "source": "ai", "flagged": False})
+        have.add(key)
+    return out
+
+
+def _merge_and_match(results: list, terms_by_attr: dict[str, list[str]],
+                     titles: Optional[list[str]] = None) -> list:
     """(1) Several results for the SAME attribute become one, values joined
     with ", " -- PL-164: the AI returned three "Съвместим модел" entries
     (Osmo Action 5 Pro / 4 / 3) and only the last survived, because one
@@ -524,6 +584,8 @@ def _merge_and_match(results: list, terms_by_attr: dict[str, list[str]]) -> list
                 parts, seen = [], set()
                 for part in [x.strip() for x in _re.split(r"\s+and\s+|\s*,\s*", raw, flags=_re.IGNORECASE) if x.strip()]:
                     hit = _match_existing_term(part, terms)
+                    if hit == part and titles:
+                        hit = _expand_from_title(part, terms, titles)
                     if hit.lower() not in seen:
                         seen.add(hit.lower())
                         parts.append(hit)
@@ -761,6 +823,18 @@ async def extract_attributes(
             diag["ai_asked"] = [r["woo_attr_name"] for r in active_rules]
         raw = await _call_ai(prompt, gen_cfg, diag)
         parsed = _parse_json_array(raw)
+        # PL-168: 2 of 9 answers from a small free model were not a readable
+        # list, and those products showed "not found". Ask once more (only
+        # when an answer came back -- not after an error or rate limit).
+        if parsed is None and raw and not (diag or {}).get("ai_error"):
+            raw2 = await _call_ai(
+                prompt + "\n\nIMPORTANT: reply with ONLY the JSON array described above -- no other text.",
+                gen_cfg, diag)
+            parsed2 = _parse_json_array(raw2)
+            if parsed2 is not None:
+                raw, parsed = raw2, parsed2
+                if diag is not None:
+                    diag["ai_retried"] = True
         if parsed is None and diag is not None and raw and "ai_error" not in diag:
             diag["ai_error"] = "the AI answer was not a valid attribute list"
     else:
@@ -848,7 +922,10 @@ async def extract_attributes(
             # same as when the AI answers but leaves one out.
             _apply_not_found(ai_results, active_rules, resolved_lower)
 
-    ai_results = _merge_and_match(ai_results, terms_by_attr)
+    _titles = product_titles_for_rules(product)
+    ai_results = _merge_and_match(ai_results, terms_by_attr, _titles)
+    if active_rules:
+        ai_results = _fill_from_related(ai_results, active_rules, terms_by_attr, _titles)
     combined = resolved + selector_results + ai_results
     return sorted(combined, key=lambda x: -x["confidence"])
 
