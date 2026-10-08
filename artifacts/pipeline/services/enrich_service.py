@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import re as _re_mod
 from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import select
@@ -511,6 +512,14 @@ def _expand_from_title(value: str, terms: list[str], titles: list[str]) -> str:
     return hits[0] if len(hits) == 1 else value
 
 
+def _brand_in_title(brand: str, title_norm: str) -> bool:
+    """`brand` (lower-cased) is a word in the title. Sunsky writes some brands
+    with a space between letters and digits ("For Insta 360 Luna Ultra ..."),
+    so "insta360" also matches "insta 360"."""
+    spaced = _re_mod.sub(r"(?<=[^\W\d])(?=\d)|(?<=\d)(?=[^\W\d])", " ", brand)
+    return any(f" {v} " in title_norm for v in {brand, spaced})
+
+
 def _fill_from_related(ai_results: list, active_rules: list[dict], terms_by_attr: dict[str, list[str]],
                        titles: list[str]) -> list:
     """Fill an attribute the AI left out from another AI value's first word.
@@ -539,7 +548,7 @@ def _fill_from_related(ai_results: list, active_rules: list[dict], terms_by_attr
                 if len(words) < 2:
                     continue
                 t = by_norm.get(norm(words[0]))
-                if t and f" {norm(t)} " in tl and t not in found:
+                if t and _brand_in_title(norm(t), tl) and t not in found:
                     found.append(t)
         if not found:
             continue
