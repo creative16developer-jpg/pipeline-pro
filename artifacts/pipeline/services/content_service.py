@@ -1820,6 +1820,7 @@ def _brand_word_re(brand: str) -> "re.Pattern":
 def _drop_brand_text(value: str, pat) -> str:
     out = pat.sub("", value)
     out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"([.!?]) +[.,;:]+ *", r"\1 ", out)
     out = re.sub(r" +([,.;:!?)])", r"\1", out)
     out = re.sub(r"([.!?;:>]|^)\s*,\s*", lambda m: m.group(1) + (" " if m.group(1) and m.group(1) != ">" else ""), out, flags=re.MULTILINE)
     out = re.sub(r"\( +", "(", out)
@@ -1858,19 +1859,37 @@ def block_brand_in_input(product: dict) -> dict:
     return {k: (v if k in keep else clean(v)) for k, v in product.items()}
 
 
+_LEAD_PUNCT_RE = re.compile(r"^[\s.,;:!?]+")
+_TAG_LEAD_PUNCT_RE = re.compile(r"(<(?:p|li|h[1-6]|td|em|strong)(?:\s[^>]*)?>)[\s.,;:!?]+", re.IGNORECASE)
+
+
+def _tidy_lead_punct(value: str) -> str:
+    """No field (or paragraph / list item) starts with stray punctuation.
+    Client: '. Защитете обектива ...' / ': филтър за Insta360 Luna' -- a
+    small model sometimes starts its answer with a leftover '.' or ':'
+    (and removing a brand at the start of a sentence can leave one)."""
+    if not value:
+        return value
+    out = _TAG_LEAD_PUNCT_RE.sub(r"\1", value)
+    if not out.lstrip().startswith("<"):
+        out = _LEAD_PUNCT_RE.sub("", out)
+    return out
+
+
 def _brand_cleaner(product: dict):
     """Removes the blocked brand from one generated field value (safety net
     in case a model still writes it)."""
     brand = (product.get("blocked_brand") or "").strip()
-    if not brand:
-        return lambda f, r: r
-    pat = _brand_word_re(brand)
+    pat = _brand_word_re(brand) if brand else None
 
     def _clean(f, r):
         if not isinstance(r, dict) or not isinstance(r.get("value"), str) or not r["value"]:
             return r
-        v = r["value"]
-        nv = _drop_brand_slug(v, brand) if f in ("slug", "image_names") else _drop_brand_text(v, pat)
+        v = nv = r["value"]
+        if brand:
+            nv = _drop_brand_slug(v, brand) if f in ("slug", "image_names") else _drop_brand_text(v, pat)
+        if f not in ("slug", "image_names"):
+            nv = _tidy_lead_punct(nv)
         if nv != v:
             r = {**r, "value": nv}
         return r
