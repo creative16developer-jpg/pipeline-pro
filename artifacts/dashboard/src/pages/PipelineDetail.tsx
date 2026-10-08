@@ -2622,7 +2622,18 @@ function loadAttrTerms(storeId: number | null | undefined, attributeName: string
     const qs = `${storeId ? `store_id=${storeId}&` : ""}attribute_name=${encodeURIComponent(name)}`;
     _attrTermsCache.set(key, fetch(`/api/attr-mapping/attribute-terms?${qs}`)
       .then(r => r.ok ? r.json() : { terms: [] })
-      .then(d => (d?.terms ?? []).map((t: any) => String(t.name)))
+      // Each value once (case-insensitive). Client: "DJI Osmo 360" stayed in
+      // the list while typing "action 3". A value WooCommerce returns twice
+      // gave two list rows the same React key, and React then can leave an
+      // old row on screen instead of removing it.
+      .then(d => {
+        const seen = new Set<string>(), out: string[] = [];
+        for (const t of (d?.terms ?? [])) {
+          const n = String(t?.name ?? "").trim();
+          if (n && !seen.has(n.toLowerCase())) { seen.add(n.toLowerCase()); out.push(n); }
+        }
+        return out;
+      })
       .catch(() => []));
   }
   return _attrTermsCache.get(key)!;
