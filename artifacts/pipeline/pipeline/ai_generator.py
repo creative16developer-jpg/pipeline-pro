@@ -436,6 +436,11 @@ async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
     except ImportError:
         raise AIGenerationError("openai package not installed — run: pip install openai")
 
+    # A ":batch" model (batch-only, rejected by chat/completions with a 404)
+    # saved before it was hidden from the picker: use the same model's
+    # normal version instead of failing every request.
+    if model and model.endswith(":batch"):
+        model = model[: -len(":batch")]
     client = AsyncOpenAI(
         api_key=api_key,
         base_url=OPENROUTER_BASE_URL,
@@ -516,6 +521,11 @@ def parse_openrouter_models(payload: dict) -> list[dict]:
     for m in (payload or {}).get("data") or []:
         mid = str(m.get("id") or "").strip()
         if not mid:
+            continue
+        if mid.endswith(":batch"):
+            # Batch-only variants can't answer normal requests (client: every
+            # product failed with "openai/gpt-5-nano:batch cannot be used with
+            # the chat/completions endpoint"), so they are not offered.
             continue
         outputs = ((m.get("architecture") or {}).get("output_modalities")) or ["text"]
         if "text" not in outputs:
