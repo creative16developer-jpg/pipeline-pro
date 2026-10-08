@@ -3336,10 +3336,38 @@ function AttrMappingModal({
     () => wooAttrOptions.map(a => ({ id: a.id, label: a.name })),
     [wooAttrOptions]
   );
-  const storeCatComboOptions = useMemo(
-    () => buildCategoryConditionOptions(storeCatOptions, sunskyCatNames, sunskyCatIds),
-    [storeCatOptions, sunskyCatNames, sunskyCatIds]
-  );
+  // Client: typing a Sunsky ID (e.g. 111329) showed "No matches" -- only
+  // starred categories and per-ID mapping rules were offered. Like Category
+  // Mapping, the typed text now also searches the whole Sunsky category list
+  // (by name or ID, local cache) and each hit is offered as "Name [ID]".
+  const [condSearchHits, setCondSearchHits] = useState<{ id: string; label: string; sublabel: string; key: string }[]>([]);
+  useEffect(() => {
+    const q = condDraft.trim();
+    if (q.length < 2) { setCondSearchHits([]); return; }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      fetch(`/api/sunsky/categories/search?q=${encodeURIComponent(q)}`)
+        .then(r => r.ok ? r.json() : [])
+        .then(d => {
+          if (cancelled) return;
+          const hits = (Array.isArray(d) ? d : []).filter((c: any) => c?.id && c?.name).map((c: any) => {
+            const id = String(c.id);
+            const label = `${String(c.name).trim()} [${id}]`;
+            const path = Array.isArray(c.path) ? c.path.slice(0, -1).map((x: any) => x?.name).filter(Boolean) : [];
+            const parent = path.length ? ` · in ${path[path.length - 1]}` : "";
+            return { id: label, label, sublabel: `Sunsky ID ${id} only${parent}`, key: `id:${id}` };
+          });
+          setCondSearchHits(hits);
+        })
+        .catch(() => { if (!cancelled) setCondSearchHits([]); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [condDraft]);
+  const storeCatComboOptions = useMemo(() => {
+    const base = buildCategoryConditionOptions(storeCatOptions, sunskyCatNames, sunskyCatIds);
+    const have = new Set(base.map(o => o.key));
+    return [...base, ...condSearchHits.filter(h => !have.has(h.key))];
+  }, [storeCatOptions, sunskyCatNames, sunskyCatIds, condSearchHits]);
 
   useEffect(() => {
     // Client feedback: "settings – Attribute Mapping – Add Rule ...
