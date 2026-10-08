@@ -911,6 +911,52 @@ async def _run_fetch(db, job):
 # (clean, no "0" stamp). ZIP images whose key lacks it are the old stamped ones.
 _ZIP_CLEAN = "?nowm"
 
+# How many products' Sunsky downloads (detail + images ZIP) run at the same
+# time in Process. Client: "it will be helpful because for more products it
+# costs a lot of time." While one product's images are being processed and
+# saved, the next product's Sunsky data is already downloading. Every
+# database write and every image step still happens one product at a time,
+# in order. 1 = one product at a time, exactly as before.
+# Env: PROCESS_PRODUCT_CONCURRENCY.
+try:
+    _PROCESS_PRODUCT_CONCURRENCY = max(1, int(__import__("os").environ.get("PROCESS_PRODUCT_CONCURRENCY", "2")))
+except ValueError:
+    _PROCESS_PRODUCT_CONCURRENCY = 2
+
+
+def _process_raw_image_urls(raw: dict) -> list:
+    """Stage 1 of Process: image URLs already in raw_data (first 5)."""
+    urls = raw.get("images", [])
+    if isinstance(urls, str):
+        urls = [urls]
+    return [u for u in urls if isinstance(u, str) and u.startswith("http")][:5]
+
+
+def _start_sunsky_prefetch(product) -> dict:
+    """Start one product's Sunsky downloads in the background (network only).
+    {"detail": task, "zip": task} -- the ZIP task only when Process will need
+    it (no image URLs in raw_data or in the detail answer), same rule as the
+    loop below."""
+    from pipeline import sunsky_client
+    item_no = product.sku or product.sunsky_id
+    if not item_no:
+        return {}
+    have_urls = bool(_process_raw_image_urls(product.raw_data or {}))
+    detail_t = asyncio.ensure_future(sunsky_client.get_product_detail(item_no))
+
+    async def _zip():
+        try:
+            detail = await detail_t
+        except Exception:
+            return None     # the product fails on its detail call in the loop; no ZIP needed
+        if have_urls:
+            return None
+        if detail and [u for u in detail.get("images", []) if isinstance(u, str) and u.startswith("http")]:
+            return None
+        return await sunsky_client.download_product_images(item_no, size="middle")
+    return {"detail": detail_t, "zip": asyncio.ensure_future(_zip())}
+
+
 async def _run_process(db, job):
     from models.models import Product, ProductStatus, Image, ImageStatus, LogLevel
     from pipeline.image_processor import ImageProcessor
@@ -1014,9 +1060,21 @@ async def _run_process(db, job):
     total_images_ok = total_images_fail = 0
     prod_ok = prod_fail = 0
 
+    _sunsky_prefetch: dict[int, dict] = {}
+
     for i, product in enumerate(products):
         product.status = ProductStatus.processing
         await db.commit()
+        if _PROCESS_PRODUCT_CONCURRENCY > 1:
+            for _j in range(i, min(len(products), i + _PROCESS_PRODUCT_CONCURRENCY)):
+                _pj = products[_j]
+                if _pj.id not in _sunsky_prefetch:
+                    try:
+                        _sunsky_prefetch[_pj.id] = _start_sunsky_prefetch(_pj)
+                    except Exception as _pe:
+                        print(f"[process] Sunsky prefetch for {_pj.sku} not started: {_pe}")
+                        _sunsky_prefetch[_pj.id] = {}
+        _pf = _sunsky_prefetch.pop(product.id, None) or {}
 
         try:
             import io, zipfile
@@ -1041,7 +1099,8 @@ async def _run_process(db, job):
             if item_no:
                 await _log(db, job.id, LogLevel.info,
                            f"  {product.sku}: fetching detail from Sunsky (product!detail.do)…")
-                detail = await sunsky_client.get_product_detail(item_no)
+                _dt = _pf.pop("detail", None)
+                detail = await (_dt if _dt is not None else sunsky_client.get_product_detail(item_no))
                 if detail:
                     detail_raw = detail.get("raw_data") or {}
                     # Pull spec fields out of the raw detail response
@@ -1076,7 +1135,9 @@ async def _run_process(db, job):
             if not image_urls and item_no:
                 await _log(db, job.id, LogLevel.info,
                            f"  {product.sku}: downloading images ZIP from Sunsky (product!getImages.do)…")
-                zip_bytes = await sunsky_client.download_product_images(item_no, size="middle")
+                _zt = _pf.pop("zip", None)       # started in the background earlier, same rule
+                zip_bytes = await (_zt if _zt is not None
+                                   else sunsky_client.download_product_images(item_no, size="middle"))
                 if zip_bytes:
                     await _log(db, job.id, LogLevel.info,
                                f"  {product.sku}: ZIP received ({len(zip_bytes):,} bytes)")
@@ -1212,9 +1273,16 @@ async def _run_process(db, job):
             await _log(db, job.id, LogLevel.error,
                        f"  {product.sku}: FAILED — {e}")
 
+        for _t in _pf.values():       # downloads this product did not use
+            _t.cancel()
+
         job.processed_items = i + 1
         job.progress_percent = round((i + 1) / len(products) * 100, 1)
         await db.commit()
+
+    for _left in _sunsky_prefetch.values():
+        for _t in _left.values():
+            _t.cancel()
 
     # ── Job Summary
     await _log(db, job.id, LogLevel.info,
@@ -1243,8 +1311,83 @@ try:
 except ValueError:
     _UPLOAD_IMAGE_CONCURRENCY = 3
 
+# How many PRODUCTS' images go up at the same time. Client: "it will be
+# helpful because for more products it costs a lot of time" -- images are
+# almost all of Upload's time, so while one product is being created in
+# WooCommerce, the images of the next product(s) are already being sent.
+# Only the network part runs ahead; every database write and every
+# WooCommerce product call still happens one product at a time, in order.
+# 1 = one product at a time, exactly as before. Env: UPLOAD_PRODUCT_CONCURRENCY.
+try:
+    _UPLOAD_PRODUCT_CONCURRENCY = max(1, int(__import__("os").environ.get("UPLOAD_PRODUCT_CONCURRENCY", "2")))
+except ValueError:
+    _UPLOAD_PRODUCT_CONCURRENCY = 2
 
-async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> list:
+
+def _wp_image_args(product, img) -> dict:
+    """File name / alt / caption / description for one image in WordPress."""
+    base_slug = product.slug
+    if not base_slug:
+        from services.content_service import _slugify as _cs_slugify
+        base_slug = _cs_slugify(product.name or product.sku or "product")
+    base_alt = product.image_alt or product.name or ""
+    base_caption = product.image_caption or base_alt
+    base_description = product.image_description or base_alt
+    ext = Path(img.processed_path).suffix or ".webp"
+    n, first = img.position + 1, img.position == 0
+    return {
+        "filename": f"{base_slug}-{n}{ext}",
+        "alt_text": (base_alt if first else f"{base_alt} - {n}") if base_alt else None,
+        "caption": (base_caption if first else f"{base_caption} - {n}") if base_caption else None,
+        "description": (base_description if first else f"{base_description} - {n}") if base_description else None,
+    }
+
+
+def _images_needing_upload(processed_images, uploaded_cache: dict, store) -> list:
+    """The images that must really be sent to WordPress: not already in this
+    store's upload cache, and not the same source as an earlier image."""
+    seen: set = set()
+    out = []
+    for img in processed_images:
+        key = f"{store.id}:{img.original_url}" if img.original_url else ""
+        if key and ((uploaded_cache.get(key) or {}).get("wp_url") or key in seen):
+            continue
+        if key:
+            seen.add(key)
+        out.append(img)
+    return out
+
+
+async def _start_image_prefetch(db, product, store, wc, sem) -> dict:
+    """Start sending one product's images to WordPress in the background.
+    Returns {image_id: task}. Reads the database here (one product at a
+    time, in the main loop); the tasks themselves only do network work."""
+    from models.models import Image, ImageStatus
+    from sqlalchemy import select
+    if not (store.wp_username and store.wp_app_password):
+        return {}
+    imgs = (await db.execute(
+        select(Image).where(Image.product_id == product.id,
+                            Image.status == ImageStatus.compressed,
+                            Image.processed_path.isnot(None))
+        .order_by(Image.position)
+    )).scalars().all()
+    try:
+        cache = json.loads(product.uploaded_images_json or "{}")
+    except Exception:
+        cache = {}
+    tasks = {}
+    for img in _images_needing_upload(imgs, cache, store):
+        path, args = img.processed_path, _wp_image_args(product, img)
+
+        async def _go(path=path, args=args):
+            async with sem:
+                return await wc.upload_image_to_wordpress(store, path, **args)
+        tasks[img.id] = asyncio.ensure_future(_go())
+    return tasks
+
+
+async def _resolve_product_images(db, job, product, raw: dict, wc, store, prefetched: Optional[dict] = None) -> list:
     """
     For a product, return a list of image entries to send to WooCommerce
     -- either {"id": wp_media_id, "src": url} dicts (preferred, when the
@@ -1341,34 +1484,25 @@ async def _resolve_product_images(db, job, product, raw: dict, wc, store) -> lis
 
             def _wp_upload_args(img) -> dict:
                 """File name / alt / caption / description for one image."""
-                ext = Path(img.processed_path).suffix or ".webp"
-                n, first = img.position + 1, img.position == 0
-                return {
-                    "filename": f"{base_slug}-{n}{ext}",
-                    "alt_text": (base_alt if first else f"{base_alt} - {n}") if base_alt else None,
-                    "caption": (base_caption if first else f"{base_caption} - {n}") if base_caption else None,
-                    "description": (base_description if first else f"{base_description} - {n}") if base_description else None,
-                }
+                return _wp_image_args(product, img)
 
             # Send the images that are not in the cache to WordPress several at
             # a time (network only -- no database work happens in here). The
             # loop below then handles every image in position order exactly as
             # before, taking each upload's result from _uploaded instead of
             # waiting for it one by one.
-            _seen_keys: set = set()
-            _to_upload = []
-            for _img in processed_images:
-                _key = f"{store.id}:{_img.original_url}" if _img.original_url else ""
-                if _key and ((uploaded_cache.get(_key) or {}).get("wp_url") or _key in _seen_keys):
-                    continue        # cached already, or same source as an earlier image
-                if _key:
-                    _seen_keys.add(_key)
-                _to_upload.append(_img)
+            _to_upload = _images_needing_upload(processed_images, uploaded_cache, store)
             _uploaded: dict = {}
+            _prefetched = prefetched or {}
             if _to_upload:
                 _sem = asyncio.Semaphore(_UPLOAD_IMAGE_CONCURRENCY)
 
                 async def _upload_one(_i):
+                    # Already being sent in the background (started while the
+                    # previous product was uploading) -- just wait for it.
+                    _t = _prefetched.pop(_i.id, None)
+                    if _t is not None:
+                        return await _t
                     async with _sem:
                         return await wc.upload_image_to_wordpress(
                             store, _i.processed_path, **_wp_upload_args(_i))
@@ -1714,8 +1848,29 @@ async def _run_upload(db, job):
 
     created_count = updated_count = skipped_count = failed_count = 0
 
+    # Images of the next product(s) are sent while the current one uploads
+    # (see _UPLOAD_PRODUCT_CONCURRENCY). One shared limit for all of them,
+    # so WordPress never gets more than this many images at once.
+    _img_prefetch: dict[int, dict] = {}
+    _prefetch_ahead = 0 if skip_images else _UPLOAD_PRODUCT_CONCURRENCY - 1
+    _prefetch_sem = asyncio.Semaphore(_UPLOAD_IMAGE_CONCURRENCY * _UPLOAD_PRODUCT_CONCURRENCY)
+
+    async def _prefetch_upto(idx: int):
+        # the current product too, so every image goes through the one limit
+        for _j in range(idx, min(len(products), idx + 1 + _prefetch_ahead)):
+            _pj = products[_j]
+            if _pj.id in _img_prefetch:
+                continue
+            try:
+                _img_prefetch[_pj.id] = await _start_image_prefetch(db, _pj, store, wc, _prefetch_sem)
+            except Exception as _pe:
+                print(f"[upload] image prefetch for {_pj.sku} not started: {_pe}")
+                _img_prefetch[_pj.id] = {}
+
     for i, product in enumerate(products):
         action = "?"
+        if _prefetch_ahead:
+            await _prefetch_upto(i)
         try:
             raw = product.raw_data or {}
             # Client feedback confirmed live (multi-store test): fetched
@@ -1831,7 +1986,8 @@ async def _run_upload(db, job):
             payload.update(_apply_inventory_mapping(raw, inventory_config))
 
             if not skip_images:
-                image_entries = await _resolve_product_images(db, job, product, raw, wc, store)
+                image_entries = await _resolve_product_images(db, job, product, raw, wc, store,
+                                                              prefetched=_img_prefetch.pop(product.id, None))
                 if image_entries:
                     # Client feedback: "duplicate/non-unique alt text across
                     # images" -- previously every photo in the gallery got
@@ -1949,9 +2105,19 @@ async def _run_upload(db, job):
             await _log(db, job.id, LogLevel.error,
                        f"  {product.sku} → FAILED: {e}")
 
+        # A product that failed before its images were used: stop its
+        # background uploads (nothing of it is kept).
+        for _t in (_img_prefetch.pop(product.id, None) or {}).values():
+            _t.cancel()
+
         job.processed_items = i + 1
         job.progress_percent = round((i + 1) / len(products) * 100, 1)
         await db.commit()
+
+    for _left in _img_prefetch.values():
+        for _t in _left.values():
+            _t.cancel()
+    _img_prefetch.clear()
 
     # ═══════════════════════════════════════════════════════════════════════
     # PHASE 2 — Assign categories + attributes from stored Sunsky data
