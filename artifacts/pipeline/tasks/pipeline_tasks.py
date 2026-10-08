@@ -539,6 +539,39 @@ def _apply_csv_entry(product, csv_entry) -> str:
     return csv_title
 
 
+def _shop_title_for_brand(product, csv_title: str) -> str:
+    """The shop's own title: the CSV title, or a title the operator edited
+    (differs from Sunsky's) -- a brand written there is never blocked."""
+    if csv_title:
+        return csv_title
+    name, sunsky_name = (product.name or "").strip(), str((product.raw_data or {}).get("name") or "").strip()
+    return name if name and sunsky_name and name != sunsky_name else ""
+
+
+async def _blocked_brand_for(db, store_id, product, csv_title: str) -> str:
+    """Same rule as _run_generate's _gen_blocked_brand, for the batch-result
+    step (which has no per-run store/listing lookup of its own)."""
+    try:
+        from sqlalchemy import select
+        from models.models import Store, ProductStoreListing
+        from services.content_service import sunsky_brand_to_block, _get_manufacturer_brand, _parse_params_table
+        raw = product.raw_data or {}
+        store = await db.get(Store, store_id) if store_id else None
+        listing = (await db.execute(select(ProductStoreListing).where(
+            ProductStoreListing.store_id == store_id, ProductStoreListing.product_id == product.id))).scalars().first() if store_id else None
+        if listing is not None and listing.brand_source == "manual" and listing.manual_brand_name:
+            used = listing.manual_brand_name
+        elif store is not None and store.map_brand_from_sunsky:
+            specs = _parse_params_table(str(raw.get("paramsTable") or "")) if raw.get("paramsTable") else {}
+            used = _get_manufacturer_brand(raw, specs) or ""
+        else:
+            used = ""
+        return sunsky_brand_to_block(raw, used, _shop_title_for_brand(product, csv_title))
+    except Exception as exc:
+        print(f"[generate] blocked brand for {getattr(product, 'sku', '?')} not checked: {exc}")
+        return ""
+
+
 async def _generation_context_extras(db, pl_id: int, product) -> dict:
     """Extra product-dict keys for content generation, merged AFTER **raw.
 
@@ -780,6 +813,12 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
             return _get_manufacturer_brand(_raw, _specs) or ""
         return ""
 
+    def _gen_blocked_brand(product, csv_title: str) -> str:
+        """Sunsky brand to keep out of the content (see sunsky_brand_to_block)."""
+        from services.content_service import sunsky_brand_to_block
+        return sunsky_brand_to_block(product.raw_data or {}, _gen_resolve_brand(product),
+                                     _shop_title_for_brand(product, csv_title))
+
     # Client feedback: full-pipeline batch processing for Claude, at
     # Anthropic's 50% batch-rate discount, in exchange for asynchronous
     # turnaround. Confirmed via the reviewed build plan: opt-in per
@@ -822,6 +861,7 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
                 "csv_title": csv_title,
                 "category_name": extract_sunsky_category(raw, _gen_category_name_map),
                 "native_brand": _gen_resolve_brand(product),
+                "blocked_brand": _gen_blocked_brand(product, csv_title),
                 **raw,
             }
             prod_dict.update(await _generation_context_extras(db, pl.id, product))
@@ -901,6 +941,7 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
                 "site_sku":    site_sku,
                 "category_name": extract_sunsky_category(raw, _gen_category_name_map),
                 "native_brand": _gen_resolve_brand(product),
+                "blocked_brand": _gen_blocked_brand(product, csv_title),
                 **raw,
             }
             prod_dict.update(await _generation_context_extras(db, pl.id, product))
@@ -1481,6 +1522,7 @@ async def _poll_batch_pipelines():
                         "site_sku": product.site_sku or "", "csv_title": csv_title, **raw,
                     }
                     prod_dict.update(await _generation_context_extras(db, pl.id, product))
+                    prod_dict["blocked_brand"] = await _blocked_brand_for(db, pl.store_id, product, csv_title)
                     # Same "already generated / operator-set -> keep" rule the
                     # SUBMIT step applied (batch mode never runs with
                     # force_regenerate -- that's only the sync "Re-generate

@@ -1477,6 +1477,7 @@ def get_batchable_ai_fields(product: dict, template: dict) -> dict[str, str]:
     session, with downstream fields like Meta Title/Focus Keyword
     typically left on logic mode.
     """
+    product = block_brand_in_input(product)   # same brand rule as generate_product
     gs = template.get("globalSettings") or {}
     if not gs.get("ai_enabled", False):
         return {}
@@ -1787,6 +1788,95 @@ async def run_field(
 # Core: generate all fields for one product (DAG-aware)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Sunsky "brands" that are not a real maker's name -- never removed from text.
+_NOT_A_BRAND = {"other", "others", "oem", "odm", "none", "no brand", "nobrand", "universal",
+                "generic", "unbranded", "n/a", "na", "null", "unknown", "brand", "new"}
+
+
+def sunsky_brand_to_block(raw: dict, used_brand: str, shop_title: str) -> str:
+    """The Sunsky maker's brand to keep OUT of generated content, or "".
+
+    Client (PU987B): "Brand option was disabled and ... we have other brand
+    (GARV) in the title which was in the CSV file. However the pipeline takes
+    the brand name PULUZ from Sunsky and includes it everywhere."
+    Blocked when the brand actually used for the product (manual brand, or
+    Sunsky's when "Map brand from Sunsky" is on) is NOT the Sunsky brand --
+    unless the shop's own (CSV) title itself contains it."""
+    specs = _parse_params_table(str(raw.get("paramsTable") or "")) if raw.get("paramsTable") else {}
+    sb = (_get_manufacturer_brand(raw, specs) or "").strip()
+    if len(sb) < 3 or sb.lower() in _NOT_A_BRAND:
+        return ""
+    if (used_brand or "").strip().lower() == sb.lower():
+        return ""
+    if _brand_word_re(sb).search(shop_title or ""):
+        return ""
+    return sb
+
+
+def _brand_word_re(brand: str) -> "re.Pattern":
+    return re.compile(r"(?<![0-9A-Za-zА-Яа-я])" + re.escape(brand) + r"(?![0-9A-Za-zА-Яа-я])", re.IGNORECASE)
+
+
+def _drop_brand_text(value: str, pat) -> str:
+    out = pat.sub("", value)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r" +([,.;:!?)])", r"\1", out)
+    out = re.sub(r"([.!?;:>]|^)\s*,\s*", lambda m: m.group(1) + (" " if m.group(1) and m.group(1) != ">" else ""), out, flags=re.MULTILINE)
+    out = re.sub(r"\( +", "(", out)
+    out = re.sub(r"(>|^) +", r"\1", out, flags=re.MULTILINE)
+    return out.strip() if out.strip() != value.strip() else value
+
+
+def _drop_brand_slug(value: str, brand: str) -> str:
+    b = re.sub(r"[^a-z0-9]+", "-", brand.lower()).strip("-")
+    if not b:
+        return value
+    out = re.sub(r"(?<![a-z0-9])" + re.escape(b) + r"(?![a-z0-9])", "", value, flags=re.IGNORECASE)
+    out = re.sub(r"-{2,}", "-", out)
+    out = re.sub(r"\s*,\s*", ", ", out)      # image_names: several names, comma-separated
+    return re.sub(r"(^|, )-|-($|,)", r"\1\2", out).strip("- ")
+
+
+def block_brand_in_input(product: dict) -> dict:
+    """Copy of the product data with the blocked brand removed from every
+    Sunsky text (name, description, specs, ...), so the AI and the logic
+    fields never see it. The shop's own CSV title is kept as it is."""
+    brand = (product.get("blocked_brand") or "").strip()
+    if not brand:
+        return product
+    pat = _brand_word_re(brand)
+
+    def clean(v):
+        if isinstance(v, str):
+            return _drop_brand_text(v, pat)
+        if isinstance(v, dict):
+            return {k: clean(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [clean(x) for x in v]
+        return v
+    keep = {"csv_title", "blocked_brand", "native_brand", "sku", "site_sku"}
+    return {k: (v if k in keep else clean(v)) for k, v in product.items()}
+
+
+def _brand_cleaner(product: dict):
+    """Removes the blocked brand from one generated field value (safety net
+    in case a model still writes it)."""
+    brand = (product.get("blocked_brand") or "").strip()
+    if not brand:
+        return lambda f, r: r
+    pat = _brand_word_re(brand)
+
+    def _clean(f, r):
+        if not isinstance(r, dict) or not isinstance(r.get("value"), str) or not r["value"]:
+            return r
+        v = r["value"]
+        nv = _drop_brand_slug(v, brand) if f in ("slug", "image_names") else _drop_brand_text(v, pat)
+        if nv != v:
+            r = {**r, "value": nv}
+        return r
+    return _clean
+
+
 async def generate_product(
     product: dict,
     template: dict,
@@ -1828,6 +1918,8 @@ async def generate_product(
 
     Returns: {field: FieldResult} for all enabled fields.
     """
+    product = block_brand_in_input(product)
+    _bb = _brand_cleaner(product)
     fields_cfg = template.get("fields") or {}
 
     def _mode(f: str) -> str:
@@ -1876,7 +1968,7 @@ async def generate_product(
                                    "status": "failed", "error": str(r)}
                     resolved[f] = ""
                 else:
-                    results[f] = r
+                    results[f] = r = _bb(f, r)
                     resolved[f] = r.get("value", "")
 
         if ai_group:
@@ -1890,11 +1982,11 @@ async def generate_product(
                                    "status": "failed", "error": str(r)}
                     resolved[f] = ""
                 else:
-                    results[f] = r
+                    results[f] = r = _bb(f, r)
                     resolved[f] = r.get("value", "")
 
         for f in derive_group:
-            r = await run_field(f, product, template, resolved, precomputed_ai)
+            r = _bb(f, await run_field(f, product, template, resolved, precomputed_ai))
             results[f] = r
             resolved[f] = r.get("value", "")
 

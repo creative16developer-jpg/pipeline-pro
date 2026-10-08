@@ -206,6 +206,12 @@ def _build_product_context(product: dict, category_name: str = "") -> str:
     native_brand = product.get("native_brand", "")
     if native_brand:
         lines.append(f"Brand: {native_brand}")
+    elif product.get("blocked_brand"):
+        # The Sunsky maker's brand is not used for this shop (removed from the
+        # data above). Client: "the model can't use PULUZ but can use brand
+        # name in the CSV title".
+        lines.append("Brand: do not name any manufacturer brand, except one that is already "
+                     "in the shop's own product title.")
     lines.append(f"Description: {desc or '(none)'}")
     lines.append(f"Specifications:\n{specs_text}")
     # Attributes as reviewed/corrected by the shop operator at the Enrich
