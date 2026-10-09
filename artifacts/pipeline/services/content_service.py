@@ -213,6 +213,33 @@ def _truncate_html_blocks(value: str, max_chars: int) -> str:
     return result
 
 
+_BG_LATIN = {
+    # Bulgarian official transliteration (Streamlined System, as in law, 2009)
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ж": "zh", "з": "z",
+    "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p",
+    "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts", "ч": "ch",
+    "ш": "sh", "щ": "sht", "ъ": "a", "ь": "y", "ю": "yu", "я": "ya",
+    # a few Russian / Ukrainian letters Sunsky data sometimes contains
+    "ё": "yo", "э": "e", "ы": "y", "є": "ye", "і": "i", "ї": "yi", "ґ": "g",
+}
+
+
+def _transliterate(text: str) -> str:
+    """Cyrillic -> Latin (Bulgarian rules) and accents removed (é -> e), so a
+    Bulgarian title gives a readable URL slug instead of being dropped."""
+    import unicodedata
+    out = []
+    for ch in str(text or ""):
+        low = ch.lower()
+        if low in _BG_LATIN:
+            lat = _BG_LATIN[low]
+            out.append(lat.capitalize() if ch != low else lat)
+        else:
+            out.append(ch)
+    t = unicodedata.normalize("NFKD", "".join(out))
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
 def _slugify(text: str) -> str:
     try:
         text = text.encode("ascii", "ignore").decode()
@@ -1053,7 +1080,16 @@ def _derive_slug(product: dict, options: dict, resolved: dict) -> str:
     sku = product.get("site_sku") or product.get("sku", "")
     max_chars = int(options.get("max_chars", 70))
 
-    slug = _slugify(title)
+    # Client: "The option is set on transliterate but is not realized" --
+    # the Transliterate toggle was never read. On: the slug is built from the
+    # product's own (CSV / generated, usually Bulgarian) title, transliterated
+    # to Latin letters (Комплект филтри -> komplekt-filtri). Off: the Sunsky
+    # English name, as before.
+    if options.get("transliterate"):
+        shop_title = (product.get("csv_title") or "").strip() or resolved.get("title", "") or title
+        slug = _slugify(_transliterate(shop_title)) or _slugify(title)
+    else:
+        slug = _slugify(title)
     if not slug:
         # Client feedback: "it should work for all fields" -- audited
         # every raw character-slice in this file after the earlier
@@ -1068,7 +1104,9 @@ def _derive_slug(product: dict, options: dict, resolved: dict) -> str:
         return _truncate_no_mid_word(fb, max_chars, boundary="-")
 
     slug = _truncate_no_mid_word(slug, max_chars, boundary="-")
-    if sku and sku[-4:].lower() not in slug:
+    # "Append SKU suffix" toggle (ensure_unique) was never read either; the
+    # suffix was always added. Missing setting = on, as before.
+    if options.get("ensure_unique", True) and sku and sku[-4:].lower() not in slug:
         suffix = f"-{sku[-4:].lower()}"
         if len(slug) + len(suffix) <= max_chars:
             slug += suffix
@@ -1882,7 +1920,7 @@ def _clean_slug(value: str) -> str:
     SEO.insta-360-luna-ultra-jsr-cb-..." -- the model wrote extra words /
     symbols around the slug, which would break the product URL. Keeps the
     longest a-z0-9 run joined by hyphens; a value without one is slugified."""
-    v = (value or "").strip().lower()
+    v = _transliterate((value or "").strip()).lower()     # a Cyrillic AI slug -> Latin
     runs = re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)+", v)
     return max(runs, key=len) if runs else _slugify(v)
 
