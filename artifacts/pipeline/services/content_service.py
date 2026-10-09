@@ -1219,6 +1219,39 @@ _FOCUS_KEYWORD_STOPWORDS = {
 }
 
 
+_BG_TAIL_STOP = {"за", "с", "със", "и", "от", "на", "в", "във", "до", "при", "към",
+                 "без", "чрез", "по", "или", "а", "но", "как", "че", "the", "for", "with", "and"}
+_LATIN_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+./-]*$")
+
+
+def _bg_focus_keyword(title: str, max_chars: int) -> str:
+    """Bulgarian title -> '<product type> <model>'. PL-175: the old cut gave
+    'Защитен силиконов калъф със закрила' (dangling preposition, no
+    model). 'Метална магнитна скоба за Insta360 X4 и X3 с ...' ->
+    'Метална магнитна скоба Insta360 X4'."""
+    t = re.split(r"\s[-\u2013]\s", title.strip())[0]
+    words = t.replace(",", " ").split()
+    typ = []
+    for w in words:
+        if w.lower() in _BG_TAIL_STOP:
+            break
+        typ.append(w)
+    typ = typ[:4]
+    model, started = [], False
+    for w in words[len(typ):]:
+        if _LATIN_TOKEN.match(w):
+            model.append(w); started = True
+        elif started:
+            break
+    phrase = typ + model
+    while len(" ".join(phrase)) > max_chars and len(typ) > 1:
+        typ = typ[1:]                       # drop leading adjectives, keep the noun
+        phrase = typ + model
+    while phrase and phrase[-1].lower() in _BG_TAIL_STOP:
+        phrase.pop()
+    return " ".join(phrase)
+
+
 def _derive_focus_keyword(product: dict, options: dict, resolved: dict) -> str:
     """
     Sensible, deterministic default focus keyword: brand + the first
@@ -1251,6 +1284,11 @@ def _derive_focus_keyword(product: dict, options: dict, resolved: dict) -> str:
     # where a multi-word model name could get arbitrarily cut off
     # mid-way depending on how many descriptive words preceded it.
     brand_model_phrase = _get_brand_and_model_phrase(brand, model, title)
+
+    if options.get("target_language", "bg") == "bg" and re.search(r"[\u0400-\u04FF]", title):
+        bg = _bg_focus_keyword(title, max_chars)
+        if len(bg.split()) >= 2:
+            return bg
 
     words = [w for w in re.split(r"\s+", title.strip()) if w]
     kept = [w for w in words if w.lower() not in _FOCUS_KEYWORD_STOPWORDS]
@@ -1339,6 +1377,22 @@ def _derive_meta_description(product: dict, options: dict, resolved: dict) -> st
         else:
             break
 
+    if result and len(result) < 110:
+        # PL-175: one short sentence (67-76 chars) was the whole meta
+        # description. Fill toward ~155 with the start of the next sentence,
+        # cut at a word, not ending on a preposition.
+        rest = sentences[len(re.split(r"(?<=[.!?])\s+", result)):]
+        if rest:
+            room = 155 - len(result) - 2
+            part = []
+            for w in rest[0].split():
+                if len(" ".join(part + [w])) > room:
+                    break
+                part.append(w)
+            while part and (part[-1].lower().strip(",;:") in _BG_TAIL_STOP or len(part[-1]) <= 2):
+                part.pop()
+            if len(part) >= 3:
+                result = result + " " + " ".join(part).rstrip(",;:.") + ("…" if len(part) < len(rest[0].split()) else ".")
     if result:
         return result
 
@@ -1948,7 +2002,58 @@ def _clean_slug(value: str) -> str:
     return max(runs, key=len) if runs else _slugify(v)
 
 
-def _brand_cleaner(product: dict):
+# ── Bulgarian-text safety net (PL-174/175) ────────────────────────────────────
+# Models sometimes leave "For Insta360 X4", "- Clear Black", a Russian
+# sentence ("Этот адаптер позволяет ...") or stray Chinese characters in
+# otherwise Bulgarian text. Prompts ask them not to; this catches the rest.
+_BG_COLOURS = {
+    "black": "черен", "white": "бял", "red": "червен", "blue": "син",
+    "green": "зелен", "yellow": "жълт", "pink": "розов", "purple": "лилав",
+    "grey": "сив", "gray": "сив", "orange": "оранжев", "silver": "сребрист",
+    "gold": "златист", "brown": "кафяв", "clear": "прозрачен",
+    "transparent": "прозрачен", "transperant": "прозрачен",
+    "titanium": "титаниев", "beige": "бежов", "navy": "тъмносин",
+    "dark": "тъмно", "light": "светло",
+}
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]+")
+_RU_ONLY_RE = re.compile(r"[ыЫэЭёЁ]")
+_FOR_RE = re.compile(r"(^|>|[.!?]\s+)?\b[Ff]or\s+(?=[A-Z0-9])")
+_COLOUR_GROUP_RE = re.compile(
+    r"(\(\s*|\s[-\u2013]\s)([A-Za-z]+(?:[ /&]+[A-Za-z]+){0,2})(\s*\)|\s*$|(?=\s*<))")
+
+
+def _bg_colours(m: re.Match) -> str:
+    words = re.split(r"([ /&]+)", m.group(2))
+    if not all(w.lower() in _BG_COLOURS for w in words[::2]):
+        return m.group(0)
+    out = "".join(_BG_COLOURS[w.lower()] if i % 2 == 0 else w for i, w in enumerate(words))
+    if m.group(1).strip() != "(":
+        out = out[:1].upper() + out[1:]       # "- Прозрачен черен"
+    return m.group(1) + out + m.group(3)
+
+
+def _drop_ru_sentences(text: str) -> str:
+    parts = re.split(r"(?<=[.!?])(\s+)", text)
+    return "".join(x for x in parts if not _RU_ONLY_RE.search(x))
+
+
+def _bg_cleanup(value: str) -> str:
+    if not value:
+        return value
+    out = _CJK_RE.sub(" ", value)
+    out = _FOR_RE.sub(lambda m: (m.group(1) or "") + ("За " if (m.group(1) is not None or m.start() == 0) else "за "), out)
+    out = _COLOUR_GROUP_RE.sub(_bg_colours, out)
+    if _RU_ONLY_RE.search(out):
+        # sentence by sentence inside each text node, tags untouched
+        out = "".join(seg if seg.startswith("<") else _drop_ru_sentences(seg)
+                      for seg in re.split(r"(<[^>]+>)", out))
+        out = re.sub(r"<(p|li)>\s*</\1>", "", out)
+    out = re.sub(r"[ \t]{2,}", " ", out).strip()
+    # never empty a field: a value that was all Russian stays as it was
+    return out if re.search(r"[A-Za-z\u0400-\u04FF]", re.sub(r"<[^>]+>", "", out)) else value
+
+
+def _brand_cleaner(product: dict, target_language: str = "bg"):
     """Removes the blocked brand from one generated field value (safety net
     in case a model still writes it)."""
     brand = (product.get("blocked_brand") or "").strip()
@@ -1963,6 +2068,8 @@ def _brand_cleaner(product: dict):
         if f == "slug":
             nv = _clean_slug(nv) or nv
         elif f != "image_names":
+            if target_language == "bg":
+                nv = _bg_cleanup(nv)
             nv = _tidy_lead_punct(_drop_emoji(nv))
         if nv != v:
             r = {**r, "value": nv}
@@ -2012,7 +2119,7 @@ async def generate_product(
     Returns: {field: FieldResult} for all enabled fields.
     """
     product = block_brand_in_input(product)
-    _bb = _brand_cleaner(product)
+    _bb = _brand_cleaner(product, (template.get("globalSettings") or {}).get("target_language", "bg"))
     fields_cfg = template.get("fields") or {}
 
     def _mode(f: str) -> str:

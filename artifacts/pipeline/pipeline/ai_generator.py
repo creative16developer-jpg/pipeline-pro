@@ -265,6 +265,12 @@ def _language_instruction(options: dict) -> str:
         return "Write all content in English. Never use emoji or decorative symbols."
     return (
         "Never use emoji or decorative symbols.\n"
+        "Use correct Bulgarian grammar: adjectives agree with their noun "
+        "in gender and number (бързозареждаща кутия, not бързозареждащ "
+        "кутия). Translate colours and the English word \"For\" too "
+        "(Clear Black -> прозрачен черен, For Insta360 X4 -> за Insta360 "
+        "X4). Never use Russian words or letters (ы, э, ё) or Chinese "
+        "characters.\n"
         "Write all content in Bulgarian (Cyrillic script), natural and "
         "fluent for a Bulgarian e-commerce audience. EXCEPTION: genuine "
         "brand names and product line names (e.g. GoPro, Apple iPhone, "

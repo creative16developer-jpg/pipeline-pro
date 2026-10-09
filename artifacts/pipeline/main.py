@@ -261,4 +261,9 @@ if STATIC_DIR.exists():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", settings.port))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    # No auto-reload on the server: every changed .py file (git am) restarted
+    # the API mid-run -- requests failed ("connection refused" on Run
+    # Pipeline, 9 Oct) and in-process background work was cut off. Restart
+    # with pm2 after an update instead. DEV_RELOAD=1 turns it back on.
+    uvicorn.run("main:app", host="0.0.0.0", port=port,
+                reload=os.environ.get("DEV_RELOAD", "").lower() in ("1", "true", "yes"))
