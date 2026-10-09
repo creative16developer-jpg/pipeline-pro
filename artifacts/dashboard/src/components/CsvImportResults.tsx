@@ -32,7 +32,7 @@ export type CsvUploadResponse = {
   encoding_warning?: string;
 };
 
-type TableRow = CsvResultRow & { status: "new" | "updated" | "skipped"; reason?: string };
+type TableRow = CsvResultRow & { status: "new" | "pending" | "updated" | "skipped"; reason?: string };
 
 // Red note for a row whose Sunsky SKU is on several rows (client: "make it
 // red and add note at top of table ... this table have duplicate records").
@@ -50,7 +50,13 @@ export function duplicateBanner(dups: CsvDuplicateSku[] | undefined): string | n
 }
 
 export function buildCsvResultRows(res: CsvUploadResponse): TableRow[] {
-  const rows: TableRow[] = (res.results ?? []).map(r => ({ ...r, status: r.result ?? "updated" }));
+  // Client: a product imported by an earlier CSV but never uploaded showed as
+  // "existing", although it is not in any WooCommerce store. It is "pending"
+  // now; "existing" only when it has been uploaded to a store (Woo column).
+  const rows: TableRow[] = (res.results ?? []).map(r => {
+    const st = r.result ?? "updated";
+    return { ...r, status: st === "updated" && !(r.woo_stores ?? []).length ? "pending" : st };
+  });
   for (const s of res.skipped ?? []) {
     rows.push({
       row: s.row, sunsky_sku: "", site_sku: s.site_sku, csv_title: s.csv_title,
@@ -67,15 +73,18 @@ export function CsvImportResults({ result }: { result: CsvUploadResponse }) {
   const dups = result.summary?.duplicates ?? [];
   const banner = duplicateBanner(dups);
   const rows = onlyProblems ? all.filter(hasProblem) : all;
-  const s = result.summary ?? {
-    new: all.filter(r => r.status === "new").length,
-    updated: all.filter(r => r.status === "updated").length,
+  const s = {
     skipped: all.filter(r => r.status === "skipped").length,
     with_warnings: all.filter(r => (r.warnings?.length ?? 0) > 0).length,
+    ...(result.summary ?? {}),
+    new: all.filter(r => r.status === "new").length,
+    pending: all.filter(r => r.status === "pending").length,
+    updated: all.filter(r => r.status === "updated").length,
   };
   const pill = "px-2.5 py-1 rounded-full font-medium";
   const badge: Record<TableRow["status"], string> = {
     new: "bg-emerald-500/15 text-emerald-400",
+    pending: "bg-amber-500/15 text-amber-400",
     updated: "bg-sky-500/15 text-sky-400",
     skipped: "bg-red-500/15 text-red-400",
   };
@@ -84,6 +93,7 @@ export function CsvImportResults({ result }: { result: CsvUploadResponse }) {
     <div className="space-y-3">
       <div className="flex items-center gap-2 flex-wrap text-xs">
         <span className={cn(pill, "bg-emerald-500/20 text-emerald-400")}>{s.new} new</span>
+        {s.pending > 0 && <span className={cn(pill, "bg-amber-500/20 text-amber-400")}>{s.pending} pending</span>}
         <span className={cn(pill, "bg-sky-500/20 text-sky-400")}>{s.updated} existing</span>
         {s.skipped > 0 && <span className={cn(pill, "bg-red-500/20 text-red-400")}>{s.skipped} skipped</span>}
         {dups.length > 0 && (
@@ -99,8 +109,9 @@ export function CsvImportResults({ result }: { result: CsvUploadResponse }) {
       </div>
 
       <p className="text-[11px] text-muted-foreground">
-        New / existing refers to PipelinePro's product list. Products are created in WooCommerce at the pipeline's
-        Upload step — the Woo column shows the stores a product has been uploaded to.
+        New: not in PipelinePro yet. Pending: already imported before, not uploaded to WooCommerce yet.
+        Existing: already uploaded to a store (see the Woo column). Products are created in WooCommerce at the
+        pipeline's Upload step.
       </p>
 
       {banner && (
