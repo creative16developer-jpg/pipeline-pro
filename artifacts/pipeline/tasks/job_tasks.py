@@ -3139,6 +3139,7 @@ async def _run_sync(db, job):
     cats_synced = cats_created = 0
     attrs_synced = attrs_created = terms_created = 0
     products_updated = 0
+    _updated_ids: set = set()   # one product counted once (category + attribute pass)
 
     # ── Helper: build the product query scoped to the resolved job ──
     # Client feedback confirmed live (multi-store test): joins against
@@ -3750,7 +3751,8 @@ async def _run_sync(db, job):
                         await woo_client.set_product_categories(
                             store, _sync_listing.woo_product_id, woo_cat_ids, primary_woo_cat_id
                         )
-                        products_updated += 1
+                        _updated_ids.add(_sync_listing.woo_product_id)
+                        products_updated = len(_updated_ids)
                         cat_ok += 1
                         await _log(db, job.id, LogLevel.info,
                                    f"  ✓ {prod.sku} (woo #{_sync_listing.woo_product_id}) "
@@ -4109,7 +4111,8 @@ async def _run_sync(db, job):
                         await _log(db, job.id, LogLevel.info,
                                    f"  ✓ {prod.sku} (woo #{_attr_listing.woo_product_id}) "
                                    f"→ {len(woo_attrs)} attribute(s): {attr_names}")
-                        products_updated += 1
+                        _updated_ids.add(_attr_listing.woo_product_id)
+                        products_updated = len(_updated_ids)
                     except Exception as e:
                         await _log(db, job.id, LogLevel.warn,
                                    f"  Failed to set attributes on {prod.sku} "

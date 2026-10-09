@@ -1600,6 +1600,7 @@ async def _poll_batch_pipelines():
                 from models.models import CsvMapping as _CsvMapping
 
                 applied = 0
+                _b_ok = _b_partial = 0
                 for product_id, field_results in by_product.items():
                     product = await db.get(Product, product_id)
                     if not product:
@@ -1662,10 +1663,24 @@ async def _poll_batch_pipelines():
                     if csv_title:
                         product.name = csv_title
                     applied += 1
+                    # Same ok / partial rule as the sync path: a field that
+                    # fell back to logic makes the product "partial".
+                    if any(str((r or {}).get("source", "")).startswith("logic:fallback")
+                           for r in field_results_out.values()):
+                        _b_partial += 1
+                    else:
+                        _b_ok += 1
+                # The review summary read the submit-time stats ("0 OK") --
+                # PL-175 showed "10 total | 0 OK" with all 10 fine.
+                pl.stats_json = {**(pl.stats_json or {}), "total": len(by_product),
+                                 "ok": _b_ok, "fallback": _b_partial,
+                                 "failed": max(0, len(by_product) - applied),
+                                 "batch_submitted": False}
                 await db.commit()
 
                 await _plog(db, pl.id, "generate", "info",
-                            f"Applied batch results to {applied} product(s). Resuming pipeline…")
+                            f"Applied batch results to {applied} product(s) — "
+                            f"{_b_ok} ok | {_b_partial} partial. Resuming pipeline…")
 
                 pl.status = "running"
                 pl.updated_at = datetime.now(timezone.utc)
