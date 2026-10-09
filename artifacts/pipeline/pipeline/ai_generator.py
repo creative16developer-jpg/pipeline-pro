@@ -262,8 +262,9 @@ def _language_instruction(options: dict) -> str:
     """
     lang = options.get("target_language", "bg")
     if lang == "en":
-        return "Write all content in English."
+        return "Write all content in English. Never use emoji or decorative symbols."
     return (
+        "Never use emoji or decorative symbols.\n"
         "Write all content in Bulgarian (Cyrillic script), natural and "
         "fluent for a Bulgarian e-commerce audience. EXCEPTION: genuine "
         "brand names and product line names (e.g. GoPro, Apple iPhone, "

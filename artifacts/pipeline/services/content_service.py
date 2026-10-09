@@ -1897,6 +1897,26 @@ def block_brand_in_input(product: dict) -> dict:
     return {k: (v if k in keep else clean(v)) for k, v in product.items()}
 
 
+# Emoji / pictographs (and their joiners / variation selectors). Client:
+# tags "DJI Osmo Pocket 4P, 8 в 1 филтър, за камера 📷" -- a model added an
+# emoji; never wanted in a shop's titles, meta, tags or descriptions.
+# ™ ® © ° and other normal symbols are kept.
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U00002B00-\U00002BFF"
+    "\U0001F1E6-\U0001F1FF\uFE0E\uFE0F\u200D\u20E3]+"
+)
+
+
+def _drop_emoji(value: str) -> str:
+    if not value or not _EMOJI_RE.search(value):
+        return value
+    out = _EMOJI_RE.sub("", value)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r" +([,.;:!?])", r"\1", out)
+    out = re.sub(r",\s*,", ",", out)
+    return out.strip().strip(",").strip()
+
+
 _LEAD_PUNCT_RE = re.compile(r"^[\s.,;:!?]+")
 _TAG_LEAD_PUNCT_RE = re.compile(r"(<(?:p|li|h[1-6]|td|em|strong)(?:\s[^>]*)?>)[\s.,;:!?]+", re.IGNORECASE)
 
@@ -1940,7 +1960,7 @@ def _brand_cleaner(product: dict):
         if f == "slug":
             nv = _clean_slug(nv) or nv
         elif f != "image_names":
-            nv = _tidy_lead_punct(nv)
+            nv = _tidy_lead_punct(_drop_emoji(nv))
         if nv != v:
             r = {**r, "value": nv}
         return r
