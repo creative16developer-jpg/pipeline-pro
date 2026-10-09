@@ -655,9 +655,16 @@ def _build_extract_prompt(product: dict, rules: list[dict], terms_by_attr: Optio
         # (job_tasks._split_multi_value).
         f"When the title or specs list SEVERAL values for one attribute — for example several "
         f"compatible models written in short form (\"for DJI Osmo Action 5 Pro / 4 / 3\", "
-        f"\"for Insta360 X3/X4/X5\") — return ALL of them in raw_value, never just one: each as "
-        f"its full name, separated by a comma and a space "
-        f"(\"Osmo Action 5 Pro, Osmo Action 4, Osmo Action 3\"; \"X3, X4, X5\").\n"
+        f"\"for Insta360 X3/X4/X5\", \"for DJI Osmo Pocket 3/4\") — return ALL of them in raw_value, "
+        f"never just one: each as its full name with the brand, separated by a comma and a space "
+        f"(\"DJI Osmo Action 5 Pro, DJI Osmo Action 4, DJI Osmo Action 3\"; "
+        f"\"Insta360 X3, Insta360 X4, Insta360 X5\"; \"DJI Osmo Pocket 3, DJI Osmo Pocket 4\").\n"
+        # Client (PL-173): "for DJI Osmo Pocket 4P" came back as the existing
+        # value "DJI Osmo Pocket 4" -- a different model. A close existing
+        # value must never stand in for another model or variant.
+        f"A model is only the same as an existing value when it is exactly that model: a different "
+        f"variant is a different model (\"Pocket 4P\" is not \"Pocket 4\", \"Action 5 Pro\" is not "
+        f"\"Action 5\", \"X4 Air\" is not \"X4\") — then write it as a new value, exactly as in the title.\n"
         f"When an attribute lists \"existing values\", write the existing value that means the same thing, "
         f"exactly as it is spelled there (\"DJI Osmo Action 3\", not \"Osmo Action 3\"); write a new value "
         f"only when none of the existing ones fits.\n"
