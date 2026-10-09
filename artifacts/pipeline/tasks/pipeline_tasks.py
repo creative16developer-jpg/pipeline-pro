@@ -630,6 +630,14 @@ def _gen_config_path(store_id):
 # for the same pipeline has started.
 _GEN_RUN_TOKEN: dict[int, object] = {}
 
+# How many products' content is generated at the same time (AI requests
+# only; saving stays one product at a time, in order). 1 = as before.
+# Env: GENERATE_PRODUCT_CONCURRENCY.
+try:
+    _GENERATE_PRODUCT_CONCURRENCY = max(1, int(__import__("os").environ.get("GENERATE_PRODUCT_CONCURRENCY", "2")))
+except ValueError:
+    _GENERATE_PRODUCT_CONCURRENCY = 2
+
 
 async def _run_generate(db, pl, cfg: dict, force_sync: bool = False, force_regenerate: bool = False) -> dict:
     """Runs one generation pass; the Gemini Flex setting it may switch on
@@ -907,12 +915,90 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
     _GEN_RUN_TOKEN[pl.id] = _my_run
     _stopped = ""
 
+    # Client: "it costs about 1 min per product" -- every product's ~11 AI
+    # requests ran one product after another. Now up to
+    # GENERATE_PRODUCT_CONCURRENCY products (default 2; 1 = as before) are
+    # generated at the same time. Only the AI requests overlap: each product
+    # is prepared (database reads) and saved (database writes, log lines)
+    # one at a time, in the same order as before.
+    import collections as _collections
+    _gen_window: "_collections.deque" = _collections.deque()
+
+    async def _gen_finish(item):
+        nonlocal ok_count, fallback_count, failed_count
+        product = item["product"]
+        csv_title = item["csv_title"]
+        sources = item["sources"]
+        prod_failed = item["prod_failed"]
+        skipped_fields = item["skipped_fields"]
+        sources_before_skip = item["sources_before_skip"]
+        try:
+            results = await item["task"]
+
+            for field, result in results.items():
+                attr = FIELD_ATTR.get(field)
+                if not attr:
+                    continue
+                if result.get("status") == "failed":
+                    await _plog(db, pl.id, "generate", "warn",
+                                f"  {product.sku} [{field}]: {result.get('error', 'failed')}")
+                    prod_failed = True
+                    continue
+                # A field that fell back (AI failed -> template text / empty)
+                # makes the product "fallback" too -- the summary said "2 ok |
+                # 0 fallback" while every field had fallen back (PL-162).
+                if str(result.get("source", "")) in ("logic:fallback", "ai:failed"):
+                    prod_failed = True
+                value = result.get("value", "")
+                source = result.get("source", "logic")
+                if value:
+                    setattr(product, attr, value)
+                    # For a field we skipped ourselves (not the operator's
+                    # own pre-existing override), keep its original
+                    # provenance (e.g. "ai:anthropic:batch") instead of
+                    # overwriting with "override" -- this run genuinely
+                    # didn't regenerate it, so the history of how it was
+                    # ACTUALLY produced is worth preserving for debugging.
+                    if field in skipped_fields and field in sources_before_skip:
+                        sources[field] = sources_before_skip[field]
+                    else:
+                        sources[field] = source
+                    if source.startswith("logic:fallback"):
+                        err_detail = result.get("error") or "AI call failed"
+                        await _plog(db, pl.id, "generate", "warn",
+                                    f"  {product.sku} [{field}]: logic fallback — {err_detail}")
+
+            product.content_source = sources
+
+            # CSV title always wins — re-assert after content gen in case
+            # AI mode overwrote it.
+            if csv_title:
+                product.name = csv_title
+
+            if prod_failed:
+                fallback_count += 1
+            else:
+                ok_count += 1
+
+            await _plog(db, pl.id, "generate", "info",
+                        f"  ({ok_count + fallback_count + failed_count}/{total}) {product.sku}: content ready"
+                        + (" (some fields fell back)" if prod_failed else ""))
+        except Exception as e:
+            await _plog(db, pl.id, "generate", "error",
+                        f"  {product.sku}: generation failed — {e}")
+            failed_count += 1
+        if (ok_count + fallback_count + failed_count) % 10 == 0:
+            await db.commit()
+
     for product in products:
         if _GEN_RUN_TOKEN.get(pl.id) is not _my_run:
             _stopped = "superseded"
         elif await _is_cancelled(db, pl.id):
             _stopped = "cancelled"
         if _stopped:
+            for _w in _gen_window:
+                _w["task"].cancel()
+            _gen_window.clear()
             await db.commit()
             await _plog(db, pl.id, "generate", "warn",
                         "Content generation stopped — "
@@ -971,61 +1057,23 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
 
             sources_before_skip = dict(sources)
 
-            # Run all enabled fields via DAG engine
-            results = await generate_product(prod_dict, product_template)
-
-            for field, result in results.items():
-                attr = FIELD_ATTR.get(field)
-                if not attr:
-                    continue
-                if result.get("status") == "failed":
-                    await _plog(db, pl.id, "generate", "warn",
-                                f"  {product.sku} [{field}]: {result.get('error', 'failed')}")
-                    prod_failed = True
-                    continue
-                # A field that fell back (AI failed -> template text / empty)
-                # makes the product "fallback" too -- the summary said "2 ok |
-                # 0 fallback" while every field had fallen back (PL-162).
-                if str(result.get("source", "")) in ("logic:fallback", "ai:failed"):
-                    prod_failed = True
-                value = result.get("value", "")
-                source = result.get("source", "logic")
-                if value:
-                    setattr(product, attr, value)
-                    # For a field we skipped ourselves (not the operator's
-                    # own pre-existing override), keep its original
-                    # provenance (e.g. "ai:anthropic:batch") instead of
-                    # overwriting with "override" -- this run genuinely
-                    # didn't regenerate it, so the history of how it was
-                    # ACTUALLY produced is worth preserving for debugging.
-                    if field in skipped_fields and field in sources_before_skip:
-                        sources[field] = sources_before_skip[field]
-                    else:
-                        sources[field] = source
-                    if source.startswith("logic:fallback"):
-                        err_detail = result.get("error") or "AI call failed"
-                        await _plog(db, pl.id, "generate", "warn",
-                                    f"  {product.sku} [{field}]: logic fallback — {err_detail}")
-
-            product.content_source = sources
-
-            # CSV title always wins — re-assert after content gen in case
-            # AI mode overwrote it.
-            if csv_title:
-                product.name = csv_title
-
-            if prod_failed:
-                fallback_count += 1
-            else:
-                ok_count += 1
-
+            # Start this product's AI work; save the oldest one when the
+            # window is full.
+            _gen_window.append({
+                "product": product, "csv_title": csv_title, "sources": sources,
+                "prod_failed": prod_failed, "skipped_fields": skipped_fields,
+                "sources_before_skip": sources_before_skip,
+                "task": asyncio.ensure_future(generate_product(prod_dict, product_template)),
+            })
         except Exception as e:
             await _plog(db, pl.id, "generate", "error",
                         f"  {product.sku}: generation failed — {e}")
             failed_count += 1
+        while len(_gen_window) >= _GENERATE_PRODUCT_CONCURRENCY:
+            await _gen_finish(_gen_window.popleft())
 
-        if (ok_count + fallback_count + failed_count) % 10 == 0:
-            await db.commit()
+    while _gen_window:
+        await _gen_finish(_gen_window.popleft())
 
     await db.commit()
 
