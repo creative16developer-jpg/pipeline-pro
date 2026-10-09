@@ -90,6 +90,11 @@ async def _enrich_csv_products_from_sunsky(job_id: int, skus: list[str]) -> None
                         ).scalar_one_or_none()
                     if product:
                         product.raw_data = detail.get("raw_data") or {}
+                        # Empty "Product Title" in the CSV left the SKU as the
+                        # name (PL-176: "PU920"); use the Sunsky name instead.
+                        _sn = (detail.get("name") or (detail.get("raw_data") or {}).get("name") or "").strip()
+                        if _sn and (not product.name or product.name == sku) and not product.csv_title:
+                            product.name = _sn
                         # category_id was previously never set for
                         # CSV-imported products at all -- only raw_data was
                         # filled in, so anything reading Product.category_id
@@ -381,7 +386,18 @@ async def upload_csv(
         ).scalar_one_or_none()
 
         if existing:
-            existing.name = name
+            # An empty CSV title keeps the product's name (it used to become
+            # the SKU). A NEW title means the texts generated from the old one
+            # (meta title, slug, alt, ...) are out of date (PL-176): they are
+            # generated again; fields edited by hand stay.
+            _cs_now = existing.content_source or {}
+            if r["csv_title"] and _cs_now.get("title") != "manual":   # a hand-edited title wins
+                if r["csv_title"].strip() != (existing.csv_title or existing.name or "").strip():
+                    existing.content_source = {k: v for k, v in _cs_now.items() if v == "manual"}
+                existing.name = r["csv_title"]
+                existing.csv_title = r["csv_title"]
+            elif not existing.name:
+                existing.name = name
             existing.site_sku = r["site_sku"] or existing.site_sku
             existing.fetch_job_id = job.id
             existing.status = M.ProductStatus.pending

@@ -1096,6 +1096,7 @@ async def _run_process(db, job):
             # Always call detail API to get paramsTable / optionList / modelLabel
             # for the later sync step, even if we already have image URLs.
             zip_bytes: Optional[bytes] = None
+            detail = None
             if item_no:
                 await _log(db, job.id, LogLevel.info,
                            f"  {product.sku}: fetching detail from Sunsky (product!detail.do)…")
@@ -1124,6 +1125,9 @@ async def _run_process(db, job):
                     }
                     product.raw_data = updated_raw
                     product.image_count = len(image_urls)
+                    _sn = (detail.get("name") or "").strip()
+                    if _sn and (not product.name or product.name == product.sku) and not getattr(product, "csv_title", None):
+                        product.name = _sn        # CSV row without a title (PL-176)
                     await db.commit()
                     await _log(db, job.id, LogLevel.info,
                                f"  {product.sku}: detail fetched — "
@@ -1144,6 +1148,15 @@ async def _run_process(db, job):
                 else:
                     await _log(db, job.id, LogLevel.warn,
                                f"  {product.sku}: no images available from any Sunsky source")
+
+            # Nothing at all from Sunsky (no detail, no images, no spec data
+            # from an earlier run): the SKU is wrong or the product is gone.
+            # PL-176: a made-up CSV SKU was "processed" with 0 images and
+            # would have been uploaded as an empty product.
+            if (item_no and not detail and not zip_bytes and not image_urls
+                    and not (raw.get("paramsTable") or "")):
+                raise RuntimeError("not found on Sunsky (no product data or images) -- "
+                                   "check the Sunsky SKU")
 
             await _log(db, job.id, LogLevel.info,
                        f"Processing {product.sku}: "

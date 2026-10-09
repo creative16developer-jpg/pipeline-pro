@@ -2041,6 +2041,8 @@ def _bg_cleanup(value: str) -> str:
     if not value:
         return value
     out = _CJK_RE.sub(" ", value)
+    # Bulgarian writes "ь" only before "о" (шофьор); "фильтър" is Russian
+    out = re.sub(r"(?<=[\u0400-\u04FF])[ьЬ](?![оО])", "", out)
     out = _FOR_RE.sub(lambda m: (m.group(1) or "") + ("За " if (m.group(1) is not None or m.start() == 0) else "за "), out)
     out = _COLOUR_GROUP_RE.sub(_bg_colours, out)
     if _RU_ONLY_RE.search(out):
