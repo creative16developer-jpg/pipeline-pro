@@ -1668,7 +1668,7 @@ async def run_field(
                     except Exception as _lang_retry_err:
                         logger.warning(f"[{field}] Language retry failed ({_lang_retry_err}) -- using original result")
                 return {"field": field, "value": text_or_error,
-                         "source": "ai:anthropic:batch", "status": "ok"}
+                         "source": f"ai:{ai_provider}:batch", "status": "ok"}
             # Batch request failed for this field -- apply the same
             # fallback_strategy handling a live call failure would get,
             # rather than a separate, parallel failure path.

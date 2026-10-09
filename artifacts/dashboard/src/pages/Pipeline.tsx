@@ -1097,16 +1097,15 @@ export default function Pipeline() {
                   Use Batch / Flex Processing (50% cheaper)
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  <span className="text-foreground/80">Claude (Anthropic):</span> Batch API — usually within an hour,
-                  up to 24h; the pipeline pauses until results are ready.
+                  <span className="text-foreground/80">Claude (Anthropic), OpenAI, OpenRouter:</span> Batch API — usually
+                  within minutes to an hour, up to 24h; the pipeline pauses until results are ready. OpenRouter: only
+                  models with a batch version (shown as "(batch)" in OpenRouter's list) — pick the normal model, the
+                  batch is used automatically; for other models it runs normally.
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   <span className="text-foreground/80">Gemini (Google key):</span> Flex tier — each AI request can take
                   several minutes (Google targets 1–15 min); the pipeline keeps running. If Flex is busy, that request
                   uses the standard tier.
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Other providers (OpenAI, OpenRouter) have no such option — they run normally.
                 </p>
               </div>
             </div>

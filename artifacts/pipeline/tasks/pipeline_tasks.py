@@ -849,13 +849,16 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
         await _plog(db, pl.id, "generate", "info",
                     "Gemini Flex tier ON — 50% cheaper; each AI request can take several minutes "
                     "(Google targets 1–15 min). The pipeline keeps running, it does not pause.")
-    elif pl.use_batch_processing and ai_enabled and ai_provider not in ("anthropic", "gemini"):
+    elif pl.use_batch_processing and ai_enabled and ai_provider not in ("anthropic", "gemini", "openai", "openrouter"):
         await _plog(db, pl.id, "generate", "info",
                     f"Batch / Flex processing isn't available for {ai_provider} — standard requests are used "
-                    f"(Batch: Claude via Anthropic; Flex: Gemini via a Google key)")
+                    f"(Batch: Claude, OpenAI, OpenRouter; Flex: Gemini via a Google key)")
 
-    if pl.use_batch_processing and not force_sync and ai_enabled and ai_provider == "anthropic":
-        from pipeline.ai_generator import submit_anthropic_batch, make_batch_custom_id
+    # Batch: Claude (Anthropic key), OpenAI (OpenAI key) and OpenRouter --
+    # client: "OpenAI does offer a Batch API ... add it, together with
+    # OpenRouter batch" -> yes.
+    if pl.use_batch_processing and not force_sync and ai_enabled and ai_provider in ("anthropic", "openai", "openrouter"):
+        from pipeline.ai_generator import submit_batch, make_batch_custom_id
 
         batch_requests: list[dict] = []
         total_skipped_fields = 0
@@ -890,17 +893,26 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
                         f"Skipping {total_skipped_fields} already-generated field(s) across "
                         f"{total} product(s) — already recorded, not re-requested.")
 
+        batch_id = None
         if batch_requests:
-            batch_id = await submit_anthropic_batch(batch_requests)
+            _who = {"anthropic": "Claude", "openai": "OpenAI", "openrouter": "OpenRouter"}[ai_provider]
+            try:
+                batch_id = await submit_batch(ai_provider, batch_requests)
+            except Exception as _be:
+                # e.g. an OpenRouter model without a batch endpoint (400):
+                # generate normally instead of stopping the pipeline.
+                await _plog(db, pl.id, "generate", "warn",
+                            f"Batch not accepted by {_who} — {str(_be)[:300]}. Using standard requests instead.")
+        if batch_id:
             pl.status = "batch_processing"
             pl.batch_id = batch_id
             pl.batch_submitted_at = datetime.now(timezone.utc)
             pl.updated_at = datetime.now(timezone.utc)
             await db.commit()
             await _plog(db, pl.id, "generate", "info",
-                        f"Batch submitted to Claude — {len(batch_requests)} request(s) "
-                        f"across {total} product(s). Usually completes within 1 hour, "
-                        f"up to 24h max. Pipeline paused until results are ready.")
+                        f"Batch submitted to {_who} ({gs.get('ai_model') or 'default model'}) — "
+                        f"{len(batch_requests)} request(s) across {total} product(s). Usually completes "
+                        f"within minutes to an hour, up to 24h max. Pipeline paused until results are ready.")
             return {"total": total, "ok": 0, "fallback": 0, "failed": 0, "batch_submitted": True}
         # Nothing batchable (e.g. every field is logic/derive) -- fall
         # through to the normal path below, same as batch mode being off.
@@ -1481,7 +1493,8 @@ async def _poll_batch_pipelines():
     """
     from database import make_session_factory
     from models.models import PipelineJob, Product
-    from pipeline.ai_generator import get_anthropic_batch_status, get_anthropic_batch_results, parse_batch_custom_id
+    from pipeline.ai_generator import (get_batch_status as get_anthropic_batch_status,
+                                       get_batch_results as get_anthropic_batch_results, parse_batch_custom_id)
     from services.content_service import generate_product
     from sqlalchemy import select
     import json

@@ -1152,3 +1152,171 @@ async def get_provider_status_live() -> dict:
             status[p]["models"] = lst + [m for m in status[p]["models"] if m not in lst]
             status[p]["live_models"] = True
     return status
+
+
+# ── Batch processing for OpenAI and OpenRouter ───────────────────────────────
+# Client: "OpenAI does offer a Batch API ... we can add it, together with
+# OpenRouter batch" -> "yes". Same flow as the Claude batch: every batchable
+# field of every product is sent as ONE batch (about 50% cheaper), the
+# pipeline pauses, _poll_batch_pipelines picks the results up and resumes.
+# Batch ids are stored with a provider prefix ("openai:…", "openrouter:…");
+# an id without a prefix is a Claude (Anthropic) batch, as before.
+BATCH_PROVIDERS = ("anthropic", "openai", "openrouter")
+_OPENAI_BASE = "https://api.openai.com/v1"
+
+
+def _split_batch_id(batch_id: str) -> tuple[str, str]:
+    for p in ("openai", "openrouter"):
+        if batch_id.startswith(p + ":"):
+            return p, batch_id[len(p) + 1:]
+    return "anthropic", batch_id
+
+
+def _chat_text(body: dict) -> str:
+    try:
+        content = ((body or {}).get("choices") or [{}])[0].get("message", {}).get("content") or ""
+    except Exception:
+        content = ""
+    if isinstance(content, list):
+        content = "".join(str(c.get("text", "")) for c in content if isinstance(c, dict))
+    return _strip_markdown_fence(str(content).strip())
+
+
+async def submit_batch(provider: str, requests: list[dict]) -> str:
+    """{"custom_id", "prompt", "model"} requests -> stored batch id."""
+    if provider == "anthropic":
+        return await submit_anthropic_batch(requests)
+    import httpx
+    model = next((r.get("model") for r in requests if r.get("model")), None)
+    if provider == "openai":
+        key = _get_api_key("OPENAI_API_KEY", "openai")
+        if not key:
+            raise AIGenerationError("OPENAI_API_KEY not configured — add it in Settings")
+        model = model or "gpt-4o-mini"
+        lines = [json.dumps({
+            "custom_id": r["custom_id"], "method": "POST", "url": "/v1/chat/completions",
+            "body": {"model": r.get("model") or model,
+                     "messages": [{"role": "user", "content": r["prompt"]}],
+                     "max_completion_tokens": 6000},
+        }, ensure_ascii=False) for r in requests]
+        hdr = {"Authorization": f"Bearer {key}"}
+        async with httpx.AsyncClient(timeout=120) as client:
+            up = await client.post(f"{_OPENAI_BASE}/files", headers=hdr, data={"purpose": "batch"},
+                                   files={"file": ("pipelinepro_batch.jsonl",
+                                                   ("\n".join(lines) + "\n").encode("utf-8"),
+                                                   "application/jsonl")})
+            if up.status_code >= 400:
+                raise AIGenerationError(f"OpenAI batch file upload failed ({up.status_code}): {up.text[:300]}")
+            r = await client.post(f"{_OPENAI_BASE}/batches", headers=hdr, json={
+                "input_file_id": up.json()["id"], "endpoint": "/v1/chat/completions",
+                "completion_window": "24h", "metadata": {"source": "PipelinePro"}})
+            if r.status_code >= 400:
+                raise AIGenerationError(f"OpenAI batch not accepted ({r.status_code}): {r.text[:300]}")
+            return "openai:" + r.json()["id"]
+    if provider == "openrouter":
+        key = _get_api_key("OPENROUTER_API_KEY", "openrouter")
+        if not key:
+            raise AIGenerationError("OPENROUTER_API_KEY not configured — add it in Settings")
+        model = (model or OPENROUTER_DEFAULT_MODEL)
+        if model.endswith(":batch"):
+            model = model[: -len(":batch")]
+        # Field order matters: OpenRouter returns 400 when "requests" comes first.
+        payload = {
+            "endpoint": "/v1/chat/completions",
+            "model": model,
+            "completion_window": "24h",
+            "requests": [{"custom_id": r["custom_id"],
+                          "body": {"messages": [{"role": "user", "content": r["prompt"]}],
+                                   "max_tokens": 6000}} for r in requests],
+        }
+        async with httpx.AsyncClient(timeout=120) as client:
+            r = await client.post(f"{OPENROUTER_BASE_URL}/batches", content=json.dumps(payload, ensure_ascii=False),
+                                  headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                                           "X-Title": "PipelinePro"})
+            if r.status_code >= 400:
+                raise AIGenerationError(f"OpenRouter batch not accepted ({r.status_code}): {r.text[:300]}")
+            return "openrouter:" + r.json()["id"]
+    raise AIGenerationError(f"Batch processing isn't available for {provider}")
+
+
+async def get_batch_status(batch_id: str) -> dict:
+    """Same shape as get_anthropic_batch_status: processing_status is
+    "ended" once the batch is finished (any way), and request_counts has
+    processing / succeeded / errored / canceled / expired."""
+    provider, bid = _split_batch_id(batch_id)
+    if provider == "anthropic":
+        return await get_anthropic_batch_status(bid)
+    import httpx
+    if provider == "openai":
+        key = _get_api_key("OPENAI_API_KEY", "openai")
+        url, hdr = f"{_OPENAI_BASE}/batches/{bid}", {"Authorization": f"Bearer {key}"}
+    else:
+        key = _get_api_key("OPENROUTER_API_KEY", "openrouter")
+        url, hdr = f"{OPENROUTER_BASE_URL}/batches/{bid}", {"Authorization": f"Bearer {key}"}
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.get(url, headers=hdr)
+    if r.status_code >= 400:
+        raise AIGenerationError(f"{provider} batch status failed ({r.status_code}): {r.text[:300]}")
+    b = r.json()
+    st = b.get("status") or ""
+    rc = b.get("request_counts") or {}
+    total, done, failed = int(rc.get("total") or 0), int(rc.get("completed") or 0), int(rc.get("failed") or 0)
+    ended = st in ("completed", "failed", "expired", "cancelled")
+    return {
+        "id": batch_id,
+        "processing_status": "ended" if ended else "in_progress",
+        "provider_status": st,
+        "request_counts": {
+            "processing": 0 if ended else max(0, total - done - failed),
+            "succeeded": done, "errored": failed,
+            "canceled": (total - done - failed) if st == "cancelled" else 0,
+            "expired": (total - done - failed) if st == "expired" else 0,
+        },
+        "ended_at": b.get("completed_at") or b.get("finalized_at"),
+        "_raw": b,
+    }
+
+
+async def get_batch_results(batch_id: str) -> dict[str, tuple[bool, str]]:
+    """{custom_id: (succeeded, text_or_error)}, like get_anthropic_batch_results."""
+    provider, bid = _split_batch_id(batch_id)
+    if provider == "anthropic":
+        return await get_anthropic_batch_results(bid)
+    status = await get_batch_status(batch_id)
+    raw = status.get("_raw") or {}
+    out: dict[str, tuple[bool, str]] = {}
+
+    def _take(entry: dict):
+        cid = entry.get("custom_id")
+        if not cid:
+            return
+        resp = entry.get("response") or {}
+        if entry.get("error") or int(resp.get("status_code") or 0) >= 400:
+            out[cid] = (False, f"batch request failed: {entry.get('error') or resp.get('body')}"[:500])
+            return
+        text = _chat_text(resp.get("body") or {})
+        out[cid] = (True, text) if text else (False, "batch request returned an empty answer")
+
+    if provider == "openrouter":
+        for entry in raw.get("results") or []:
+            if isinstance(entry, dict):
+                _take(entry)
+        return out
+    import httpx
+    key = _get_api_key("OPENAI_API_KEY", "openai")
+    hdr = {"Authorization": f"Bearer {key}"}
+    async with httpx.AsyncClient(timeout=120) as client:
+        for fid in (raw.get("output_file_id"), raw.get("error_file_id")):
+            if not fid:
+                continue
+            r = await client.get(f"{_OPENAI_BASE}/files/{fid}/content", headers=hdr)
+            if r.status_code >= 400:
+                raise AIGenerationError(f"OpenAI batch results not readable ({r.status_code}): {r.text[:300]}")
+            for line in r.text.splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        _take(json.loads(line))
+                    except ValueError:
+                        continue
+    return out
