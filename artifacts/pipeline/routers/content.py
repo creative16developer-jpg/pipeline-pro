@@ -264,8 +264,8 @@ async def get_openrouter_models(refresh: bool = False):
 @router.get("/providers")
 async def get_providers():
     """Return which AI providers are configured and their available models."""
-    from pipeline.ai_generator import get_provider_status
-    return get_provider_status()
+    from pipeline.ai_generator import get_provider_status_live
+    return await get_provider_status_live()
 
 
 @router.post("/preview")

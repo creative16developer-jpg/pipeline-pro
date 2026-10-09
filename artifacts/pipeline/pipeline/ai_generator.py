@@ -1041,6 +1041,9 @@ def get_provider_status() -> dict:
             "label": "Anthropic (Claude)",
             "default_model": "claude-sonnet-5",
             "models": [
+                "claude-fable-5-1",
+                "claude-opus-5-5",
+                "claude-sonnet-5-5",
                 "claude-fable-5",
                 "claude-opus-5",
                 "claude-sonnet-5",
@@ -1072,3 +1075,80 @@ def get_provider_status() -> dict:
             ],
         },
     }
+
+
+# ── Live model lists ─────────────────────────────────────────────────────────
+# Client: "Now can't use the latest models... Doesn't this list update
+# automatically?" -- the OpenAI / Anthropic / Gemini lists above were fixed
+# in code. Each provider's own model list is now loaded live (with that
+# provider's saved key), cached for an hour; the fixed list is only the
+# fallback when the provider can't be reached.
+_LIVE_MODELS_CACHE: dict[str, tuple[float, list[str]]] = {}
+
+
+def _openai_chat_model(mid: str) -> bool:
+    m = mid.lower()
+    if not (m.startswith("gpt-") or m.startswith("chatgpt-") or re.match(r"^o\d", m)):
+        return False
+    bad = ("audio", "realtime", "transcribe", "tts", "image", "search", "embedding", "moderation", "instruct")
+    return not any(b in m for b in bad)
+
+
+async def _live_models(provider: str) -> list[str] | None:
+    import time, httpx
+    hit = _LIVE_MODELS_CACHE.get(provider)
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            if provider == "anthropic":
+                key = _get_api_key("ANTHROPIC_API_KEY", "anthropic")
+                if not key:
+                    return None
+                r = await client.get("https://api.anthropic.com/v1/models", params={"limit": 100},
+                                     headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+                r.raise_for_status()
+                ids = [m.get("id") for m in (r.json().get("data") or []) if m.get("id")]
+            elif provider == "openai":
+                key = _get_api_key("OPENAI_API_KEY", "openai")
+                if not key:
+                    return None
+                r = await client.get("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}"})
+                r.raise_for_status()
+                ids = sorted((m.get("id") for m in (r.json().get("data") or [])
+                              if m.get("id") and _openai_chat_model(m["id"])), reverse=True)
+            elif provider == "gemini":
+                key = _get_api_key("GEMINI_API_KEY", "gemini")
+                if not key:
+                    return None
+                r = await client.get("https://generativelanguage.googleapis.com/v1beta/models",
+                                     params={"key": key, "pageSize": 200})
+                r.raise_for_status()
+                ids = sorted((str(m.get("name", "")).split("/", 1)[-1] for m in (r.json().get("models") or [])
+                              if "generateContent" in (m.get("supportedGenerationMethods") or [])
+                              and "gemini" in str(m.get("name", ""))), reverse=True)
+            else:
+                return None
+    except Exception as exc:
+        print(f"[ai_generator] live model list for {provider} not loaded: {exc}")
+        return None
+    ids = [i for i in dict.fromkeys(ids) if i]
+    if not ids:
+        return None
+    _LIVE_MODELS_CACHE[provider] = (time.time(), ids)
+    return ids
+
+
+async def get_provider_status_live() -> dict:
+    """get_provider_status() with each configured provider's model list
+    loaded live; the fixed list stays when a provider can't be reached."""
+    import asyncio as _aio
+    status = get_provider_status()
+    provs = [p for p in ("anthropic", "openai", "gemini") if status.get(p, {}).get("configured")]
+    lists = await _aio.gather(*[_live_models(p) for p in provs], return_exceptions=True)
+    for p, lst in zip(provs, lists):
+        if isinstance(lst, list) and lst:
+            # live list first; a saved model that is not in it stays selectable
+            status[p]["models"] = lst + [m for m in status[p]["models"] if m not in lst]
+            status[p]["live_models"] = True
+    return status
