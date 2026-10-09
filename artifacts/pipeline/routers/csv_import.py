@@ -532,7 +532,41 @@ async def upload_csv(
             f"encoding for non-English text (e.g. Cyrillic). Re-save the file explicitly "
             f"as UTF-8 and re-upload, or these product titles will be imported broken."
         )
+    # Kept with the import job, so the same review can be opened again later
+    # (client: "if select existing CSV can't review it as new uploaded").
+    try:
+        job.config = {**(job.config or {}), "csv_result": {k: v for k, v in response.items() if k != "preview"}}
+        await db.commit()
+    except Exception as exc:
+        print(f"[csv_import] could not keep the review for job {job.id}: {exc}")
     return response
+
+
+@router.get("/jobs/{job_id}/results")
+async def csv_job_results(job_id: int, db: AsyncSession = Depends(get_db)):
+    """The review table of an earlier CSV import, with the Woo column
+    (where each product is uploaded) refreshed to today."""
+    job = await db.get(M.Job, job_id)
+    if not job or job.type != M.JobType.csv_import:
+        raise HTTPException(404, "CSV import not found")
+    saved = dict((job.config or {}).get("csv_result") or {})
+    if not saved:
+        return {"job_id": job_id, "available": False}
+    rows = [dict(r) for r in saved.get("results") or []]
+    from models.models import ProductStoreListing as _PSL, Store as _St
+    skus = [r.get("sunsky_sku") for r in rows if r.get("sunsky_sku")]
+    woo_by_sku: dict[str, list[str]] = {}
+    if skus:
+        for _sku, _store in (await db.execute(
+            select(M.Product.sku, _St.name)
+            .join(_PSL, _PSL.product_id == M.Product.id)
+            .join(_St, _St.id == _PSL.store_id)
+            .where(M.Product.sku.in_(skus), _PSL.woo_product_id.isnot(None))
+        )).all():
+            woo_by_sku.setdefault(_sku, []).append(_store)
+    for r in rows:
+        r["woo_stores"] = sorted(set(woo_by_sku.get(r.get("sunsky_sku"), [])))
+    return {**saved, "results": rows, "job_id": job_id, "available": True}
 
 
 # ---------------------------------------------------------------------------

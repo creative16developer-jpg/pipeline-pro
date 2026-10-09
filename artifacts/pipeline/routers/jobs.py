@@ -18,9 +18,15 @@ async def list_jobs(
     limit: int = Query(20, ge=1, le=100),
     type: str = Query(None, description="Filter by job type: fetch|process|upload|sync"),
     status: str = Query(None, description="Filter by status: pending|running|completed|failed"),
+    unused: bool = Query(False, description="Only jobs no pipeline has been run from yet"),
     db: AsyncSession = Depends(get_db),
 ):
     q = select(Job)
+    if unused:
+        # Client: a CSV import a pipeline was already run from should not be
+        # offered again in New Pipeline's CSV list.
+        from models.models import PipelineJob
+        q = q.where(~Job.id.in_(select(PipelineJob.fetch_job_id)))
     if type:
         try:
             q = q.where(Job.type == JobType(type))

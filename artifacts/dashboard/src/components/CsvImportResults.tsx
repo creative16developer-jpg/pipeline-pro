@@ -24,6 +24,7 @@ export type CsvDuplicateSku = { sunsky_sku: string; rows: number[]; used_row: nu
 export type CsvSkippedRow = { row: number; site_sku: string; csv_title: string; reason: string };
 export type CsvUploadResponse = {
   imported: number;
+  job_id?: number;
   errors: string[];
   preview?: any[];
   results?: CsvResultRow[];

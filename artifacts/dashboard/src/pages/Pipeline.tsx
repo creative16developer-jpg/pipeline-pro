@@ -499,7 +499,7 @@ export default function Pipeline() {
     setLoadingJobs(true);
     Promise.all([
       fetch("/api/jobs?type=fetch&status=completed&limit=50").then((r) => r.json()),
-      fetch("/api/jobs?type=csv_import&status=completed&limit=50").then((r) => r.json()),
+      fetch("/api/jobs?type=csv_import&status=completed&limit=50&unused=true").then((r) => r.json()),
     ])
       .then(([fetchData, csvData]) => {
         const fetchJobs: SourceJob[] = (fetchData.jobs ?? []).map((j: any) => ({ ...j, type: "fetch" as const }));
@@ -519,6 +519,27 @@ export default function Pipeline() {
   const fetchJobs     = sourceJobs.filter((j) => j.type === "fetch");
   const csvJobs       = sourceJobs.filter((j) => j.type === "csv_import");
   const selectedJob   = sourceJobs.find((j) => String(j.id) === fetchJobId);
+
+  // Client: "if select existing CSV can't review it as new uploaded" -- the
+  // review table of the selected CSV import is loaded (kept with the import;
+  // the Woo column is refreshed). Imports made before this was kept have none.
+  const [csvReviewMissing, setCsvReviewMissing] = useState(false);
+  useEffect(() => {
+    setCsvReviewMissing(false);
+    if (productSource !== "csv" || !fetchJobId || selectedJob?.type !== "csv_import") return;
+    if (csvUploadResult && String(csvUploadResult.job_id) === fetchJobId) return;
+    let cancelled = false;
+    fetch(`/api/csv/jobs/${encodeURIComponent(fetchJobId)}/results`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (cancelled) return;
+        if (d?.available) setCsvUploadResult(d);
+        else { setCsvUploadResult(null); setCsvReviewMissing(true); }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchJobId, productSource, selectedJob?.type]);
 
   // ── Inline CSV upload ──────────────────────────────────────────────────────
   const handleInlineCsvUpload = async () => {
@@ -544,7 +565,7 @@ export default function Pipeline() {
       setCsvFile(null);
       // Reload source jobs so the new import appears in the selector
       setLoadingJobs(true);
-      const csvData = await fetch("/api/jobs?type=csv_import&status=completed&limit=50").then((r) => r.json());
+      const csvData = await fetch("/api/jobs?type=csv_import&status=completed&limit=50&unused=true").then((r) => r.json());
       const newCsvJobs: SourceJob[] = (csvData.jobs ?? []).map((j: any) => ({ ...j, type: "csv_import" as const }));
       setSourceJobs((prev) => {
         const others = prev.filter((j) => j.type !== "csv_import");
@@ -1021,10 +1042,15 @@ export default function Pipeline() {
                   </div>
                 </>
               )}
+              {!csvUploadResult && csvReviewMissing && (
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  The review of this CSV import isn't available (it was imported before reviews were kept).
+                </p>
+              )}
               {csvUploadResult && (
                 <div className="mt-3">
                   <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-medium text-foreground/80">Last upload — results</p>
+                    <p className="text-xs font-medium text-foreground/80">CSV import #{csvUploadResult.job_id} — review</p>
                     <button onClick={() => setCsvUploadResult(null)} className="text-xs text-muted-foreground hover:text-foreground">Hide</button>
                   </div>
                   <CsvImportResults result={csvUploadResult} />
