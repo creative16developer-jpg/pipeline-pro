@@ -246,7 +246,10 @@ def _slugify(text: str) -> str:
     except Exception:
         pass
     text = text.lower()
-    text = re.sub(r"[^a-z0-9\s-]", "", text)
+    # Apostrophes join ("kid's" -> "kids"); any other symbol separates words:
+    # "Case(Black)" was "caseblack", now "case-black" (seen on PL-174).
+    text = re.sub(r"['’`]", "", text)
+    text = re.sub(r"[^a-z0-9\s-]", " ", text)
     text = re.sub(r"[\s_]+", "-", text)
     text = re.sub(r"-{2,}", "-", text)
     return text.strip("-")
