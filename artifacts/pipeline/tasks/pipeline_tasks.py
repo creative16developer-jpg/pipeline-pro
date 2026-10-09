@@ -378,6 +378,29 @@ async def _execute_pipeline(pipeline_job_id: int):
         await celery_engine.dispose()
 
 
+def _template_keeping_manual_fields(product, template: dict) -> tuple[dict, list[str]]:
+    """For "Re-generate content": a field the operator edited by hand
+    (content_source "manual", set when Content Review / Enrich saves a
+    changed value) keeps its text. Client: "If I edit manually, no need to
+    regenerate these fields again." Same "overrides" mechanism as
+    _template_skipping_generated_fields, so dependent fields still see the
+    edited value."""
+    import copy as _copy
+    from services.content_service import FIELD_ATTR
+    filtered = _copy.deepcopy(template)
+    overrides = filtered.setdefault("overrides", {})
+    sources = product.content_source or {}
+    kept: list[str] = []
+    for field, attr in FIELD_ATTR.items():
+        if field in overrides or sources.get(field) != "manual":
+            continue
+        val = getattr(product, attr, None)
+        if val:
+            overrides[field] = val
+            kept.append(field)
+    return filtered, kept
+
+
 def _template_skipping_generated_fields(product, template: dict) -> tuple[dict, list[str]]:
     """
     Client feedback confirmed live: navigating back a step (e.g. Enrich ->
@@ -765,6 +788,10 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
             select(Product).where(Product.fetch_job_id == pl.fetch_job_id)
         )
     ).scalars().all()
+    # "Re-generate selected" (client): only the products ticked in Content Review.
+    _only_ids = {int(x) for x in (cfg.get("only_product_ids") or []) if str(x).isdigit()}
+    if _only_ids:
+        products = [p for p in products if p.id in _only_ids]
 
     total = len(products)
 
@@ -1066,6 +1093,11 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
                     await _plog(db, pl.id, "generate", "info",
                                 f"  {product.sku}: skipping already-generated "
                                 f"{', '.join(skipped_fields)} — already recorded")
+            else:
+                product_template, skipped_fields = _template_keeping_manual_fields(product, template)
+                if skipped_fields:
+                    await _plog(db, pl.id, "generate", "info",
+                                f"  {product.sku}: keeping your edited {', '.join(skipped_fields)}")
 
             sources_before_skip = dict(sources)
 
@@ -2052,13 +2084,18 @@ async def _regenerate_content(pipeline_job_id: int):
                                 f"Re-generate uses the CURRENT Content Generation settings: {_fmt(_new_gs)}"
                                 + (f" (this pipeline started with {_fmt(_old_gs)})" if _fmt(_old_gs) != _fmt(_new_gs) and _old_gs else ""))
                     await db.commit()
+                _sel = list((pl.config or {}).get("regenerate_product_ids") or [])
+                if _sel:
+                    cfg = {**cfg, "only_product_ids": _sel}
+                    await _plog(db, pl.id, "generate", "info",
+                                f"Re-generating {len(_sel)} selected product(s) only")
                 stats = await _run_generate(db, pl, cfg, force_sync=True, force_regenerate=True)
                 if stats.get("stopped"):
                     return   # cancelled / a newer run took over -- leave its status alone
 
                 pl.status = "content_review"
                 pl.current_step = "content_review"
-                pl.config = {k: v for k, v in (pl.config or {}).items() if k != "regenerating"}
+                pl.config = {k: v for k, v in (pl.config or {}).items() if k not in ("regenerating", "regenerate_product_ids")}
                 pl.updated_at = datetime.now(timezone.utc)
                 await db.commit()
                 await _plog(db, pl.id, "content_review", "info",
@@ -2072,7 +2109,7 @@ async def _regenerate_content(pipeline_job_id: int):
                 # regenerates after that").
                 pl.status = "content_review"
                 pl.current_step = "content_review"
-                pl.config = {k: v for k, v in (pl.config or {}).items() if k != "regenerating"}
+                pl.config = {k: v for k, v in (pl.config or {}).items() if k not in ("regenerating", "regenerate_product_ids")}
                 pl.error_message = str(e)
                 pl.updated_at = datetime.now(timezone.utc)
                 await db.commit()

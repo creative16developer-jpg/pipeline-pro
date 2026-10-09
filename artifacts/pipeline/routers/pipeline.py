@@ -950,8 +950,14 @@ async def back_to_category_review(pl_id: int, db: AsyncSession = Depends(get_db)
     return _pl_dict(pl)
 
 
+class RegenerateRequest(BaseModel):
+    # Client: "Re-generate selected" -- only these products; empty / not
+    # sent = every product of the pipeline, as before.
+    product_ids: Optional[list[int]] = None
+
+
 @router.post("/{pl_id}/regenerate-content")
-async def regenerate_content(pl_id: int, db: AsyncSession = Depends(get_db)):
+async def regenerate_content(pl_id: int, body: Optional[RegenerateRequest] = None, db: AsyncSession = Depends(get_db)):
     """Re-run content generation for this pipeline's products, then
     return to Content Review with the fresh results. Client feedback
     item #10: "Re-generate content" had no onClick handler at all,
@@ -969,11 +975,13 @@ async def regenerate_content(pl_id: int, db: AsyncSession = Depends(get_db)):
     # Marker so a server restart mid-re-generate returns this pipeline to
     # Content Review (main.py startup recovery) instead of failing it --
     # it was already reviewable before the operator clicked Re-generate.
-    pl.config = {**(pl.config or {}), "regenerating": True}
+    pl.config = {**(pl.config or {}), "regenerating": True,
+                 "regenerate_product_ids": list((body.product_ids if body else None) or [])}
 
     db.add(PipelineLog(
         pipeline_job_id=pl_id, level="info", step="generate",
-        message="Operator requested content re-generation from Content Review",
+        message="Operator requested content re-generation from Content Review"
+                + (f" ({len(body.product_ids)} selected product(s))" if body and body.product_ids else ""),
         created_at=datetime.now(timezone.utc),
     ))
     await db.commit()

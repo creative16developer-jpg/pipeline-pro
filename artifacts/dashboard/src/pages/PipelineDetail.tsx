@@ -1699,10 +1699,16 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
   };
 
   const handleRegenerateContent = async () => {
-    if (!confirm("Re-generate content for this pipeline's products? This runs content generation again and will overwrite the current generated fields.")) return;
+    // Client: regenerate only the ticked products; fields edited by hand are kept.
+    const ids = Array.from(selected);
+    const what = ids.length ? `the ${ids.length} selected product(s)` : "all products of this pipeline";
+    if (!confirm(`Re-generate content for ${what} with the current Content Generation settings? Fields you edited by hand are kept; all other fields are generated again.`)) return;
     setRegenerating(true);
     try {
-      const r = await fetch(`/api/pipelines/${pl.id}/regenerate-content`, { method: "POST" });
+      const r = await fetch(`/api/pipelines/${pl.id}/regenerate-content`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product_ids: ids }),
+      });
       if (!r.ok) throw new Error(await r.text());
       toast({ title: "Re-generating content", description: "This may take a moment — the page will update automatically." });
       onDone();
@@ -2374,11 +2380,13 @@ function ContentReviewSection({ pl, onDone }: { pl: Pipeline; onDone: () => void
               <button
                 onClick={handleRegenerateContent}
                 disabled={regenerating}
-                title="Re-run content generation for this pipeline's products"
+                title={selected.size
+                  ? "Re-generate only the ticked products (fields you edited by hand are kept)"
+                  : "Re-generate all products of this pipeline (fields you edited by hand are kept) — tick products to re-generate only those"}
                 className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-card border border-border text-foreground/70 hover:bg-background disabled:opacity-50 flex items-center gap-1.5"
               >
                 {regenerating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                Re-generate content
+                {selected.size ? `Re-generate selected (${selected.size})` : "Re-generate content"}
               </button>
             )}
             <button
@@ -2978,7 +2986,7 @@ export default function PipelineDetail() {
               process:    { url: "back-to-process",         confirmMsg: "Go back to Process? This re-runs image processing for this pipeline's products, then continues forward through the pipeline again.", label: "Back to Process" },
               enrich:     { url: "back-to-enrich-review",   confirmMsg: "Go back to Enrich Review? Your generated content won't be lost — you'll continue forward again after re-confirming attributes.", label: "Back to Enrich Review" },
               cat_review: { url: "back-to-category-review", confirmMsg: "Go back to Category Review? Your generated content won't be lost — you'll return here after re-confirming categories.", label: "Back to Category Review" },
-              generate:   { url: "regenerate-content",      confirmMsg: "Re-generate content for this pipeline's products? This runs content generation again and will overwrite the current generated fields.", label: "Re-generating content" },
+              generate:   { url: "regenerate-content",      confirmMsg: "Re-generate content for this pipeline's products? Fields you edited by hand are kept; all other fields are generated again.", label: "Re-generating content" },
             };
             const entry = stageEndpoints[key];
             if (!entry) return;
