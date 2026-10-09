@@ -1508,9 +1508,17 @@ export default function ContentGeneration() {
                     <option value="">
                       Default ({AI_PROVIDERS[config.globalSettings.ai_provider]?.defaultModel ?? "auto"})
                     </option>
-                    {(AI_PROVIDERS[config.globalSettings.ai_provider]?.models ?? []).map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
+                    {(() => {
+                      // The provider's live model list (loaded from its API by
+                      // /api/generate/providers); the fixed list only when that
+                      // failed. The saved model is always kept selectable.
+                      const p = config.globalSettings.ai_provider;
+                      const live = providerStatus[p]?.models ?? [];
+                      const list = live.length ? [...live] : [...(AI_PROVIDERS[p]?.models ?? [])];
+                      const cur = config.globalSettings.ai_model;
+                      if (cur && !list.includes(cur)) list.unshift(cur);
+                      return list.map((m) => <option key={m} value={m}>{m}</option>);
+                    })()}
                   </select>
                 </div>
                 )}
