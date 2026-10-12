@@ -1275,6 +1275,8 @@ async def _run_process(db, job):
                 await db.commit()
 
             product.status = ProductStatus.processed
+            if (product.error_message or "").startswith("not found on Sunsky"):
+                product.error_message = None      # found this time
             prod_ok += 1
             await _log(db, job.id, LogLevel.info,
                        f"  {product.sku}: {processed_count}/{len(image_urls)} images OK")
@@ -1846,6 +1848,15 @@ async def _run_upload(db, job):
         products = (
             await db.execute(select(Product).where(*base_filter).limit(limit))
         ).scalars().all()
+
+    # Never upload a product Process could not find on Sunsky (PL-176/177:
+    # a wrong CSV SKU became an empty product in WooCommerce).
+    _missing = [p for p in products if (p.error_message or "").startswith("not found on Sunsky")]
+    if _missing:
+        products = [p for p in products if p not in _missing]
+        await _log(db, job.id, LogLevel.warn,
+                   f"  {len(_missing)} product(s) not found on Sunsky -- not uploaded: "
+                   + ", ".join(p.sku for p in _missing[:10]))
 
     # Even when Phase 1 has nothing to upload, Phase 2 must still run to
     # assign categories + attributes to products already in WooCommerce.

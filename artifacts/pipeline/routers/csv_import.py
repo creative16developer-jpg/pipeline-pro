@@ -394,6 +394,14 @@ async def upload_csv(
             if r["csv_title"] and _cs_now.get("title") != "manual":   # a hand-edited title wins
                 if r["csv_title"].strip() != (existing.csv_title or existing.name or "").strip():
                     existing.content_source = {k: v for k, v in _cs_now.items() if v == "manual"}
+                    # Generate skips a field whose column already has a value,
+                    # so the texts made from the old title are emptied too
+                    # (PL-177). Slug and image file names stay: changing them
+                    # would change the product URL / uploaded file names.
+                    for _f in ("short_description", "meta_title", "meta_description", "tags",
+                               "image_alt", "focus_keyword", "image_caption", "image_description"):
+                        if _cs_now.get(_f) != "manual":
+                            setattr(existing, _f, None)
                 existing.name = r["csv_title"]
                 existing.csv_title = r["csv_title"]
             elif not existing.name:

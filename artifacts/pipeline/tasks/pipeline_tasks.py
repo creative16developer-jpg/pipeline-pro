@@ -792,6 +792,14 @@ async def _run_generate_impl(db, pl, cfg: dict, force_sync: bool = False, force_
     _only_ids = {int(x) for x in (cfg.get("only_product_ids") or []) if str(x).isdigit()}
     if _only_ids:
         products = [p for p in products if p.id in _only_ids]
+    # A product Process could not find on Sunsky (wrong SKU) gets no content
+    # (PL-177: it was still generated and uploaded).
+    _missing = [p for p in products if (p.error_message or "").startswith("not found on Sunsky")]
+    if _missing:
+        products = [p for p in products if p not in _missing]
+        await _plog(db, pl.id, "generate", "warn",
+                    f"Skipping {len(_missing)} product(s) not found on Sunsky: "
+                    + ", ".join(p.sku for p in _missing[:10]))
 
     total = len(products)
 
