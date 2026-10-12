@@ -640,6 +640,15 @@ def _build_extract_prompt(product: dict, rules: list[dict], terms_by_attr: Optio
     source_block = ""
     if include_title:
         source_block += f"Title: {name}\n"
+        # The shop's own title (CSV / edited), when it differs from Sunsky's.
+        # Live PL-188: Sunsky "For DJI OSMO Pocket 3 ..." (specs: Pocket 3),
+        # shop title "... DJI Osmo Pocket 3/4 ..." -> AI gave Pocket 3 only.
+        # The shop title is the operator's newer, checked information.
+        shop = str(product.get("_current_name") or "").strip()
+        if shop and shop.lower() != str(name or "").strip().lower():
+            source_block += (f"Shop title (the shop's own, checked title -- when it names MORE "
+                             f"compatible models or devices than the Sunsky title/specs, include "
+                             f"all of them): {shop}\n")
     if include_specs:
         source_block += f"Specs:\n{specs_text}"
 
