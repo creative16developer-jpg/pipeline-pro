@@ -1,3 +1,4 @@
+import re
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
@@ -245,7 +246,10 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
     from models.models import Product
 
     # ── Parse SKU list ───────────────────────────────────────────────────────
-    sku_list = [s.strip() for s in (body.skus or "").split(",") if s.strip()]
+    # Commas, spaces, new lines or ";" (the form says "comma/whitespace";
+    # a list pasted from Excel is one per line). Only commas were split, so
+    # "A B C" was one SKU and nothing was found (PL test, 12 Oct).
+    sku_list = list(dict.fromkeys(s for s in re.split(r"[\s,;]+", body.skus or "") if s))
 
     # ── Build parallel search tasks ──────────────────────────────────────────
     # Each task returns either a list[dict] (SPU path) or a search-result dict

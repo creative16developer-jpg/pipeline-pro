@@ -1283,6 +1283,32 @@ async def get_batch_status(batch_id: str) -> dict:
     }
 
 
+async def cancel_batch(batch_id: str) -> str:
+    """Best effort: stop a submitted batch at the provider, so a cancelled
+    pipeline is not billed for the rest. Returns a short status for the log."""
+    provider, bid = _split_batch_id(batch_id)
+    try:
+        if provider == "anthropic":
+            from anthropic import AsyncAnthropic
+            client = AsyncAnthropic(api_key=_get_api_key("ANTHROPIC_API_KEY", "anthropic"))
+            b = await client.messages.batches.cancel(bid)
+            return f"cancel requested ({getattr(b, 'processing_status', '')})"
+        import httpx
+        if provider == "openai":
+            key = _get_api_key("OPENAI_API_KEY", "openai")
+            url = f"{_OPENAI_BASE}/batches/{bid}/cancel"
+        else:
+            key = _get_api_key("OPENROUTER_API_KEY", "openrouter")
+            url = f"{OPENROUTER_BASE_URL}/batches/{bid}/cancel"
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(url, headers={"Authorization": f"Bearer {key}"})
+        if r.status_code >= 400:
+            return f"could not cancel ({r.status_code}): {r.text[:150]}"
+        return "cancel requested"
+    except Exception as exc:
+        return f"could not cancel: {exc}"[:200]
+
+
 async def get_batch_results(batch_id: str) -> dict[str, tuple[bool, str]]:
     """{custom_id: (succeeded, text_or_error)}, like get_anthropic_batch_results."""
     provider, bid = _split_batch_id(batch_id)

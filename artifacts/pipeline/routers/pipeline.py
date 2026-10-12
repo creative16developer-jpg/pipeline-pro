@@ -1172,6 +1172,7 @@ async def cancel_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
     if pl.status in ("completed", "failed", "cancelled"):
         raise HTTPException(400, "Pipeline cannot be cancelled")
 
+    _was_batch = pl.status == "batch_processing" and pl.batch_id
     pl.status = "cancelled"
     pl.updated_at = datetime.now(timezone.utc)
     await db.commit()
@@ -1182,6 +1183,14 @@ async def cancel_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
         message="Pipeline cancelled by user",
     ))
     await db.commit()
+    # A batch waiting at the provider keeps running (and is billed) unless
+    # it is cancelled there too (12 Oct test, PL-181).
+    if _was_batch:
+        from pipeline.ai_generator import cancel_batch
+        _res = await cancel_batch(pl.batch_id)
+        db.add(PipelineLog(pipeline_job_id=pl.id, level="info",
+                           message=f"Batch {pl.batch_id}: {_res}"))
+        await db.commit()
 
     from tasks.pipeline_tasks import _advance_queue
     await _advance_queue(db, pl.store_id, pl.id)
@@ -1276,6 +1285,9 @@ async def retry_pipeline(pl_id: int, db: AsyncSession = Depends(get_db)):
         fetch_job_id=pl.fetch_job_id,
         status=initial_status,
         config=pl.config,
+        # Retry keeps the Batch / Flex choice (12 Oct test: PL-181 retried
+        # as PL-182 ran with normal, full-price requests).
+        use_batch_processing=bool(pl.use_batch_processing),
     )
     db.add(new_pl)
     await db.commit()

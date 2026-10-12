@@ -1020,13 +1020,13 @@ async def _run_process(db, job):
             await _log(db, job.id, LogLevel.info,
                        f"Process scoped to fetch job #{job.source_job_id} — "
                        f"{len(products)} product(s) found"
-                       + (f" ({_not_eligible} more already uploaded — their existing processed "
-                          f"images are reused, not re-processed)" if _not_eligible > 0 else ""))
+                       + (f" ({_not_eligible} more already processed or uploaded — their existing "
+                          f"processed images are reused, not re-processed)" if _not_eligible > 0 else ""))
         elif _stamped_total:
             await _log(db, job.id, LogLevel.info,
                        f"All {_stamped_total} product(s) from fetch job #{job.source_job_id} are "
-                       f"already uploaded — their existing processed images are reused "
-                       f"(not re-processed)")
+                       f"already processed or uploaded — their existing processed images are "
+                       f"reused (not re-processed)")
         else:
             await _log(db, job.id, LogLevel.warn,
                        f"No products stamped with fetch_job_id={job.source_job_id} — "

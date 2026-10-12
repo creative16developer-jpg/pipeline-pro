@@ -1194,9 +1194,26 @@ def _derive_meta_title(product: dict, options: dict, resolved: dict) -> str:
     if len(meta) > max_chars:
         if len(title) <= max_chars:
             return title
-        return _truncate_no_mid_word(title, max_chars)
+        return _cut_at_clause(title, max_chars)
 
     return meta
+
+
+_CLAUSE_CUTS = (" - ", " \u2013 ", " | ", ", ", " със ", " с ", " от ", " и ", " with ", " and ")
+
+
+def _cut_at_clause(title: str, max_chars: int) -> str:
+    """A title too long for the meta title is cut where a phrase ends, not
+    mid-phrase. PL-178: 'Магнитен UV филтър за DJI Osmo Pocket 3 от
+    темперирано оптично' -> 'Магнитен UV филтър за DJI Osmo Pocket 3'."""
+    best = -1
+    for sep in _CLAUSE_CUTS:
+        i = title.rfind(sep, 0, max_chars + 1)
+        if i >= max_chars * 0.5 and i > best:
+            best = i
+    if best > 0:
+        return title[:best].rstrip(" ,-\u2013|")
+    return _truncate_no_mid_word(title, max_chars)
 
 
 def _derive_image_names(product: dict, options: dict, resolved: dict) -> str:
