@@ -559,7 +559,8 @@ async def upload_csv(
     # Kept with the import job, so the same review can be opened again later
     # (client: "if select existing CSV can't review it as new uploaded").
     try:
-        job.config = {**(job.config or {}), "csv_result": {k: v for k, v in response.items() if k != "preview"}}
+        job.config = {**(job.config or {}), "csv_result": {k: v for k, v in response.items() if k != "preview"},
+                      "item_nos": [r["sunsky_sku"] for r in rows if r.get("sunsky_sku")]}
         await db.commit()
     except Exception as exc:
         print(f"[csv_import] could not keep the review for job {job.id}: {exc}")

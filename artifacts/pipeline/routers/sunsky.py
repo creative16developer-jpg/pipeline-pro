@@ -415,6 +415,9 @@ async def fetch_products(body: SunskyFetchRequest, db: AsyncSession = Depends(ge
 
     job.status = JobStatus.completed
     job.total_items = len(products)
+    # The SKUs of this fetch, so a pipeline started later from this job can
+    # find them even after they were fetched again by another job.
+    job.config = {**(job.config or {}), "item_nos": [p["sku"] for p in products if p.get("sku")]}
     job.processed_items = saved + updated
     job.failed_items = 0
     job.progress_percent = 100.0

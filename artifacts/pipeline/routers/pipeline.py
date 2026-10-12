@@ -131,6 +131,40 @@ async def create_pipeline(body: PipelineCreateRequest, db: AsyncSession = Depend
     if fetch_job.type not in (JobType.fetch, JobType.csv_import):
         raise HTTPException(400, f"Job #{body.fetch_job_id} is not a valid source job")
 
+    # A product belongs to the LATEST fetch / CSV it was in. PL-185 (live):
+    # CSV #573 was chosen again, but its 14 products had been imported again
+    # by later jobs -> 0 products, and the run still "completed
+    # successfully". The job's own SKU list links them back to this job.
+    from models.models import Product as _P
+    from sqlalchemy import func as _f, update as _upd
+    _cfg = fetch_job.config or {}
+    _skus = list(_cfg.get("item_nos") or [])
+    if not _skus:
+        _skus = [r.get("sunsky_sku") for r in ((_cfg.get("csv_result") or {}).get("results") or [])
+                 if r.get("sunsky_sku")]
+    if not _skus and isinstance(_cfg.get("skus"), list):
+        _skus = list(_cfg["skus"])
+    if _skus:
+        # never take products away from a pipeline that is running / paused
+        _busy = [j for (j,) in (await db.execute(
+            select(PipelineJob.fetch_job_id).where(
+                cast(PipelineJob.status, String).in_(list(ACTIVE_STATUSES) + ["queued"]),
+                PipelineJob.fetch_job_id.isnot(None))
+        )).all() if j != fetch_job.id]
+        from sqlalchemy import or_ as _or
+        _q = _upd(_P).where(_P.sku.in_(_skus),
+                            _or(_P.fetch_job_id.is_(None), _P.fetch_job_id != fetch_job.id))
+        if _busy:
+            _q = _q.where(_or(_P.fetch_job_id.is_(None), _P.fetch_job_id.notin_(_busy)))
+        await db.execute(_q.values(fetch_job_id=fetch_job.id))
+        await db.commit()
+    _linked = (await db.execute(select(_f.count(_P.id)).where(_P.fetch_job_id == fetch_job.id))).scalar() or 0
+    if not _linked:
+        _what = "CSV import" if fetch_job.type == JobType.csv_import else "fetch job"
+        raise HTTPException(400, f"{_what} #{fetch_job.id} has no products any more -- they were "
+                                 f"imported again in a later job. Upload the CSV again (or fetch "
+                                 f"again) and start the pipeline from that.")
+
     # Queue check: is another pipeline running/in-review for this store?
     active = (
         await db.execute(
