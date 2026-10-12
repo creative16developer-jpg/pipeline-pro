@@ -2054,9 +2054,30 @@ def _drop_ru_sentences(text: str) -> str:
     return "".join(x for x in parts if not _RU_ONLY_RE.search(x))
 
 
+# The model talking to itself inside a Bulgarian field (live: meta title
+# "... ND32Let me verify"). English only, so it can't be shop text.
+_AI_CHATTER_RE = re.compile(
+    r"(?<![A-Za-z])(?:Let me\b|Let's (?:check|verify|see|make)\b|I'll\b|I will\b|I need to\b|"
+    r"I should\b|Wait[,.]|Actually[,.]|Hmm\b|Here is\b|Here's\b|Note:|Okay[,.]|"
+    r"The (?:answer|meta title|title|description) (?:is|should)\b).*$", re.DOTALL)
+
+
+def _drop_ai_chatter(value: str) -> str:
+    m = _AI_CHATTER_RE.search(value or "")
+    if not m or m.start() < 3:          # whole value is chatter: leave it to review
+        return value
+    head = value[:m.start()].rstrip(" \t\n-–—:;,")
+    if "<" in head and head.count("<") > head.count(">"):
+        return value                     # would cut inside an HTML tag
+    # drop opening tags left empty at the end ("...</p>\n<p>")
+    head = re.sub(r"(?:\s*<(?:p|li|ul|ol|strong|em|b|h[1-6])(?:\s[^>]*)?>)+\s*$", "", head)
+    return head.rstrip()
+
+
 def _bg_cleanup(value: str) -> str:
     if not value:
         return value
+    value = _drop_ai_chatter(value)
     out = _CJK_RE.sub(" ", value)
     # Bulgarian writes "ь" only before "о" (шофьор); "фильтър" is Russian
     out = re.sub(r"(?<=[\u0400-\u04FF])[ьЬ](?![оО])", "", out)

@@ -625,6 +625,14 @@ def _extract_anthropic_text(content: list) -> str:
     below -- both can include a ThinkingBlock before the text block (patch
     111), and batch results have the identical content-list shape.
     """
+    # Several text blocks happen with adaptive thinking (Haiku 5.5): a draft,
+    # thinking, then the final answer. Live: meta title
+    # "... ND32Let me verify" was the first (draft) block. The LAST
+    # non-empty text block is the answer.
+    texts = [block.text.strip() for block in content
+             if getattr(block, "type", None) == "text" and (getattr(block, "text", "") or "").strip()]
+    if texts:
+        return _strip_markdown_fence(texts[-1])
     for block in content:
         if getattr(block, "type", None) == "text":
             return _strip_markdown_fence(block.text.strip())
