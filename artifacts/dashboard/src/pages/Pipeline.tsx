@@ -1053,6 +1053,11 @@ export default function Pipeline() {
                     <p className="text-xs font-medium text-foreground/80">CSV import #{csvUploadResult.job_id} — review</p>
                     <button onClick={() => setCsvUploadResult(null)} className="text-xs text-muted-foreground hover:text-foreground">Hide</button>
                   </div>
+                  {(csvUploadResult as any).rebuilt && (
+                    <p className="mb-2 text-[11px] text-muted-foreground">
+                      Imported before reviews were kept: rebuilt from this import's products as they are now (row numbers and import warnings are not known).
+                    </p>
+                  )}
                   <CsvImportResults result={csvUploadResult} />
                 </div>
               )}

@@ -575,7 +575,23 @@ async def csv_job_results(job_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "CSV import not found")
     saved = dict((job.config or {}).get("csv_result") or {})
     if not saved:
-        return {"job_id": job_id, "available": False}
+        # Imported before reviews were kept (client: "selecting existing CSV
+        # but can't review it", #573): rebuilt from the products of that
+        # import as they are now. Row order / import warnings are not known.
+        prods = (await db.execute(
+            select(M.Product).where(M.Product.fetch_job_id == job_id).order_by(M.Product.id)
+        )).scalars().all()
+        if not prods:
+            return {"job_id": job_id, "available": False}
+        built = [{
+            "row": i + 2, "sunsky_sku": p.sku, "site_sku": p.site_sku or "",
+            "csv_title": p.csv_title or "", "price": p.price, "sale_price": p.sale_price,
+            "qty": p.stock_quantity, "warnings": [], "result": "updated",
+        } for i, p in enumerate(prods)]
+        saved = {"imported": len(built), "results": built, "skipped": [], "errors": [],
+                 "rebuilt": True,
+                 "summary": {"new": 0, "updated": len(built), "skipped": 0,
+                             "with_warnings": 0, "duplicates": []}}
     rows = [dict(r) for r in saved.get("results") or []]
     from models.models import ProductStoreListing as _PSL, Store as _St
     skus = [r.get("sunsky_sku") for r in rows if r.get("sunsky_sku")]
