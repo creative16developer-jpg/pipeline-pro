@@ -382,6 +382,22 @@ async def create_product(store: Store, product_data: dict) -> dict:
         return result
 
 
+async def get_product_by_id(store: Store, woo_id: int) -> Optional[dict]:
+    """A WooCommerce product by id; None when it is gone (404) or in the trash."""
+    try:
+        async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
+            resp = await client.get(f"{_base_url(store)}/products/{int(woo_id)}",
+                                    headers=_auth_header(store))
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            d = resp.json()
+            return d if isinstance(d, dict) and d.get("id") and d.get("status") != "trash" else None
+    except Exception as e:
+        print(f"[woo_client.get_product_by_id] lookup failed for id={woo_id!r}: {e}")
+        return None
+
+
 async def get_product_by_sku(store: Store, sku: str) -> Optional[dict]:
     """
     Look up a WooCommerce product by SKU.

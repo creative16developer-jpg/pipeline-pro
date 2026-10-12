@@ -2046,6 +2046,20 @@ async def _run_upload(db, job):
             # it was actually being applied correctly, just to a new,
             # separate duplicate product the operator hadn't noticed yet.
             existing_woo = await wc.get_product_by_sku(store, product.site_sku or product.sku)
+            # PL-176: a CSV gave an already-uploaded product a NEW Site SKU;
+            # the lookup by the new SKU found nothing and a DUPLICATE was
+            # created (#22060 next to #22015). Fall back to the product this
+            # store already has for it (its listing), then to the Sunsky SKU.
+            if not existing_woo:
+                _prev = await _get_listing(db, product.id, store.id)
+                if _prev and _prev.woo_product_id:
+                    existing_woo = await wc.get_product_by_id(store, _prev.woo_product_id)
+                if not existing_woo and product.site_sku and product.site_sku != product.sku:
+                    existing_woo = await wc.get_product_by_sku(store, product.sku)
+                if existing_woo:
+                    await _log(db, job.id, LogLevel.info,
+                               f"  {product.sku}: already in WooCommerce as #{existing_woo['id']} "
+                               f"(SKU {existing_woo.get('sku') or '-'} -> {payload.get('sku')}) -- updating it")
 
             if existing_woo:
                 woo_id = existing_woo["id"]
