@@ -1293,13 +1293,14 @@ async def cancel_batch(batch_id: str) -> str:
             client = AsyncAnthropic(api_key=_get_api_key("ANTHROPIC_API_KEY", "anthropic"))
             b = await client.messages.batches.cancel(bid)
             return f"cancel requested ({getattr(b, 'processing_status', '')})"
+        if provider == "openrouter":
+            # OpenRouter has no cancel for batches (only DELETE of a finished
+            # one, "deletion is not cancellation"); tested 12 Oct: 404.
+            return ("OpenRouter cannot cancel a batch -- it finishes on its own "
+                    "and is billed; its results are not used")
         import httpx
-        if provider == "openai":
-            key = _get_api_key("OPENAI_API_KEY", "openai")
-            url = f"{_OPENAI_BASE}/batches/{bid}/cancel"
-        else:
-            key = _get_api_key("OPENROUTER_API_KEY", "openrouter")
-            url = f"{OPENROUTER_BASE_URL}/batches/{bid}/cancel"
+        key = _get_api_key("OPENAI_API_KEY", "openai")
+        url = f"{_OPENAI_BASE}/batches/{bid}/cancel"
         async with httpx.AsyncClient(timeout=30) as client:
             r = await client.post(url, headers={"Authorization": f"Bearer {key}"})
         if r.status_code >= 400:
