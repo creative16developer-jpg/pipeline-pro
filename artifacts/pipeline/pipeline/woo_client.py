@@ -201,28 +201,37 @@ async def upload_image_to_wordpress(
         "description": description or alt_text,
     } if (alt_text or caption or description) else None
 
+    import asyncio as _aio
+    _body = path.read_bytes()
+    # PL-187 (live): 3 of 5 images of one product failed once and the product
+    # was uploaded with 2 images. A busy host answers 5xx / 429 / times out
+    # now and then -- retried twice (2 s, then 5 s) before giving up.
+    resp = None
+    for _attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+                resp = await client.post(f"{_wp_base_url(store)}/media",
+                                         headers=headers, params=params, content=_body)
+            if resp.is_success or (resp.status_code < 500 and resp.status_code != 429):
+                break
+            print(f"[woo_client] WP media upload {fname}: {resp.status_code}, attempt {_attempt + 1}/3")
+        except (httpx.TimeoutException, httpx.TransportError) as e:
+            print(f"[woo_client] WP media upload {fname}: {e!r}, attempt {_attempt + 1}/3")
+            resp = None
+        if _attempt < 2:
+            await _aio.sleep((2, 5)[_attempt])
+    if resp is None:
+        return None, None
     try:
-        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
-            resp = await client.post(
-                f"{_wp_base_url(store)}/media",
-                headers=headers,
-                params=params,
-                content=path.read_bytes(),
+        if resp.is_success:
+            data = resp.json()
+            url = data.get("source_url") or (
+                data.get("guid", {}).get("rendered")
+                if isinstance(data.get("guid"), dict) else None
             )
-            if resp.is_success:
-                data = resp.json()
-                url = data.get("source_url") or (
-                    data.get("guid", {}).get("rendered")
-                    if isinstance(data.get("guid"), dict) else None
-                )
-                media_id = data.get("id")
-                return url, media_id
-            else:
-                print(
-                    f"[woo_client] WP media upload failed {resp.status_code}: "
-                    f"{resp.text[:400]}"
-                )
-                return None, None
+            return url, data.get("id")
+        print(f"[woo_client] WP media upload failed {resp.status_code}: {resp.text[:400]}")
+        return None, None
     except Exception as e:
         print(f"[woo_client] WP media upload error for {file_path}: {e}")
         return None, None
