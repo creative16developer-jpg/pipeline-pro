@@ -2062,7 +2062,16 @@ _AI_CHATTER_RE = re.compile(
     r"The (?:answer|meta title|title|description) (?:is|should)\b).*$", re.DOTALL)
 
 
+# Cut-off chatter after a Bulgarian sentence end, no Cyrillic after it
+# (live: "... Вижте предлагането още днес.Let").
+_AI_CHATTER_TAIL_RE = re.compile(
+    r"(?<=[.!?\u2026])\s*(?:Let|Here|Note|Wait|Actually|Okay|Hmm|I|The|This|Final|Answer)\b[^\u0400-\u04FF<]*$")
+
+
 def _drop_ai_chatter(value: str) -> str:
+    t = _AI_CHATTER_TAIL_RE.search(value or "")
+    if t and t.start() >= 3:
+        value = value[:t.start()].rstrip()
     m = _AI_CHATTER_RE.search(value or "")
     if not m or m.start() < 3:          # whole value is chatter: leave it to review
         return value

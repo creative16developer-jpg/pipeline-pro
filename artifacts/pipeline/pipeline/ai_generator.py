@@ -576,6 +576,8 @@ async def list_openrouter_models(force: bool = False) -> list[dict]:
 
 
 _MODEL_SUPPORTS_EFFORT: dict[str, bool] = {}
+# models that refused thinking={'type': 'disabled'} (sent without it after that)
+_MODEL_THINKING_OFF_REJECTED: dict[str, bool] = {}
 
 
 _ANTHROPIC_DEPRECATED: dict[str, str] = {
@@ -701,9 +703,20 @@ async def _generate_anthropic(prompt: str, model: Optional[str]) -> str:
         max_tokens=6000,
         messages=[{"role": "user", "content": prompt}],
     )
+    # Thinking OFF for these short shop texts (allowed at effort "high" or
+    # lower). Live: Haiku 5.5 with its default adaptive thinking wrote
+    # "Let me verify" / "...днес.Let" into meta title / description.
+    _thinking_kw = {} if _MODEL_THINKING_OFF_REJECTED.get(resolved_model) else {"thinking": {"type": "disabled"}}
     try:
         if _MODEL_SUPPORTS_EFFORT.get(resolved_model, True):
-            message = await client.messages.create(output_config={"effort": "low"}, **_create_kwargs)
+            try:
+                message = await client.messages.create(output_config={"effort": "low"}, **_thinking_kw, **_create_kwargs)
+            except Exception as _th_err:
+                if _thinking_kw and "thinking" in str(_th_err).lower():
+                    _MODEL_THINKING_OFF_REJECTED[resolved_model] = True
+                    message = await client.messages.create(output_config={"effort": "low"}, **_create_kwargs)
+                else:
+                    raise
             _MODEL_SUPPORTS_EFFORT[resolved_model] = True
         else:
             message = await client.messages.create(**_create_kwargs)
@@ -813,6 +826,8 @@ async def submit_anthropic_batch(requests: list[dict]) -> str:
         # for the same model, correctly omits it.
         if _MODEL_SUPPORTS_EFFORT.get(resolved_model, True):
             _batch_params["output_config"] = {"effort": "low"}
+            if not _MODEL_THINKING_OFF_REJECTED.get(resolved_model):
+                _batch_params["thinking"] = {"type": "disabled"}
         batch_requests.append({
             "custom_id": req["custom_id"],
             "params": _batch_params,
