@@ -357,6 +357,22 @@ def _build_prompt(field: str, product: dict, options: dict) -> str:
 # Provider implementations
 # ---------------------------------------------------------------------------
 
+def _is_openai_reasoning(model: str) -> bool:
+    """GPT-5 / o-series: reject max_tokens and temperature, take
+    max_completion_tokens and reasoning_effort instead."""
+    m = (model or "").lower().split("/")[-1]
+    return m.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _openrouter_reasoning_for(model: str) -> dict:
+    """Thinking off for Claude models on OpenRouter (live: Haiku 5.5
+    thinking leaked 'Let me verify' into the text); other models keep a
+    small, excluded reasoning budget as before."""
+    if (model or "").lower().startswith("anthropic/"):
+        return {"effort": "none", "exclude": True}
+    return {"max_tokens": 600, "exclude": True}
+
+
 async def _generate_openai(prompt: str, model: Optional[str]) -> str:
     api_key = _get_api_key("OPENAI_API_KEY", "openai")
     if not api_key:
@@ -367,12 +383,26 @@ async def _generate_openai(prompt: str, model: Optional[str]) -> str:
         raise AIGenerationError("openai package not installed — run: pip install openai")
 
     client = AsyncOpenAI(api_key=api_key)
-    response = await client.chat.completions.create(
-        model=model or "gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=600,
-        temperature=0.7,
-    )
+    _m = model or "gpt-4o-mini"
+    if _is_openai_reasoning(_m):
+        # reasoning stays hidden (never in content); "low" keeps it short
+        try:
+            response = await client.chat.completions.create(
+                model=_m, messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=6000, reasoning_effort="low")
+        except Exception as e:
+            if "reasoning_effort" not in str(e):
+                raise
+            response = await client.chat.completions.create(
+                model=_m, messages=[{"role": "user", "content": prompt}],
+                max_completion_tokens=6000)
+    else:
+        response = await client.chat.completions.create(
+            model=_m,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=600,
+            temperature=0.7,
+        )
     return _strip_markdown_fence((response.choices[0].message.content or "").strip())
 
 
@@ -466,7 +496,7 @@ async def _generate_openrouter(prompt: str, model: Optional[str]) -> str:
             f"(try again in about {int(_left) + 1} s, or choose another model)")
     _waited = 0.0
     response = None
-    _or_reasoning: dict = {"max_tokens": 600, "exclude": True}
+    _or_reasoning: dict = _openrouter_reasoning_for(_m)
     for attempt in range(4):
         try:
             response = await client.chat.completions.create(
@@ -1226,7 +1256,8 @@ async def submit_batch(provider: str, requests: list[dict]) -> str:
             "custom_id": r["custom_id"], "method": "POST", "url": "/v1/chat/completions",
             "body": {"model": r.get("model") or model,
                      "messages": [{"role": "user", "content": r["prompt"]}],
-                     "max_completion_tokens": 6000},
+                     "max_completion_tokens": 6000,
+                     **({"reasoning_effort": "low"} if _is_openai_reasoning(r.get("model") or model) else {})},
         }, ensure_ascii=False) for r in requests]
         hdr = {"Authorization": f"Bearer {key}"}
         async with httpx.AsyncClient(timeout=120) as client:
@@ -1256,7 +1287,8 @@ async def submit_batch(provider: str, requests: list[dict]) -> str:
             "completion_window": "24h",
             "requests": [{"custom_id": r["custom_id"],
                           "body": {"messages": [{"role": "user", "content": r["prompt"]}],
-                                   "max_tokens": 6000}} for r in requests],
+                                   "max_tokens": 6000,
+                                   "reasoning": _openrouter_reasoning_for(model)}} for r in requests],
         }
         async with httpx.AsyncClient(timeout=120) as client:
             r = await client.post(f"{OPENROUTER_BASE_URL}/batches", content=json.dumps(payload, ensure_ascii=False),

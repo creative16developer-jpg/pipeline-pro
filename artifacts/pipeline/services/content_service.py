@@ -2083,6 +2083,27 @@ def _drop_ai_chatter(value: str) -> str:
     return head.rstrip()
 
 
+# For every language: only phrases that are never shop text.
+_AI_CHATTER_STRICT_RE = re.compile(
+    r"(?<![A-Za-z])(?:Let me (?:verify|check|double-check|re-?check|count|confirm|review|make sure|think)\b|"
+    r"Let's (?:verify|check|double-check)\b|Here is the (?:meta|title|description|answer|final|revised)\b|"
+    r"I'll (?:check|verify|now)\b|I need to (?:check|verify)\b|Hmm\b|Wait,).*$", re.DOTALL)
+_AI_CHATTER_GLUED_RE = re.compile(r"(?<=[.!?\u2026])(?:Let|Here|Note|Wait|Hmm)\b[^<]*$")
+
+
+def _drop_ai_chatter_any(value: str) -> str:
+    """Language-independent part of the model-comment clean-up."""
+    if not value:
+        return value
+    for rx in (_AI_CHATTER_GLUED_RE, _AI_CHATTER_STRICT_RE):
+        m = rx.search(value)
+        if m and m.start() >= 3:
+            head = value[:m.start()].rstrip(" \t\n-–—:;,")
+            if not ("<" in head and head.count("<") > head.count(">")):
+                value = re.sub(r"(?:\s*<(?:p|li|ul|ol|strong|em|b|h[1-6])(?:\s[^>]*)?>)+\s*$", "", head).rstrip()
+    return value
+
+
 def _bg_cleanup(value: str) -> str:
     if not value:
         return value
@@ -2119,6 +2140,8 @@ def _brand_cleaner(product: dict, target_language: str = "bg"):
         elif f != "image_names":
             if target_language == "bg":
                 nv = _bg_cleanup(nv)
+            else:
+                nv = _drop_ai_chatter_any(nv)
             nv = _tidy_lead_punct(_drop_emoji(nv))
         if nv != v:
             r = {**r, "value": nv}
