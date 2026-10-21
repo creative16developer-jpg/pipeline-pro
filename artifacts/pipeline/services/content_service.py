@@ -896,7 +896,21 @@ def _tag_case(w: str) -> str:
     return w.title()
 
 
+def _bg_type_tag(value: str, lang: str) -> str:
+    """Product-type / category tag in Bulgarian when the shop language is
+    Bulgarian ("Phone Case" -> "Калъф за телефон"). Only used when the
+    glossary translates EVERY word -- a half-translated mixed tag is worse
+    than the English one, so that case keeps English. Brand and model tags
+    never come here (brand names are not translated)."""
+    if lang == "bg":
+        bg = _translate_title_bg(value).strip()
+        if bg and bg.lower() != value.lower() and not re.search(r"[A-Za-z]", bg):
+            return bg[:1].upper() + bg[1:]
+    return _tag_case(value)
+
+
 def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
+    lang = options.get("target_language", "bg")
     raw = _get_raw(product)
     specs = _parse_params_table(raw.get("paramsTable", ""))
     name = product.get("name", "")
@@ -933,7 +947,7 @@ def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
             v_clean = html.unescape(v.strip())
             if key == "compatible with" and ":" in v_clean:
                 v_clean = v_clean.split(":", 1)[0].strip()
-            tag = _tag_case(v_clean)
+            tag = _bg_type_tag(v_clean, lang) if key in ("type", "product type") else _tag_case(v_clean)
             if tag not in tags:
                 tags.append(tag)
 
@@ -952,7 +966,7 @@ def _logic_tags(product: dict, options: dict, resolved: dict) -> str:
     # when that field was added, since this function predates it.
     cat = product.get("category_name", "") or product.get("category", "")
     if cat:
-        cat_tag = _tag_case(cat.strip())
+        cat_tag = _bg_type_tag(cat.strip(), lang)
         if cat_tag not in tags:
             tags.append(cat_tag)
     elif words:
@@ -1004,6 +1018,14 @@ def _logic_description(product: dict, options: dict, resolved: dict) -> str:
     raw = _get_raw(product)
     specs = _parse_params_table(raw.get("paramsTable", ""))
     lang = options.get("target_language", "bg")
+    # Bulgarian text with the English Sunsky name inside ("HB-9 Long Series
+    # Drawing Ruler е създаден да...") read as broken. Use the shop's own
+    # checked title when there is one, else the name through the title
+    # glossary -- which keeps brand and model names unchanged (client:
+    # brands/models are never translated).
+    if lang == "bg":
+        name = (product.get("csv_title") or "").strip() or _translate_title_bg(name)
+        name = name[:1].upper() + name[1:]
 
     structure = options.get("structure", ["intro", "features", "benefits", "compatibility", "closing"])
     parts: list[str] = []
@@ -1117,6 +1139,35 @@ def _derive_slug(product: dict, options: dict, resolved: dict) -> str:
     return slug
 
 
+# Spec keys worth naming in the image alt text, best first. The old rule
+# took the FIRST spec value of 3-30 chars, which for most accessories is
+# "Compatible with" -> "Калъф ... – Gopro: Fusion – GoPro".
+_ALT_ATTR_KEYS = ("material", "type", "product type", "style", "function", "feature", "features")
+_ALT_ATTR_SKIP = ("compatible", "model", "brand", "manufacturer", "weight", "size", "dimension",
+                  "length", "width", "height", "capacity", "sku", "item", "quantity", "qty")
+
+
+def _alt_attr(specs: dict, title: str, lang: str) -> str:
+    def ok(k: str, v) -> bool:
+        if not isinstance(v, str):
+            return False
+        v = html.unescape(v).strip()
+        in_title = v.lower() in title.lower() or (
+            lang == "bg" and _translate_title_bg(v).lower() in title.lower())
+        return (2 < len(v) < 30 and ":" not in v and not re.fullmatch(r"[\d\s.,x×*/+-]+\w{0,3}", v)
+                and not _is_logistics_spec_key(k) and not in_title)
+    low = {k.strip().lower(): (k, v) for k, v in specs.items()}
+    pick = next((html.unescape(low[k][1]).strip() for k in _ALT_ATTR_KEYS
+                 if k in low and ok(*low[k])), "")
+    if not pick:
+        pick = next((html.unescape(v).strip() for k, v in specs.items()
+                     if ok(k, v) and not any(x in k.lower() for x in _ALT_ATTR_SKIP)), "")
+    if pick and lang == "bg":
+        bg = _translate_title_bg(pick)
+        pick = bg if not re.search(r"[A-Za-z]", bg) else pick
+    return pick
+
+
 def _derive_image_alt(product: dict, options: dict, resolved: dict) -> str:
     title = resolved.get("title", "") or product.get("name", "")
     sku = product.get("site_sku") or product.get("sku", "")
@@ -1124,11 +1175,10 @@ def _derive_image_alt(product: dict, options: dict, resolved: dict) -> str:
     specs = _parse_params_table(raw.get("paramsTable", ""))
     brand = _get_brand(specs)
 
-    primary_attr = ""
-    for v in specs.values():
-        if isinstance(v, str) and 2 < len(v) < 30:
-            primary_attr = v
-            break
+    primary_attr = _alt_attr(specs, title, options.get("target_language", "bg"))
+    # brand already in the title ("Калъф за GoPro Hero 12 – GoPro") -> not repeated
+    if brand and brand.lower() in title.lower():
+        brand = ""
 
     if primary_attr and brand:
         alt = f"{title} – {primary_attr} – {brand}"
@@ -1211,9 +1261,11 @@ def _cut_at_clause(title: str, max_chars: int) -> str:
         i = title.rfind(sep, 0, max_chars + 1)
         if i >= max_chars * 0.5 and i > best:
             best = i
-    if best > 0:
-        return title[:best].rstrip(" ,-\u2013|")
-    return _truncate_no_mid_word(title, max_chars)
+    cut = title[:best].rstrip(" ,-\u2013|") if best > 0 else _truncate_no_mid_word(title, max_chars)
+    words = cut.split()
+    while len(words) > 2 and words[-1].lower().strip(",;:") in _BG_TAIL_STOP:
+        words.pop()
+    return " ".join(words).rstrip(" ,;:-\u2013|")
 
 
 def _derive_image_names(product: dict, options: dict, resolved: dict) -> str:
@@ -1331,9 +1383,27 @@ def _derive_focus_keyword(product: dict, options: dict, resolved: dict) -> str:
     return phrase.strip()
 
 
+def _prose_text(desc: str) -> str:
+    """Plain text of a description for Short / Meta Description, prose
+    first: the text of its <p> paragraphs (written sentences). A bullet
+    list stripped of tags became a spec fragment ("Материал: Силикон
+    Съвместим с: GoPro") with no sentence end. Only when there are no
+    paragraphs at all are the list items used, each ended with a period
+    so they split into sentences."""
+    paras = [re.sub(r"\s+", " ", _strip_html(p)).strip()
+             for p in re.findall(r"<p\b[^>]*>(.*?)</p>", desc or "", flags=re.I | re.S)]
+    paras = [p for p in paras if len(p.split()) >= 5]
+    if paras:
+        return " ".join(p if p[-1] in ".!?…" else p + "." for p in paras)
+    text = re.sub(r"</(li|h[1-6]|div|br)\s*>|<br\s*/?>", ". ", desc or "", flags=re.I)
+    text = re.sub(r"\s+", " ", _strip_html(text)).strip()
+    text = re.sub(r"([.!?…])\s*\.(\s|$)", r"\1\2", text)
+    return re.sub(r"(\s*\.\s*){2,}", ". ", text).strip(" .") + ("." if text.strip(" .") else "")
+
+
 def _derive_short_description(product: dict, options: dict, resolved: dict) -> str:
     desc = resolved.get("description", "") or product.get("description", "")
-    text = _strip_html(desc)
+    text = _prose_text(desc)
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
 
     result = ""
@@ -1364,16 +1434,21 @@ def _derive_short_description(product: dict, options: dict, resolved: dict) -> s
 
 def _derive_meta_description(product: dict, options: dict, resolved: dict) -> str:
     desc = resolved.get("description", "") or product.get("description", "")
-    text = _strip_html(desc)
+    text = _prose_text(desc)
     lang = options.get("target_language", "bg")
 
     if len(text) < 80:
+        # too short for a search snippet (min 80): add the title, then a
+        # call to action; cut at a word, never mid-word
+        title = (resolved.get("title") or product.get("name") or "").strip()
+        if title and title.lower() not in text.lower():
+            text = (title.rstrip(".") + ". " + text).strip()
         cta = (
-            " Пазарувайте сега за най-добрия избор и премиум качество."
+            " Поръчайте онлайн с бърза доставка."
             if lang == "bg" else
-            " Shop now for the best selection and premium quality."
+            " Order online with fast delivery."
         )
-        return (text + cta)[:160]
+        return _truncate_no_mid_word((text + cta).strip(), 160)
 
     if len(text) <= 160:
         return text
@@ -1453,6 +1528,23 @@ _DERIVE_GENERATORS: dict[str, Any] = {
 # ─────────────────────────────────────────────────────────────────────────────
 # AI with retry + exponential backoff
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _length_score(field: str, value: str) -> int:
+    text = _strip_html(value or "") if field == "description" else (value or "").strip()
+    return len(text.split()) if field == "description" else len(text)
+
+
+def _too_short(field: str, value: str, options: dict) -> str:
+    """Reason text when an AI answer is below the field's minimum, else ""."""
+    if field == "description":
+        # 50 words, lowered when the operator set a small Max Characters
+        need = min(VALIDATORS["description"]["min_words"], int(options.get("max_chars") or 2000) // 12)
+        got = _length_score(field, value)
+        return f"{got} words, expected >= {need}" if got < need else ""
+    need = VALIDATORS.get(field, {}).get("min_chars") or (15 if field == "title" else 0)
+    got = _length_score(field, value)
+    return f"{got} chars, expected >= {need}" if need and got < need else ""
+
 
 async def _run_ai_with_retry(
     field: str,
@@ -1741,6 +1833,18 @@ async def run_field(
                             text_or_error = retry_text
                     except Exception as _lang_retry_err:
                         logger.warning(f"[{field}] Language retry failed ({_lang_retry_err}) -- using original result")
+                # too short from the batch: one normal (live) call, keep the longer
+                if _too_short(field, text_or_error, options):
+                    logger.warning(f"[{field}] Batch text too short ({_too_short(field, text_or_error, options)}) -- one live try")
+                    try:
+                        from pipeline.ai_generator import generate_with_ai
+                        retry_text = _fix_brand_spelling(
+                            await generate_with_ai(field, product, ai_provider, ai_model, options), product)
+                        if (not _has_wrong_language(retry_text, options.get("target_language", "bg"))
+                                and _length_score(field, retry_text) > _length_score(field, text_or_error)):
+                            text_or_error = retry_text
+                    except Exception as _short_err:
+                        logger.warning(f"[{field}] live retry for short text failed ({_short_err})")
                 return {"field": field, "value": text_or_error,
                          "source": f"ai:{ai_provider}:batch", "status": "ok"}
             # Batch request failed for this field -- apply the same
@@ -1798,14 +1902,27 @@ async def run_field(
                 # issue an improved prompt alone can't fully guarantee against.
                 # Any AI-mode field with a min_chars rule gets this same net;
                 # falls through to the same fallback_strategy handling below.
-                min_ok_chars = rules_preview.get("min_chars") if (rules_preview := VALIDATORS.get(field, {})) else None
-                if min_ok_chars is None and field == "title":
-                    min_ok_chars = 15  # well below any real title, well above a bare fragment
-                if min_ok_chars and len(value.strip()) < min_ok_chars:
-                    raise RuntimeError(
-                        f"AI response suspiciously short ({len(value.strip())} chars, "
-                        f"expected >= {min_ok_chars}): {value!r}"
-                    )
+                # Too short (meta description < 80 chars, description
+                # < 50 words, title < 15 chars): one more AI call first --
+                # before, a too-short answer went straight to the logic
+                # template. Still too short: description keeps the longer
+                # AI text (better than the template); other fields fall
+                # back as before.
+                if _too_short(field, value, options):
+                    logger.warning(f"[{field}] AI text too short ({_too_short(field, value, options)}) -- one more try")
+                    try:
+                        retry_value = _fix_brand_spelling(
+                            await _run_ai_with_retry(field, product, ai_provider, ai_model, options), product)
+                        if (not _has_wrong_language(retry_value, options.get("target_language", "bg"))
+                                and _length_score(field, retry_value) > _length_score(field, value)):
+                            value = retry_value
+                    except Exception as _short_err:
+                        logger.warning(f"[{field}] retry for short text failed ({_short_err})")
+                    reason = _too_short(field, value, options)
+                    if reason and field != "description":
+                        raise RuntimeError(f"AI response suspiciously short ({reason}): {value!r}")
+                    if reason:
+                        logger.warning(f"[{field}] still short after retry ({reason}) -- keeping the AI text")
             except Exception as ai_err:
                 error_msg = str(ai_err)
                 logger.warning(f"[{field}] AI failed, applying '{fallback_strategy}' fallback: {ai_err}")

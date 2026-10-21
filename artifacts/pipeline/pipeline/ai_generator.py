@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -79,15 +80,21 @@ class AIGenerationError(Exception):
 # ---------------------------------------------------------------------------
 
 def _extract_specs(product: dict) -> dict[str, str]:
+    """Spec pairs from Sunsky's paramsTable for the AI prompt. Uses the
+    same nested-table parser as the logic/derive fields
+    (content_service._parse_params_table): the old flat regex paired an
+    outer section label with the inner table's first cell ("General:
+    Compatible with") and never reached the real value ("Compatible
+    with: GoPro Hero 12"). Imported here, not at module level, because
+    content_service itself imports this module."""
     raw = product.get("rawData") or product.get("raw_data") or {}
-    params_html = raw.get("paramsTable", "")
+    params_html = raw.get("paramsTable", "") or ""
+    if not params_html:
+        return {}
+    from services.content_service import _parse_params_table
     specs: dict[str, str] = {}
-    for m in re.finditer(
-        r"<tr[^>]*>\s*<td[^>]*>(.*?)</td>\s*<td[^>]*>(.*?)</td>",
-        params_html, re.DOTALL | re.IGNORECASE,
-    ):
-        k = re.sub(r"<[^>]+>", "", m.group(1)).strip()
-        v = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+    for k, v in _parse_params_table(params_html).items():
+        k, v = k.strip().rstrip(":").strip(), v.strip()
         if k and v:
             specs[k] = v
     return specs
@@ -174,7 +181,12 @@ def _build_product_context(product: dict, category_name: str = "") -> str:
     # enough context to understand the product, not the full raw
     # marketing copy (which is also often repetitive/promotional
     # filler rather than genuinely useful product detail).
-    MAX_RAW_DESC_CHARS = 600
+    # HTML tags removed first (they were most of the 600 characters), then
+    # up to 1000 characters of real text -- more product detail for about
+    # the same number of tokens.
+    desc = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html.unescape(desc or ""))).strip()
+    desc = re.sub(r"\s+([.,;:!?])", r"\1", desc)
+    MAX_RAW_DESC_CHARS = 1000
     if len(desc) > MAX_RAW_DESC_CHARS:
         desc = desc[:MAX_RAW_DESC_CHARS].rsplit(" ", 1)[0] + "…"
     specs = _extract_specs(product)
@@ -373,7 +385,19 @@ def _openrouter_reasoning_for(model: str) -> dict:
     return {"max_tokens": 600, "exclude": True}
 
 
-async def _generate_openai(prompt: str, model: Optional[str]) -> str:
+# Output token budget for normal (non-reasoning) OpenAI models. 600 was too
+# small for a Bulgarian HTML description: Cyrillic takes ~2-3 tokens per
+# word-piece, so the text was cut off mid-section. Only used tokens are
+# billed, so a larger limit costs nothing extra unless the model needs it.
+_OPENAI_MAX_TOKENS = {"description": 3000, "_extract": 2000}
+_OPENAI_MAX_TOKENS_DEFAULT = 1000
+
+
+def _openai_max_tokens(field: Optional[str]) -> int:
+    return _OPENAI_MAX_TOKENS.get(field or "", _OPENAI_MAX_TOKENS_DEFAULT)
+
+
+async def _generate_openai(prompt: str, model: Optional[str], field: Optional[str] = None) -> str:
     api_key = _get_api_key("OPENAI_API_KEY", "openai")
     if not api_key:
         raise AIGenerationError("OPENAI_API_KEY not configured — add it in Settings")
@@ -400,7 +424,7 @@ async def _generate_openai(prompt: str, model: Optional[str]) -> str:
         response = await client.chat.completions.create(
             model=_m,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=600,
+            max_tokens=_openai_max_tokens(field),
             temperature=0.7,
         )
     return _strip_markdown_fence((response.choices[0].message.content or "").strip())
@@ -995,6 +1019,17 @@ def parse_gemini_rest_response(data: dict) -> str:
     return text
 
 
+def _gemini_generation_config(model: Optional[str]) -> dict:
+    """Output limit and temperature for Gemini (were provider defaults).
+    The limit is generous because Gemini's thinking tokens count against
+    it. Temperature 0.7 like OpenAI/OpenRouter, but only for Gemini 2.x:
+    Google advises keeping Gemini 3+ at its default temperature."""
+    cfg: dict = {"max_output_tokens": 8192}
+    if re.match(r"gemini-(1|2)\.", (model or "").lower()):
+        cfg["temperature"] = 0.7
+    return cfg
+
+
 async def _generate_gemini_flex(prompt: str, model: str, api_key: str, sleep=None, client_factory=None) -> tuple[str, str]:
     """One generateContent call on the Flex tier. 503/429 -> retry after
     5 s, 10 s, 20 s; still busy -> the same request on the STANDARD tier
@@ -1007,7 +1042,10 @@ async def _generate_gemini_flex(prompt: str, model: str, api_key: str, sleep=Non
     url = f"{GEMINI_REST_BASE}/models/{model}:generateContent"
     headers = {"x-goog-api-key": api_key, "Content-Type": "application/json",
                "X-Server-Timeout": str(FLEX_SERVER_TIMEOUT_S)}
-    body = {"contents": [{"parts": [{"text": prompt}]}]}
+    _gc = _gemini_generation_config(model)
+    body = {"contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {("maxOutputTokens" if k == "max_output_tokens" else k): v
+                                 for k, v in _gc.items()}}
     last_err = ""
     async with client_factory() as client:
         for attempt in range(len(FLEX_RETRY_DELAYS_S) + 1):
@@ -1047,7 +1085,8 @@ async def _generate_gemini(prompt: str, model: Optional[str]) -> str:
     resolved_model = _GEMINI_DEPRECATED.get(raw_model, raw_model)
     genai.configure(api_key=api_key)
     model_obj = genai.GenerativeModel(resolved_model)
-    response = await model_obj.generate_content_async(prompt)
+    response = await model_obj.generate_content_async(
+        prompt, generation_config=_gemini_generation_config(resolved_model))
     return _strip_markdown_fence(response.text.strip())
 
 
@@ -1075,7 +1114,8 @@ async def generate_with_ai(
         prompt = _build_prompt(field, product, options)
 
     if provider == "openai":
-        return await _generate_openai(prompt, model)
+        return await _generate_openai(prompt, model,
+                                      "_extract" if "_prompt_override" in options else field)
     elif provider == "anthropic":
         return await _generate_anthropic(prompt, model)
     elif provider == "gemini":

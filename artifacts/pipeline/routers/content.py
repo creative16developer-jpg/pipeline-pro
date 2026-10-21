@@ -122,6 +122,12 @@ DEFAULT_CONFIG: dict = {
             "mode": "derive",
             "options": {"max_chars": 160},
         },
+        # was missing here, so it ran with no settings of its own
+        "focus_keyword": {
+            "enabled": True,
+            "mode": "derive",
+            "options": {"max_chars": 60},
+        },
     },
     "overrides": {},
 }
