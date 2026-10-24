@@ -924,6 +924,35 @@ except ValueError:
     _PROCESS_PRODUCT_CONCURRENCY = 2
 
 
+def _file_fp(path) -> str:
+    """size + md5 of a processed image file ("" when missing)."""
+    import hashlib
+    try:
+        data = Path(path).read_bytes()
+        return f"{len(data)}:{hashlib.md5(data).hexdigest()}"
+    except Exception:
+        return ""
+
+
+def _drop_changed_upload_cache(product, old_fp: dict, new_images) -> None:
+    """Images whose file changed in this Process run (e.g. new size from
+    Image Settings) lose their "already uploaded" entry for every store, so
+    the next Upload sends the new file. Unchanged images keep it (no
+    duplicates in the media library)."""
+    try:
+        cache = json.loads(product.uploaded_images_json or "{}")
+    except Exception:
+        return
+    changed = {i.original_url for i in new_images
+               if i.original_url and i.processed_path
+               and _file_fp(i.processed_path) != old_fp.get(i.original_url)}
+    if not cache or not changed:
+        return
+    keep = {k: v for k, v in cache.items() if k.split(":", 1)[-1] not in changed}
+    if len(keep) != len(cache):
+        product.uploaded_images_json = json.dumps(keep)
+
+
 def _process_raw_image_urls(raw: dict) -> list:
     """Stage 1 of Process: image URLs already in raw_data (first 5)."""
     urls = raw.get("images", [])
@@ -1056,7 +1085,13 @@ async def _run_process(db, job):
     job.processed_items = 0
     await db.commit()
 
-    processor = ImageProcessor()
+    from pipeline.image_processor import load_image_settings, pick_images
+    _img_settings = load_image_settings()
+    processor = ImageProcessor.from_settings(_img_settings)
+    await _log(db, job.id, LogLevel.info,
+               f"Image settings: {'original size' if processor.keep_original_size else '%dx%d %s' % (processor.max_size[0], processor.max_size[1], 'exact' if processor.exact_size else 'max')}, "
+               f"{processor.output_format.upper()}, quality {processor.webp_quality}, "
+               f"max {_img_settings.get('max_images_per_product')} image(s){', last image skipped' if _img_settings.get('skip_last_image') else ''}")
     total_images_ok = total_images_fail = 0
     prod_ok = prod_fail = 0
 
@@ -1088,9 +1123,9 @@ async def _run_process(db, job):
             image_urls = raw.get("images", [])
             if isinstance(image_urls, str):
                 image_urls = [image_urls]
-            image_urls = [
+            image_urls = pick_images([
                 u for u in image_urls if isinstance(u, str) and u.startswith("http")
-            ][:5]
+            ], _img_settings)
 
             # ── Stage 2: fetch product detail (correct endpoint: product!detail.do) ──
             # Always call detail API to get paramsTable / optionList / modelLabel
@@ -1110,10 +1145,10 @@ async def _run_process(db, job):
                     model_label  = detail_raw.get("modelLabel", "")
 
                     if not image_urls:
-                        image_urls = [
+                        image_urls = pick_images([
                             u for u in detail.get("images", [])
                             if isinstance(u, str) and u.startswith("http")
-                        ][:5]
+                        ], _img_settings)
 
                     # Merge everything back into raw_data
                     updated_raw = {
@@ -1177,6 +1212,12 @@ async def _run_process(db, job):
             # replace them with, so a failed/empty fetch this run can't
             # wipe out otherwise-good images from a previous successful run.
             if zip_bytes or image_urls:
+                # file fingerprint of each old image, so an image that comes
+                # out different this time (new size / format) is uploaded
+                # to WordPress again instead of reusing the old media
+                _old_fp = {o.original_url: _file_fp(o.processed_path) for o in (await db.execute(
+                    select(Image).where(Image.product_id == product.id))).scalars().all()
+                    if o.original_url and o.processed_path}
                 await db.execute(delete(Image).where(Image.product_id == product.id))
                 await db.commit()
 
@@ -1186,11 +1227,11 @@ async def _run_process(db, job):
             if zip_bytes:
                 try:
                     zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
-                    img_names = sorted([
+                    img_names = pick_images(sorted([
                         n for n in zf.namelist()
                         if n.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif"))
                         and not n.startswith("__MACOSX")
-                    ])[:5]
+                    ]), _img_settings)
 
                     for pos, name in enumerate(img_names):
                         ext = name.rsplit(".", 1)[-1].lower()
@@ -1274,6 +1315,9 @@ async def _run_process(db, job):
 
                 await db.commit()
 
+            if zip_bytes or image_urls:
+                _drop_changed_upload_cache(product, _old_fp, (await db.execute(
+                    select(Image).where(Image.product_id == product.id))).scalars().all())
             product.status = ProductStatus.processed
             if (product.error_message or "").startswith("not found on Sunsky"):
                 product.error_message = None      # found this time

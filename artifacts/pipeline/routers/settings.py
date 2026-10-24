@@ -89,6 +89,9 @@ DEFAULT_IMAGE_SETTINGS: dict = {
     "max_width": 1200,
     "max_height": 1200,
     "keep_original_size": False,
+    # every image exactly max_width x max_height (smaller ones enlarged,
+    # centred on white); off = only shrink larger images
+    "exact_size": True,
     "compression_enabled": True,
     "compression_quality": 85,
     "max_images_per_product": 5,

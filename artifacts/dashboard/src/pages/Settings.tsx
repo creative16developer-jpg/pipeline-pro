@@ -2757,6 +2757,7 @@ function ImageSettingsTab() {
     max_width: 1200,
     max_height: 1200,
     keep_original_size: false,
+    exact_size: true,
     compression_enabled: true,
     compression_quality: 85,
     max_images_per_product: 5,
@@ -2857,7 +2858,7 @@ function ImageSettingsTab() {
 
         {/* Max Output Size */}
         <div className="px-6 py-5 border-b border-border/30">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Max Output Size</p>
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Output Size</p>
           <div className="flex items-center gap-3 flex-wrap">
             <input
               type="number"
@@ -2885,6 +2886,21 @@ function ImageSettingsTab() {
               Keep original size
             </label>
           </div>
+          <label className={cn("flex items-start gap-2 cursor-pointer text-sm text-muted-foreground mt-3",
+                               settings.keep_original_size && "opacity-40 pointer-events-none")}>
+            <input
+              type="checkbox"
+              checked={settings.exact_size}
+              onChange={e => set("exact_size", e.target.checked)}
+              className="accent-primary mt-0.5"
+            />
+            <span>
+              Exact size for every image
+              <span className="block text-xs">
+                On: smaller images are enlarged and every image is exactly {settings.max_width}×{settings.max_height} (white background fills any gap). Off: only larger images are reduced.
+              </span>
+            </span>
+          </label>
         </div>
 
         {/* Compression */}
